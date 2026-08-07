@@ -1,0 +1,46 @@
+{
+  "hackers": [
+    {
+      "address": "bc1qq85v2c926eg6pgxhwp6q7lf6cnsz80qs3fcu9r",
+      "label": "Collector 1 (Wave 1-2)",
+      "source_url": "https://gist.github.com/dsbaars/0a4f9e2d1f587a78f4a89a9a45e3b700",
+      "attributed_sats": 56201962301
+    },
+    {
+      "address": "bc1qx76cae2706qd5q576feh7xq8rfcsjpf2htfhe3",
+      "label": "Collector 2",
+      "source_url": "https://gist.github.com/dsbaars/0a4f9e2d1f587a78f4a89a9a45e3b700",
+      "attributed_sats": 39847573857
+    },
+    {
+      "address": "bc1q8jy96fe5lf8vfugydnte3cguk92gpev7kwtp3q",
+      "label": "Collector 3",
+      "source_url": "https://gist.github.com/dsbaars/0a4f9e2d1f587a78f4a89a9a45e3b700",
+      "attributed_sats": 8962327890
+    },
+    {
+      "address": "bc1qnk4zh9qcnap2mycp56qjrgza3cc8ylrh8fecp0",
+      "label": "Collector 4",
+      "source_url": "https://gist.github.com/dsbaars/0a4f9e2d1f587a78f4a89a9a45e3b700",
+      "attributed_sats": 3245056320
+    },
+    {
+      "address": "bc1qtfrwa4j6rmj9rsgspv6a0yjumkg39js2numu75",
+      "label": "Collector 5",
+      "source_url": "https://gist.github.com/dsbaars/0a4f9e2d1f587a78f4a89a9a45e3b700",
+      "attributed_sats": 4590251994
+    },
+    {
+      "address": "bc1qhh4jkkj07vxpdt0zlvxctjlfhqmurhxa24x3h2",
+      "label": "Collector 6",
+      "source_url": "https://gist.github.com/dsbaars/0a4f9e2d1f587a78f4a89a9a45e3b700",
+      "attributed_sats": 19153809
+    },
+    {
+      "address": "bc1qmd5m5ktv7m5ffujxv4248fxv36myvdx79n8jp6",
+      "label": "Collector 7",
+      "source_url": "https://gist.github.com/dsbaars/0a4f9e2d1f587a78f4a89a9a45e3b700",
+      "attributed_sats": 3018476329
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "name": "@cointrace/indexer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "seed": "node dist/index.js seed",
+    "load-local": "node dist/index.js load-local",
+    "run": "node dist/index.js run"
+  },
+  "dependencies": {
+    "@cointrace/core": "workspace:*",
+    "@cointrace/db": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

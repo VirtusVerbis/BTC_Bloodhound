@@ -1,0 +1,352 @@
+:root {
+  --color-bg: #000000;
+  --color-node-bg: #000000;
+  --color-node-border: #f7931a;
+  --color-hacker-border: #e53935;
+  --color-queued-border: #888888;
+  --color-text: #e8e8e8;
+  --color-text-muted: #999;
+  --color-edge: #f7931a;
+  --color-panel: #111;
+  --color-input-bg: #1a1a1a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+
+.graph-canvas {
+  touch-action: none;
+  min-height: 50vh;
+  height: 70vh;
+  border: 1px solid #222;
+  border-radius: 8px;
+}
+
+.graph-canvas .react-flow__controls-button {
+  --xy-controls-button-background-color: #666;
+  --xy-controls-button-background-color-hover: #777;
+  --xy-controls-button-color: #fff;
+  --xy-controls-button-color-hover: #fff;
+  --xy-controls-button-border-color: #888;
+}
+
+@media (min-width: 768px) {
+  .graph-canvas {
+    min-height: 70vh;
+  }
+}
+
+.app-header {
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid #222;
+}
+
+.app-header h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.25rem;
+}
+
+.stats-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.controls-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 1rem 1.5rem;
+}
+
+.controls-panel {
+  padding: 0.5rem 1.125rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.controls-panel .controls-row {
+  padding: 0;
+  gap: 0.5625rem;
+  font-size: 0.75rem;
+}
+
+.controls-panel select,
+.controls-panel input {
+  font-size: 0.75rem;
+  padding: 0.375rem 0.5625rem;
+  border-radius: 4px;
+}
+
+.controls-panel button {
+  font-size: 0.75rem;
+  padding: 0.3rem 0.5625rem;
+  min-height: 33px;
+  border-radius: 4px;
+}
+
+.controls-panel .controls-hint {
+  font-size: 0.6375rem;
+  color: var(--color-text-muted);
+}
+
+select,
+input,
+textarea,
+button {
+  font: inherit;
+}
+
+select,
+input,
+textarea {
+  background: var(--color-input-bg);
+  color: var(--color-text);
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+}
+
+button {
+  background: #222;
+  color: var(--color-text);
+  border: 1px solid var(--color-node-border);
+  border-radius: 6px;
+  padding: 0.4rem 0.75rem;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+button:hover {
+  background: #333;
+}
+
+button.primary {
+  border-color: var(--color-hacker-border);
+}
+
+.node-card {
+  background: var(--color-node-bg);
+  color: var(--color-text);
+  padding: 0.6rem 0.75rem;
+  min-width: 160px;
+  max-width: 220px;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.node-card.hacker {
+  border: 3px solid var(--color-hacker-border);
+  border-radius: 8px;
+}
+
+.node-card.default {
+  border: 2px solid var(--color-node-border);
+  border-radius: 8px;
+}
+
+.node-card.queued {
+  border: 2px dashed var(--color-queued-border);
+  border-radius: 8px;
+  text-align: center;
+}
+
+.node-badge {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--color-hacker-border);
+  margin-bottom: 0.25rem;
+}
+
+.node-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+}
+
+.node-actions button {
+  min-height: 32px;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.65rem;
+}
+
+.drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 100;
+}
+
+.drawer {
+  position: fixed;
+  background: var(--color-panel);
+  color: var(--color-text);
+  z-index: 101;
+  overflow: auto;
+  padding: 1rem;
+}
+
+@media (max-width: 767px) {
+  .drawer {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    max-height: 80vh;
+    border-top: 1px solid #333;
+    border-radius: 12px 12px 0 0;
+  }
+}
+
+@media (min-width: 768px) {
+  .drawer {
+    top: 0;
+    right: 0;
+    width: 400px;
+    height: 100%;
+    border-left: 1px solid #333;
+  }
+}
+
+.drawer h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  word-break: break-all;
+}
+
+.drawer table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+}
+
+.drawer th,
+.drawer td {
+  border-bottom: 1px solid #333;
+  padding: 0.4rem;
+  text-align: left;
+}
+
+.submission-panel {
+  padding: 1rem 1.5rem 2rem;
+  border-top: 1px solid #222;
+}
+
+.submission-panel form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  max-width: 640px;
+}
+
+.toast {
+  position: fixed;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #222;
+  border: 1px solid var(--color-node-border);
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  z-index: 200;
+}
+
+.app-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+}
+
+.app-tab {
+  min-height: 36px;
+  padding: 0.35rem 0.85rem;
+  font-size: 0.85rem;
+  background: transparent;
+  border-color: #333;
+  color: var(--color-text-muted);
+}
+
+.app-tab:hover {
+  background: #1a1a1a;
+  color: var(--color-text);
+}
+
+.app-tab.active {
+  background: #222;
+  border-color: var(--color-node-border);
+  color: var(--color-text);
+}
+
+.about-panel {
+  padding: 1.5rem;
+  max-width: 720px;
+}
+
+.about-section {
+  margin-bottom: 1.75rem;
+}
+
+.about-section h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+  color: var(--color-text);
+}
+
+.about-section p {
+  margin: 0;
+  line-height: 1.55;
+  color: var(--color-text-muted);
+}
+
+.about-disclaimer {
+  padding: 1rem 1.25rem;
+  background: var(--color-panel);
+  border: 1px solid #333;
+  border-left: 3px solid var(--color-hacker-border);
+  border-radius: 8px;
+}
+
+.about-disclaimer ul,
+.about-link-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  line-height: 1.55;
+}
+
+.about-disclaimer li,
+.about-link-list li {
+  margin-bottom: 0.5rem;
+}
+
+.about-link-list a {
+  color: var(--color-node-border);
+}
+
+.about-link-list a:hover {
+  text-decoration: underline;
+}
+
+.about-link-desc {
+  color: var(--color-text-muted);
+  font-size: 0.9em;
+}
+
+.about-note {
+  margin-top: 0.75rem !important;
+  font-size: 0.9rem;
+}

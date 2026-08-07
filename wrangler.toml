@@ -1,0 +1,15 @@
+# Cloudflare Workers + D1 + Pages (Phase 5 portability stub)
+name = "cointrace"
+compatibility_date = "2024-01-01"
+
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "cointrace"
+# database_id = "<YOUR_D1_DATABASE_ID>"
+
+# [triggers]
+# crons = ["*/1 * * * *"]
+
+# [vars]
+# ESPLORA_BASE = "https://blockstream.info/api"
+# MEMPOOL_BASE = "https://mempool.space/api"

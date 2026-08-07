@@ -1,0 +1,14 @@
+{
+  "name": "cointrace",
+  "private": true,
+  "scripts": {
+    "build": "pnpm -r run build",
+    "dev:api": "pnpm --filter @cointrace/api dev",
+    "dev:web": "pnpm --filter @cointrace/web dev",
+    "indexer": "pnpm --filter @cointrace/indexer start",
+    "db:migrate": "pnpm --filter @cointrace/db migrate"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "@cointrace/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "pnpm run build && node --watch dist/server.js"
+  },
+  "dependencies": {
+    "@cointrace/core": "workspace:*",
+    "@cointrace/db": "workspace:*",
+    "@hono/node-server": "^1.13.7",
+    "hono": "^4.6.14"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}
