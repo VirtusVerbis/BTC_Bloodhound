@@ -5,8 +5,15 @@ import {
   disclaimerItems,
   hackCoverageLinks,
   keyboardCommands,
+  monitoredExternalSites,
+  monitoringIntro,
   purposeText,
 } from "../content/aboutContent";
+import {
+  formatMonitoringTime,
+  formatSourceLabel,
+  type MonitoringSyncStatus,
+} from "./MonitoringIndicator";
 
 function ExternalLinkList({ links }: { links: { label: string; url: string; description?: string }[] }) {
   return (
@@ -23,7 +30,11 @@ function ExternalLinkList({ links }: { links: { label: string; url: string; desc
   );
 }
 
-export function AboutPage() {
+interface AboutPageProps {
+  sync?: MonitoringSyncStatus | null;
+}
+
+export function AboutPage({ sync }: AboutPageProps) {
   return (
     <div className="about-panel">
       <section className="about-section about-disclaimer">
@@ -54,6 +65,50 @@ export function AboutPage() {
       <section className="about-section">
         <h2>Hack coverage</h2>
         <ExternalLinkList links={hackCoverageLinks} />
+      </section>
+
+      <section className="about-section" id="monitoring">
+        <h2>Monitoring</h2>
+        <p>{monitoringIntro}</p>
+        <p>Actively polled external tracker sites:</p>
+        <ul className="about-link-list">
+          {monitoredExternalSites.map((site) => (
+            <li key={site.host}>
+              <a href={`https://${site.host}`} target="_blank" rel="noopener noreferrer">
+                {site.host}
+              </a>
+              <span className="about-link-desc"> — {site.label}</span>
+            </li>
+          ))}
+        </ul>
+        {sync && (
+          <div className="about-monitoring-status">
+            <p>
+              <strong>Status:</strong> {sync.monitoringActive !== false ? "Active" : "Paused (no recent activity)"}
+            </p>
+            <p>
+              <strong>Last activity:</strong> {formatMonitoringTime(sync.lastActivityAt)}
+            </p>
+            <ul className="about-link-list about-monitoring-breakdown">
+              <li>Chain API: {formatMonitoringTime(sync.lastChainApiAt)}</li>
+              <li>External sync: {formatMonitoringTime(sync.lastExternalSyncAt)}</li>
+              <li>Indexer jobs: {formatMonitoringTime(sync.lastJobAt)}</li>
+            </ul>
+            {sync.externalSources && sync.externalSources.length > 0 && (
+              <>
+                <p>Per-source last sync:</p>
+                <ul className="about-link-list about-monitoring-breakdown">
+                  {sync.externalSources.map((s) => (
+                    <li key={s.source}>
+                      {formatSourceLabel(s.source)}: {formatMonitoringTime(s.lastSyncAt)}
+                      {s.lastAddressCount != null ? ` (${s.lastAddressCount} addresses)` : ""}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+        )}
       </section>
 
       <section className="about-section">

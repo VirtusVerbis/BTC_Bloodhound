@@ -13,6 +13,17 @@ export function scheduleDownstreamCrawl(store: Store, config: AppConfig): void {
     }
   }
 
+  const htSync = store.getSourceSync("coldcard_hack_tracker");
+  const swSync = store.getSourceSync("coldcard_sweep_watch");
+  const htLast = htSync?.lastSyncAt ? new Date(htSync.lastSyncAt).getTime() : 0;
+  const swLast = swSync?.lastSyncAt ? new Date(swSync.lastSyncAt).getTime() : 0;
+  const vtLast = Math.max(htLast, swLast);
+  if (ts - vtLast >= config.vercelTrackersSyncIntervalSec * 1000) {
+    if (!store.hasPendingJob("sync_vercel_trackers")) {
+      store.enqueueJob("sync_vercel_trackers", {}, JOB_PRIORITY.SYNC_VERCEL_TRACKERS);
+    }
+  }
+
   for (const h of store.listHackers()) {
     const sync = store.getSyncState(h.address);
     const lastPoll = sync?.lastPolledAt ? new Date(sync.lastPolledAt).getTime() : 0;

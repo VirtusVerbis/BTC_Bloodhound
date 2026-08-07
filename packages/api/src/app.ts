@@ -77,6 +77,7 @@ export function createApp(store: Store, config: AppConfig) {
     const scheduler = store.getSchedulerState();
     const crawl = store.getCrawlStats();
     const monitor = store.getDownstreamMonitorStats(config.maxCrawlDepth, config.downstreamPollIntervalSec);
+    const monitoring = store.getMonitoringStatus(config.monitoringStaleSec);
     return c.json({
       queueDepth: store.getQueueDepth(),
       nextApiCallAt: scheduler?.nextProviderCallAt ?? null,
@@ -84,6 +85,7 @@ export function createApp(store: Store, config: AppConfig) {
       lastProviderUsed: scheduler?.lastProviderUsed ?? null,
       ...crawl,
       ...monitor,
+      ...monitoring,
     });
   });
 

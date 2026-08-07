@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AboutPage } from "./components/AboutPage";
 import { HackGraph } from "./components/HackGraph";
 import { AddressDetailDrawer } from "./components/AddressDetailDrawer";
+import { MonitoringIndicator, type MonitoringSyncStatus } from "./components/MonitoringIndicator";
 import { api, btcToSats, satsToBtc, satsToBtcNumber } from "./lib/api";
 
 type AppTab = "tracker" | "about";
@@ -20,7 +21,7 @@ interface Stats {
   lastJobAt: string | null;
 }
 
-interface SyncStatus {
+interface SyncStatus extends MonitoringSyncStatus {
   queueDepth: number;
   crawlPendingCount: number;
   treeNodeCount?: number;
@@ -134,9 +135,17 @@ export default function App() {
     setExpandVictims(false);
   };
 
+  const navigateToMonitoring = () => {
+    setActiveTab("about");
+    requestAnimationFrame(() => {
+      document.getElementById("monitoring")?.scrollIntoView({ behavior: "smooth" });
+    });
+  };
+
   return (
     <div>
       <header className="app-header">
+        <MonitoringIndicator sync={sync} onNavigateMonitoring={navigateToMonitoring} />
         <h1>Bitcoin Bloodhound — Coldcard Hack Tracker</h1>
         <nav className="app-tabs" role="tablist" aria-label="Main navigation">
           <button
@@ -272,7 +281,7 @@ export default function App() {
       )}
         </>
       ) : (
-        <AboutPage />
+        <AboutPage sync={sync} />
       )}
 
       {drawerAddr && <AddressDetailDrawer address={drawerAddr} onClose={() => setDrawerAddr(null)} />}

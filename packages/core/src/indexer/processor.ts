@@ -7,6 +7,11 @@ import type { ChainRouter } from "../chain/router.js";
 import { getAddressTxsAll, txInvolvesSpend } from "../chain/esplora.js";
 import { getHackerAddressSet, processTxForHackTrace } from "../graph/builder.js";
 import { applyColdcardWatchSync, fetchColdcardWatch } from "../sources/coldcardwatch.js";
+import {
+  applyColdcardHackTrackerSync,
+  fetchColdcardHackTracker,
+} from "../sources/coldcardHackTracker.js";
+import { applyColdcardSweepWatchSync, fetchColdcardSweepWatch } from "../sources/coldcardSweepWatch.js";
 
 async function processAddressTxs(
   store: Store,
@@ -167,6 +172,22 @@ async function syncColdcardwatch(store: Store, config: AppConfig): Promise<void>
   applyColdcardWatchSync(store, data);
 }
 
+async function syncVercelTrackers(store: Store, config: AppConfig): Promise<void> {
+  const [hackData, sweepData] = await Promise.all([
+    fetchColdcardHackTracker(config.coldcardHackTrackerBase),
+    fetchColdcardSweepWatch(config.coldcardSweepWatchBase),
+  ]);
+
+  const prevHack = store.getSourceSync("coldcard_hack_tracker");
+  const prevSweep = store.getSourceSync("coldcard_sweep_watch");
+  const hackUnchanged = prevHack?.lastContentHash === hackData.contentHash;
+  const sweepUnchanged = prevSweep?.lastContentHash === sweepData.contentHash;
+  if (hackUnchanged && sweepUnchanged) return;
+
+  if (!hackUnchanged) applyColdcardHackTrackerSync(store, hackData);
+  if (!sweepUnchanged) applyColdcardSweepWatchSync(store, sweepData);
+}
+
 export async function processJob(
   store: Store,
   router: ChainRouter,
@@ -196,6 +217,9 @@ export async function processJob(
     case "sync_coldcardwatch":
       await syncColdcardwatch(store, config);
       break;
+    case "sync_vercel_trackers":
+      await syncVercelTrackers(store, config);
+      break;
     case "process_tx":
       await processTxForHackTrace(store, router, payload.txid as string, getHackerAddressSet(store));
       break;
@@ -212,6 +236,8 @@ export async function processJobs(store: Store, router: ChainRouter, config: App
     try {
       if (job.type === "sync_coldcardwatch") {
         await syncColdcardwatch(store, config);
+      } else if (job.type === "sync_vercel_trackers") {
+        await syncVercelTrackers(store, config);
       } else {
         await processJob(store, router, config, job);
       }

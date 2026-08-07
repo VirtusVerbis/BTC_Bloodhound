@@ -7,3 +7,5 @@ export * from "./indexer/processor.js";
 export * from "./indexer/crawl.js";
 export * from "./scheduler/eta.js";
 export * from "./sources/coldcardwatch.js";
+export * from "./sources/coldcardHackTracker.js";
+export * from "./sources/coldcardSweepWatch.js";

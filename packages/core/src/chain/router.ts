@@ -22,12 +22,13 @@ export class ChainRouter {
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
   }
 
-  private markCalled(providerName: string) {
+  private markCalled(providerName: string, success: boolean) {
     const next = new Date(Date.now() + this.rateLimitMs).toISOString();
     this.store.updateSchedulerState({
       nextProviderCallAt: next,
       lastProviderUsed: providerName,
       rateLimitMs: this.rateLimitMs,
+      ...(success ? { lastProviderSuccessAt: new Date().toISOString() } : {}),
     });
   }
 
@@ -38,10 +39,10 @@ export class ChainRouter {
     this.index = (this.index + 1) % this.providers.length;
     try {
       const result = await fn(provider);
-      this.markCalled(provider.name);
+      this.markCalled(provider.name, true);
       return result;
     } catch (err) {
-      this.markCalled(provider.name);
+      this.markCalled(provider.name, false);
       throw err;
     }
   }

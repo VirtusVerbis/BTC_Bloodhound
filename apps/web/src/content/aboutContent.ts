@@ -65,6 +65,16 @@ export const dataSourceLinks: ExternalLink[] = [
     description: "Collector and victim address lists synced periodically.",
   },
   {
+    label: "Coldcard Sweep Watch",
+    url: "https://coldcard-watch.vercel.app",
+    description: "Wave 3 vault addresses and collector (“where the money is”) addresses synced periodically.",
+  },
+  {
+    label: "Coldcard Hack Tracker",
+    url: "https://coldcard-hack-tracker.vercel.app",
+    description: "Watched holding/collector addresses from snapshot.json synced periodically.",
+  },
+  {
     label: "dsbaars gist — public hacker address seed list",
     url: "https://gist.github.com/dsbaars/0a4f9e2d1f587a78f4a89a9a45e3b700",
     description: "Initial consolidation addresses loaded at indexer seed time.",
@@ -72,7 +82,16 @@ export const dataSourceLinks: ExternalLink[] = [
 ];
 
 export const dataSourceNote =
-  "Additional victim and downstream addresses are inferred on-chain by the background indexer using blockchain API data.";
+  "The background indexer actively sources coldcardwatch.com, coldcard-watch.vercel.app, and coldcard-hack-tracker.vercel.app on a cron schedule. Additional victim and downstream addresses are inferred on-chain using blockchain API data.";
+
+export const monitoredExternalSites = [
+  { host: "coldcard-watch.vercel.app", label: "Coldcard Sweep Watch" },
+  { host: "coldcard-hack-tracker.vercel.app", label: "Coldcard Hack Tracker" },
+  { host: "coldcardwatch.com", label: "coldcardwatch.com" },
+];
+
+export const monitoringIntro =
+  "A background indexer continuously polls blockchain APIs and public tracker sites. The header Monitoring indicator shows when activity was last observed — the most recent of a successful chain API response, an external tracker sync, or a completed indexer job.";
 
 export const apiReferences: ApiReference[] = [
   {

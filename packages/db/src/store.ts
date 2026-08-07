@@ -434,7 +434,12 @@ export class Store {
     return this.db.select().from(schedulerState).where(eq(schedulerState.id, 1)).get();
   }
 
-  updateSchedulerState(data: { nextProviderCallAt?: string; lastProviderUsed?: string; rateLimitMs?: number }) {
+  updateSchedulerState(data: {
+    nextProviderCallAt?: string;
+    lastProviderUsed?: string;
+    lastProviderSuccessAt?: string;
+    rateLimitMs?: number;
+  }) {
     this.db
       .update(schedulerState)
       .set(data)
@@ -588,6 +593,52 @@ export class Store {
       .set({ expandStatus: status, lastExpandedAt: now() })
       .where(eq(addresses.address, address))
       .run();
+  }
+
+  getMonitoringStatus(staleSec: number) {
+    const scheduler = this.getSchedulerState();
+    const lastChainApiAt = scheduler?.lastProviderSuccessAt ?? null;
+
+    const sources = this.db.select().from(sourceSyncState).all();
+    const externalSources = sources.map((s) => ({
+      source: s.source,
+      lastSyncAt: s.lastSyncAt ?? null,
+      lastAddressCount: s.lastAddressCount ?? null,
+    }));
+
+    let lastExternalSyncAt: string | null = null;
+    for (const s of sources) {
+      if (!s.lastSyncAt) continue;
+      if (!lastExternalSyncAt || s.lastSyncAt > lastExternalSyncAt) {
+        lastExternalSyncAt = s.lastSyncAt;
+      }
+    }
+
+    const lastJob = this.db
+      .select()
+      .from(jobs)
+      .where(ne(jobs.status, "pending"))
+      .orderBy(desc(jobs.id))
+      .limit(1)
+      .get();
+    const lastJobAt = lastJob?.createdAt ?? null;
+
+    const candidates = [lastChainApiAt, lastExternalSyncAt, lastJobAt].filter(Boolean) as string[];
+    const lastActivityAt =
+      candidates.length > 0 ? candidates.reduce((a, b) => (a > b ? a : b)) : null;
+
+    const monitoringActive =
+      lastActivityAt != null &&
+      Date.now() - new Date(lastActivityAt).getTime() <= staleSec * 1000;
+
+    return {
+      lastChainApiAt,
+      lastExternalSyncAt,
+      lastJobAt,
+      lastActivityAt,
+      monitoringActive,
+      externalSources,
+    };
   }
 
   getStats() {

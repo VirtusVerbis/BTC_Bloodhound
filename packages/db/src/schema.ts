@@ -66,6 +66,7 @@ export const schedulerState = sqliteTable("scheduler_state", {
   id: integer("id").primaryKey().default(1),
   nextProviderCallAt: text("next_provider_call_at"),
   lastProviderUsed: text("last_provider_used"),
+  lastProviderSuccessAt: text("last_provider_success_at"),
   rateLimitMs: integer("rate_limit_ms").notNull().default(3000),
 });
 

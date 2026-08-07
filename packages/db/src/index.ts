@@ -103,6 +103,11 @@ export function runMigrations(sqlite: Database.Database): void {
         WHERE transactions.txid = edges.txid AND block_time IS NOT NULL
       );
   `);
+
+  const schedulerCols = sqlite.prepare("PRAGMA table_info(scheduler_state)").all() as Array<{ name: string }>;
+  if (!schedulerCols.some((c) => c.name === "last_provider_success_at")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN last_provider_success_at TEXT`);
+  }
 }
 
 export * from "./schema.js";
