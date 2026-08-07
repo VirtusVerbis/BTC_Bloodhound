@@ -24,6 +24,8 @@ export interface GraphNode {
   liveBalanceAt?: string | null;
   hopFromHacker?: number | null;
   incomingSats?: number;
+  latestTxTime?: string | null;
+  earliestTxTime?: string | null;
 }
 
 export interface GraphEdge {
@@ -130,19 +132,28 @@ export function buildGraph(
       time: null,
     });
   } else {
+    const victimNodes = new Map<string, GraphNode>();
     for (const v of store.listVictimsForHacker(hacker, 100)) {
       if (v.amountSats < minEdgeSats) continue;
       const id = v.address;
-      if (!seen.has(id)) {
-        nodes.push({
+      let node = victimNodes.get(id);
+      if (!node) {
+        node = {
           id,
           type: "victim",
           label: "Victim",
           role: "victim",
           address: v.address,
-          incomingSats: v.amountSats,
-        });
+          incomingSats: 0,
+        };
+        victimNodes.set(id, node);
+        nodes.push(node);
         seen.add(id);
+      }
+      node.incomingSats = (node.incomingSats ?? 0) + v.amountSats;
+      if (v.blockTime) {
+        if (!node.latestTxTime || v.blockTime > node.latestTxTime) node.latestTxTime = v.blockTime;
+        if (!node.earliestTxTime || v.blockTime < node.earliestTxTime) node.earliestTxTime = v.blockTime;
       }
       edges.push({
         id: `${id}->${hackerId}:${v.txid}`,

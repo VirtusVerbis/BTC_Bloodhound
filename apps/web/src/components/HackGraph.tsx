@@ -13,7 +13,7 @@ import {
   MarkerType,
 } from "@xyflow/react";
 import { api, satsToBtc, txUrl } from "../lib/api";
-import { layoutGraph } from "../lib/layoutGraph";
+import { layoutGraph, type VictimSortOption } from "../lib/layoutGraph";
 import { nodeTypes, type GraphNodeData } from "./nodes/GraphNodes";
 
 interface ApiGraphNode {
@@ -29,6 +29,8 @@ interface ApiGraphNode {
   liveBalanceAt?: string | null;
   hopFromHacker?: number | null;
   incomingSats?: number;
+  latestTxTime?: string | null;
+  earliestTxTime?: string | null;
 }
 
 interface ApiGraphEdge {
@@ -151,13 +153,27 @@ export function HackGraph({
   const loadGenerationRef = useRef(0);
   const prevExpandRef = useRef(expandVictims);
   const pendingFitRef = useRef(false);
+  const graphDataRef = useRef<{
+    rfNodes: Node[];
+    rfEdges: Edge[];
+    mode: GraphMode;
+  } | null>(null);
+  const victimSortRef = useRef<VictimSortOption>("btc-desc");
   const [fitViewTrigger, setFitViewTrigger] = useState(0);
+  const [victimSort, setVictimSort] = useState<VictimSortOption>("btc-desc");
   const [queued, setQueued] = useState<QueuedJob[]>([]);
   const [countdownTick, setCountdownTick] = useState(0);
 
   useEffect(() => {
+    victimSortRef.current = victimSort;
+  }, [victimSort]);
+
+  useEffect(() => {
     positionsRef.current = {};
+    graphDataRef.current = null;
     setQueued([]);
+    setVictimSort("btc-desc");
+    victimSortRef.current = "btc-desc";
     pendingFitRef.current = true;
   }, [hacker, victimSearch, minEdgeSats, expandVictims]);
 
@@ -208,6 +224,19 @@ export function HackGraph({
       }
     },
     [],
+  );
+
+  const applyLayout = useCallback(
+    (rfNodes: Node[], rfEdges: Edge[], mode: GraphMode, sort: VictimSortOption) => {
+      const laid = layoutGraph(rfNodes, rfEdges, "LR", mode, sort);
+      const merged = laid.map((n) => ({
+        ...n,
+        position: positionsRef.current[n.id] ?? n.position,
+      }));
+      setNodes(merged);
+      setEdges(rfEdges);
+    },
+    [setNodes, setEdges],
   );
 
   const loadGraph = useCallback(
@@ -266,6 +295,8 @@ export function HackGraph({
           liveBalanceAt: n.liveBalanceAt,
           hopFromHacker: n.hopFromHacker,
           incomingSats: n.incomingSats,
+          latestTxTime: n.latestTxTime,
+          earliestTxTime: n.earliestTxTime,
           onExpand:
             n.type === "victimCluster"
               ? () => window.dispatchEvent(new CustomEvent("cointrace-expand-victims"))
@@ -285,21 +316,26 @@ export function HackGraph({
         data: { txid: e.txid, time: e.time },
       }));
 
-      const laid = layoutGraph(rfNodes, rfEdges, "LR", mode);
-      const merged = laid.map((n) => ({
-        ...n,
-        position: positionsRef.current[n.id] ?? n.position,
-      }));
-      setNodes(merged);
-      setEdges(rfEdges);
+      graphDataRef.current = { rfNodes, rfEdges, mode };
+      applyLayout(rfNodes, rfEdges, mode, victimSortRef.current);
 
       if (pendingFitRef.current) {
         pendingFitRef.current = false;
         setFitViewTrigger((t) => t + 1);
       }
     },
-    [hacker, expandVictims, minEdgeSats, victimSearch, expandAddress, onHackerChange, setNodes, setEdges],
+    [hacker, expandVictims, minEdgeSats, victimSearch, expandAddress, onHackerChange, setNodes, setEdges, applyLayout],
   );
+
+  useEffect(() => {
+    if (!expandVictims || victimSearch || !graphDataRef.current) return;
+    const { rfNodes, rfEdges, mode } = graphDataRef.current;
+    for (const n of rfNodes) {
+      if (n.type === "victim") delete positionsRef.current[n.id];
+    }
+    applyLayout(rfNodes, rfEdges, mode, victimSort);
+    setFitViewTrigger((t) => t + 1);
+  }, [victimSort, expandVictims, victimSearch, applyLayout]);
 
   useEffect(() => {
     loadGraph().catch(console.error);
@@ -435,9 +471,25 @@ export function HackGraph({
         >
           <Background color="#222" gap={20} />
           <Panel position="top-left">
-            <button type="button" onClick={resetLayout}>
-              Reset layout
-            </button>
+            <div className="graph-panel-controls">
+              <button type="button" onClick={resetLayout}>
+                Reset layout
+              </button>
+              <label>
+                Sort by{" "}
+                <select
+                  value={victimSort}
+                  onChange={(e) => setVictimSort(e.target.value as VictimSortOption)}
+                  disabled={!expandVictims || !!victimSearch}
+                  aria-label="Sort victims by"
+                >
+                  <option value="btc-desc">BTC Amount (Large to Small)</option>
+                  <option value="btc-asc">BTC Amount (Small to Large)</option>
+                  <option value="date-desc">Date Time (New to Old)</option>
+                  <option value="date-asc">Date Time (Old to New)</option>
+                </select>
+              </label>
+            </div>
           </Panel>
           <FitViewAfterLayout trigger={fitViewTrigger} />
           <GraphKeyboardShortcuts />

@@ -12,6 +12,8 @@ export type GraphNodeData = {
   liveBalanceSats?: number | null;
   liveBalanceAt?: string | null;
   incomingSats?: number;
+  latestTxTime?: string | null;
+  earliestTxTime?: string | null;
   hopFromHacker?: number | null;
   onExpand?: () => void;
   countdown?: string;

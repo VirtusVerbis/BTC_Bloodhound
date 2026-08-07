@@ -30,6 +30,34 @@ body {
   border-radius: 8px;
 }
 
+.graph-panel-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5625rem;
+}
+
+.graph-panel-controls label {
+  display: flex;
+  align-items: center;
+  gap: 0.2625rem;
+  font-size: 0.6375rem;
+  color: var(--color-text-muted);
+}
+
+.graph-panel-controls button {
+  font-size: 0.6375rem;
+  padding: 0.3rem 0.5625rem;
+  min-height: 33px;
+  border-radius: 4.5px;
+}
+
+.graph-panel-controls select {
+  font-size: 0.6375rem;
+  padding: 0.375rem 0.5625rem;
+  border-radius: 4.5px;
+}
+
 .graph-canvas .react-flow__controls-button {
   --xy-controls-button-background-color: #666;
   --xy-controls-button-background-color-hover: #777;

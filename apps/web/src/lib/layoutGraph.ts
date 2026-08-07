@@ -8,12 +8,58 @@ const ROW_GAP = 24;
 const COL_GAP = 40;
 const RANK_SEP = 100;
 
+export type VictimSortOption = "btc-desc" | "btc-asc" | "date-desc" | "date-asc";
+
+type VictimNodeData = {
+  incomingSats?: number;
+  latestTxTime?: string | null;
+  earliestTxTime?: string | null;
+};
+
 export interface VictimGridOptions {
   maxRows?: number;
   nodeWidth?: number;
   nodeHeight?: number;
   rowGap?: number;
   colGap?: number;
+  sortBy?: VictimSortOption;
+}
+
+function victimData(node: Node): VictimNodeData {
+  return node.data as VictimNodeData;
+}
+
+function victimIncomingSats(node: Node): number {
+  return victimData(node).incomingSats ?? 0;
+}
+
+function compareIsoTime(a: string | null | undefined, b: string | null | undefined, asc: boolean): number {
+  if (!a && !b) return 0;
+  if (!a) return 1;
+  if (!b) return -1;
+  return asc ? a.localeCompare(b) : b.localeCompare(a);
+}
+
+function compareVictims(a: Node, b: Node, sortBy: VictimSortOption): number {
+  switch (sortBy) {
+    case "btc-asc": {
+      const byAmount = victimIncomingSats(a) - victimIncomingSats(b);
+      return byAmount !== 0 ? byAmount : a.id.localeCompare(b.id);
+    }
+    case "date-desc": {
+      const byDate = compareIsoTime(victimData(a).latestTxTime, victimData(b).latestTxTime, false);
+      return byDate !== 0 ? byDate : a.id.localeCompare(b.id);
+    }
+    case "date-asc": {
+      const byDate = compareIsoTime(victimData(a).earliestTxTime, victimData(b).earliestTxTime, true);
+      return byDate !== 0 ? byDate : a.id.localeCompare(b.id);
+    }
+    case "btc-desc":
+    default: {
+      const byAmount = victimIncomingSats(b) - victimIncomingSats(a);
+      return byAmount !== 0 ? byAmount : a.id.localeCompare(b.id);
+    }
+  }
 }
 
 export function layoutVictimGrid(
@@ -26,8 +72,9 @@ export function layoutVictimGrid(
   const nodeHeight = options.nodeHeight ?? NODE_HEIGHT;
   const rowGap = options.rowGap ?? ROW_GAP;
   const colGap = options.colGap ?? COL_GAP;
+  const sortBy = options.sortBy ?? "btc-desc";
 
-  const sorted = [...victims].sort((a, b) => a.id.localeCompare(b.id));
+  const sorted = [...victims].sort((a, b) => compareVictims(a, b, sortBy));
   const tallestColumn = Math.min(maxRows, sorted.length);
 
   const blockHeight = tallestColumn * nodeHeight + (tallestColumn - 1) * rowGap;
@@ -101,6 +148,7 @@ export function layoutGraph(
   edges: Edge[],
   direction = "LR",
   mode: "hacker" | "victim-filtered" | "victim-centric" = "hacker",
+  victimSort: VictimSortOption = "btc-desc",
 ) {
   if (mode === "victim-centric") {
     const victim = nodes.find((n) => n.type === "victim");
@@ -129,10 +177,12 @@ export function layoutGraph(
     laidOthers.find((n) => n.type === "victimCluster") ??
     laidOthers[0];
 
+  const gridOptions = { maxRows: MAX_ROWS_PER_COLUMN, sortBy: victimSort };
+
   if (!hacker) {
-    return [...laidOthers, ...layoutVictimGrid(victims, victims[0]!, { maxRows: MAX_ROWS_PER_COLUMN })];
+    return [...laidOthers, ...layoutVictimGrid(victims, victims[0]!, gridOptions)];
   }
 
-  const gridVictims = layoutVictimGrid(victims, hacker, { maxRows: MAX_ROWS_PER_COLUMN });
+  const gridVictims = layoutVictimGrid(victims, hacker, gridOptions);
   return [...laidOthers, ...gridVictims];
 }
