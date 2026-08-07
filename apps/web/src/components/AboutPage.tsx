@@ -4,6 +4,7 @@ import {
   dataSourceNote,
   disclaimerItems,
   hackCoverageLinks,
+  keyboardCommands,
   purposeText,
 } from "../content/aboutContent";
 
@@ -37,6 +38,17 @@ export function AboutPage() {
       <section className="about-section">
         <h2>Purpose</h2>
         <p>{purposeText}</p>
+      </section>
+
+      <section className="about-section">
+        <h2>Keyboard commands</h2>
+        <ul className="about-link-list">
+          {keyboardCommands.map((cmd) => (
+            <li key={cmd.key}>
+              <kbd>{cmd.key}</kbd> — {cmd.description}
+            </li>
+          ))}
+        </ul>
       </section>
 
       <section className="about-section">

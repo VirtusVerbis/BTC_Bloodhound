@@ -76,12 +76,14 @@ export function createApp(store: Store, config: AppConfig) {
   app.get("/api/sync/status", (c) => {
     const scheduler = store.getSchedulerState();
     const crawl = store.getCrawlStats();
+    const monitor = store.getDownstreamMonitorStats(config.maxCrawlDepth, config.downstreamPollIntervalSec);
     return c.json({
       queueDepth: store.getQueueDepth(),
       nextApiCallAt: scheduler?.nextProviderCallAt ?? null,
       rateLimitMs: scheduler?.rateLimitMs ?? config.rateLimitMs,
       lastProviderUsed: scheduler?.lastProviderUsed ?? null,
       ...crawl,
+      ...monitor,
     });
   });
 

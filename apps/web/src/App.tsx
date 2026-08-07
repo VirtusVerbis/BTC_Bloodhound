@@ -23,10 +23,18 @@ interface Stats {
 interface SyncStatus {
   queueDepth: number;
   crawlPendingCount: number;
+  treeNodeCount?: number;
+  downstreamPollDueCount?: number;
 }
 
 interface AppConfig {
   minEdgeSats: number;
+}
+
+function isTypingTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable;
 }
 
 export default function App() {
@@ -92,6 +100,27 @@ export default function App() {
     return () => clearTimeout(t);
   }, [toast]);
 
+  useEffect(() => {
+    if (activeTab !== "tracker" || hackers.length === 0) return;
+
+    const onKey = (e: KeyboardEvent) => {
+      if (isTypingTarget(e.target)) return;
+      if (e.key !== "PageUp" && e.key !== "PageDown") return;
+
+      e.preventDefault();
+      const idx = hackers.findIndex((h) => h.address === selected);
+      const current = idx >= 0 ? idx : 0;
+      const next =
+        e.key === "PageDown"
+          ? Math.min(current + 1, hackers.length - 1)
+          : Math.max(current - 1, 0);
+      if (next !== current) setSelected(hackers[next].address);
+    };
+
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [activeTab, hackers, selected]);
+
   const findVictim = () => {
     const addr = victimSearchInput.trim().toLowerCase();
     if (!addr) return;
@@ -133,13 +162,31 @@ export default function App() {
           {stats && (
             <>
               <span>{stats.victimCount} victims indexed</span>
-              <span>{stats.hackerCount} hacker addresses</span>
-              <span>{satsToBtc(stats.totalInSats)} BTC received (hack)</span>
+              <span className="stats-hacker-count">{stats.hackerCount} hacker addresses</span>
+              <span className="stats-hack-btc">{satsToBtc(stats.totalInSats)} BTC received (hack)</span>
             </>
           )}
           {sync && (
-            <span>
-              Queue: {sync.queueDepth} · Crawl pending: {sync.crawlPendingCount}
+            <span className="sync-stats">
+              <span title="Background indexer jobs waiting to run (polls, expansions, and sync tasks).">
+                Queue: {sync.queueDepth}
+              </span>
+              {" · "}
+              <span title="Downstream addresses discovered but not yet expanded to trace further outgoing flows.">
+                Crawl pending: {sync.crawlPendingCount}
+              </span>
+              {sync.treeNodeCount != null && (
+                <>
+                  {" · "}
+                  <span title="Downstream addresses currently indexed within the crawl depth limit.">
+                    Tree: {sync.treeNodeCount}
+                  </span>
+                  {" · "}
+                  <span title="Downstream addresses due for a re-poll to check for new outgoing activity.">
+                    Poll due: {sync.downstreamPollDueCount ?? 0}
+                  </span>
+                </>
+              )}
             </span>
           )}
         </div>

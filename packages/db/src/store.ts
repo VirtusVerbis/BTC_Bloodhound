@@ -529,6 +529,59 @@ export class Store {
       .all();
   }
 
+  listDownstreamForPoll(limit: number, maxDepth: number, minIntervalSec: number) {
+    const cutoff = new Date(Date.now() - minIntervalSec * 1000).toISOString();
+    return this.db
+      .select({ address: addresses.address })
+      .from(addresses)
+      .leftJoin(syncState, eq(addresses.address, syncState.address))
+      .where(
+        and(
+          eq(addresses.role, "downstream"),
+          or(eq(addresses.expandStatus, "expanded"), eq(addresses.expandStatus, "pending")),
+          sql`${addresses.hopFromHacker} < ${maxDepth}`,
+          or(sql`${syncState.lastPolledAt} IS NULL`, sql`${syncState.lastPolledAt} <= ${cutoff}`),
+        ),
+      )
+      .orderBy(asc(syncState.lastPolledAt), asc(addresses.hopFromHacker))
+      .limit(limit)
+      .all();
+  }
+
+  countDownstreamTreeNodes(maxDepth: number) {
+    const row = this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(addresses)
+      .where(and(eq(addresses.role, "downstream"), sql`${addresses.hopFromHacker} < ${maxDepth}`))
+      .get();
+    return row?.count ?? 0;
+  }
+
+  countDownstreamPollDue(maxDepth: number, minIntervalSec: number) {
+    const cutoff = new Date(Date.now() - minIntervalSec * 1000).toISOString();
+    const row = this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(addresses)
+      .leftJoin(syncState, eq(addresses.address, syncState.address))
+      .where(
+        and(
+          eq(addresses.role, "downstream"),
+          or(eq(addresses.expandStatus, "expanded"), eq(addresses.expandStatus, "pending")),
+          sql`${addresses.hopFromHacker} < ${maxDepth}`,
+          or(sql`${syncState.lastPolledAt} IS NULL`, sql`${syncState.lastPolledAt} <= ${cutoff}`),
+        ),
+      )
+      .get();
+    return row?.count ?? 0;
+  }
+
+  getDownstreamMonitorStats(maxDepth: number, minIntervalSec: number) {
+    return {
+      treeNodeCount: this.countDownstreamTreeNodes(maxDepth),
+      downstreamPollDueCount: this.countDownstreamPollDue(maxDepth, minIntervalSec),
+    };
+  }
+
   setExpandStatus(address: string, status: string) {
     this.db
       .update(addresses)

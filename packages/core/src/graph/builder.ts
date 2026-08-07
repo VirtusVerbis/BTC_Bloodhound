@@ -2,6 +2,13 @@ import type { Store } from "@cointrace/db";
 import type { AppConfig } from "../config.js";
 import { blockTimeIso } from "../chain/esplora.js";
 import type { ChainRouter } from "../chain/router.js";
+import type { ChainTxDetail } from "../chain/types.js";
+
+export interface HackTraceOptions {
+  tx?: ChainTxDetail;
+  spendingAddress?: string;
+  spendingHop?: number;
+}
 
 export interface GraphNode {
   id: string;
@@ -277,14 +284,39 @@ export function buildVictimGraph(
   };
 }
 
-export async function processTxForHackerContext(
+export function collectSpenders(
+  inputAddresses: string[],
+  hackerAddresses: Set<string>,
+  options?: HackTraceOptions,
+): Array<{ address: string; hop: number }> {
+  const spenders: Array<{ address: string; hop: number }> = [];
+  const seen = new Set<string>();
+
+  for (const inAddr of inputAddresses) {
+    if (hackerAddresses.has(inAddr) && !seen.has(inAddr)) {
+      spenders.push({ address: inAddr, hop: 0 });
+      seen.add(inAddr);
+    }
+  }
+
+  if (options?.spendingAddress && inputAddresses.includes(options.spendingAddress) && !seen.has(options.spendingAddress)) {
+    spenders.push({
+      address: options.spendingAddress,
+      hop: options.spendingHop ?? 0,
+    });
+  }
+
+  return spenders;
+}
+
+export async function processTxForHackTrace(
   store: Store,
   router: ChainRouter,
   txid: string,
   hackerAddresses: Set<string>,
-  parentHop = 0,
+  options: HackTraceOptions = {},
 ): Promise<void> {
-  const tx = await router.withProvider((p) => p.getTx(txid));
+  const tx = options.tx ?? (await router.withProvider((p) => p.getTx(txid)));
   const blockTime = blockTimeIso(tx);
   store.upsertTransaction({
     txid,
@@ -323,28 +355,39 @@ export async function processTxForHackerContext(
     }
   }
 
-  for (const inAddr of inputAddresses) {
-    if (hackerAddresses.has(inAddr)) {
-      for (const [outAddr, amount] of outputAddresses) {
-        store.upsertAddress({
-          address: outAddr,
-          role: "downstream",
-          source: "derived",
-          hopFromHacker: parentHop + 1,
-          expandStatus: "pending",
-        });
-        store.upsertEdge({
-          fromAddress: inAddr,
-          toAddress: outAddr,
-          txid,
-          amountSats: amount,
-          blockTime,
-          hopFromHacker: parentHop + 1,
-          direction: "out_from_hacker",
-        });
-      }
+  const spenders = collectSpenders(inputAddresses, hackerAddresses, options);
+  for (const { address: inAddr, hop } of spenders) {
+    for (const [outAddr, amount] of outputAddresses) {
+      if (outAddr === inAddr) continue;
+      store.upsertAddress({
+        address: outAddr,
+        role: "downstream",
+        source: "derived",
+        hopFromHacker: hop + 1,
+        expandStatus: "pending",
+      });
+      store.upsertEdge({
+        fromAddress: inAddr,
+        toAddress: outAddr,
+        txid,
+        amountSats: amount,
+        blockTime,
+        hopFromHacker: hop + 1,
+        direction: "out_from_hacker",
+      });
     }
   }
+}
+
+/** @deprecated Use processTxForHackTrace */
+export async function processTxForHackerContext(
+  store: Store,
+  router: ChainRouter,
+  txid: string,
+  hackerAddresses: Set<string>,
+  parentHop = 0,
+): Promise<void> {
+  await processTxForHackTrace(store, router, txid, hackerAddresses, { spendingHop: parentHop });
 }
 
 export function getHackerAddressSet(store: Store): Set<string> {

@@ -35,4 +35,14 @@ export function scheduleDownstreamCrawl(store: Store, config: AppConfig): void {
     store.setExpandStatus(row.address, "queued");
     store.enqueueJob("expand_downstream", { address: row.address, cron: true }, JOB_PRIORITY.CRON_EXPAND);
   }
+
+  const pollCandidates = store.listDownstreamForPoll(
+    config.downstreamPollEnqueuePerCron,
+    config.maxCrawlDepth,
+    config.downstreamPollIntervalSec,
+  );
+  for (const row of pollCandidates) {
+    if (store.hasPendingJob("poll_downstream_address", row.address)) continue;
+    store.enqueueJob("poll_downstream_address", { address: row.address }, JOB_PRIORITY.POLL_DOWNSTREAM);
+  }
 }

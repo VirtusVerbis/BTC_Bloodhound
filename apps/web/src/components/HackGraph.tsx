@@ -54,6 +54,7 @@ interface QueuedJob {
   parentAddress: string;
   parentId: string;
   estimatedRunAt: string;
+  outgoingAtStart: number;
 }
 
 const edgeDefaults = {
@@ -169,13 +170,40 @@ export function HackGraph({
 
   const expandAddress = useCallback(
     async (address: string, parentId: string) => {
+      let outgoingAtStart = 0;
+      try {
+        const detail = await api<{ relatedTxs: Array<{ direction: string }> }>(
+          `/api/addresses/${encodeURIComponent(address)}`,
+        );
+        outgoingAtStart = detail.relatedTxs.filter((t) => t.direction === "out").length;
+      } catch {
+        /* address detail optional before expand */
+      }
+
       try {
         const res = await api<{
           jobId: number;
           estimatedRunAt: string;
         }>(`/api/expand/${encodeURIComponent(address)}`, { method: "POST" });
-        setQueued((q) => [...q, { jobId: res.jobId, parentAddress: address, parentId, estimatedRunAt: res.estimatedRunAt }]);
+        setQueued((q) => [
+          ...q,
+          {
+            jobId: res.jobId,
+            parentAddress: address,
+            parentId,
+            estimatedRunAt: res.estimatedRunAt,
+            outgoingAtStart,
+          },
+        ]);
       } catch (e) {
+        const raw = e instanceof Error ? e.message : String(e);
+        let message = "Expand failed";
+        if (raw.includes("409") || raw.toLowerCase().includes("already queued")) {
+          message = "Expand already queued for this address";
+        } else if (raw.includes("404") || raw.toLowerCase().includes("not in database")) {
+          message = "Address not found in indexed data";
+        }
+        window.dispatchEvent(new CustomEvent("cointrace-toast", { detail: message }));
         console.error(e);
       }
     },
@@ -284,25 +312,52 @@ export function HackGraph({
     return () => clearInterval(iv);
   }, []);
 
+  const checkQueuedJobs = useCallback(async () => {
+    if (queued.length === 0) return;
+    const done: Array<{ jobId: number; parentAddress: string; outgoingAtStart: number }> = [];
+    for (const q of queued) {
+      try {
+        const job = await api<{ status: string }>(`/api/jobs/${q.jobId}`);
+        if (job.status === "done" || job.status === "failed") {
+          done.push({
+            jobId: q.jobId,
+            parentAddress: q.parentAddress,
+            outgoingAtStart: q.outgoingAtStart,
+          });
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    if (done.length === 0) return;
+
+    setQueued((prev) => prev.filter((q) => !done.some((d) => d.jobId === q.jobId)));
+
+    for (const item of done) {
+      try {
+        const detail = await api<{ relatedTxs: Array<{ direction: string }> }>(
+          `/api/addresses/${encodeURIComponent(item.parentAddress)}`,
+        );
+        const outgoingNow = detail.relatedTxs.filter((t) => t.direction === "out").length;
+        const message =
+          outgoingNow > item.outgoingAtStart
+            ? "Expand complete — new downstream flows found"
+            : "Expand complete — no downstream flows found";
+        window.dispatchEvent(new CustomEvent("cointrace-toast", { detail: message }));
+      } catch {
+        window.dispatchEvent(new CustomEvent("cointrace-toast", { detail: "Expand complete" }));
+      }
+    }
+
+    loadGraph().catch(console.error);
+  }, [queued, loadGraph]);
+
   useEffect(() => {
     if (queued.length === 0) return;
-    const iv = setInterval(async () => {
-      const done: number[] = [];
-      for (const q of queued) {
-        const job = await api<{ status: string; estimatedRunAt: string }>(`/api/jobs/${q.jobId}`);
-        if (job.status === "done") {
-          done.push(q.jobId);
-        } else if (job.status === "failed") {
-          done.push(q.jobId);
-        }
-      }
-      if (done.length) {
-        setQueued((prev) => prev.filter((q) => !done.includes(q.jobId)));
-        loadGraph().catch(console.error);
-      }
-    }, 3000);
+    void checkQueuedJobs();
+    const iv = setInterval(() => void checkQueuedJobs(), 3000);
     return () => clearInterval(iv);
-  }, [queued, loadGraph]);
+  }, [queued, checkQueuedJobs]);
 
   const queuedNodes: Node[] = useMemo(() => {
     void countdownTick;

@@ -4,8 +4,28 @@ import type { Job, Store } from "@cointrace/db";
 import type { AppConfig } from "../config.js";
 import { JOB_PRIORITY } from "../config.js";
 import type { ChainRouter } from "../chain/router.js";
-import { getHackerAddressSet, processTxForHackerContext } from "../graph/builder.js";
+import { getAddressTxsAll, txInvolvesSpend } from "../chain/esplora.js";
+import { getHackerAddressSet, processTxForHackTrace } from "../graph/builder.js";
 import { applyColdcardWatchSync, fetchColdcardWatch } from "../sources/coldcardwatch.js";
+
+async function processAddressTxs(
+  store: Store,
+  router: ChainRouter,
+  address: string,
+  txs: Array<{ txid: string }>,
+  hackers: Set<string>,
+  hop: number,
+): Promise<void> {
+  for (const t of txs) {
+    const tx = await router.withProvider((p) => p.getTx(t.txid));
+    if (!txInvolvesSpend(tx, address)) continue;
+    await processTxForHackTrace(store, router, t.txid, hackers, {
+      tx,
+      spendingAddress: address,
+      spendingHop: hop,
+    });
+  }
+}
 
 export async function runSeedPublicHackers(store: Store, seedFilePath: string): Promise<void> {
   const raw = await readFile(path.resolve(seedFilePath), "utf8");
@@ -56,9 +76,9 @@ export async function runLoadLocalWatchlist(store: Store, localPath: string): Pr
 
 async function backfillHacker(store: Store, router: ChainRouter, address: string): Promise<void> {
   const hackers = getHackerAddressSet(store);
-  const txs = await router.withProvider((p) => p.getAddressTxs(address));
+  const txs = await router.withProvider((p) => getAddressTxsAll(p, address));
   for (const t of [...txs].reverse()) {
-    await processTxForHackerContext(store, router, t.txid, hackers, 0);
+    await processTxForHackTrace(store, router, t.txid, hackers);
   }
   if (txs.length > 0) {
     store.upsertSyncState(address, {
@@ -74,8 +94,23 @@ async function pollHacker(store: Store, router: ChainRouter, address: string): P
   const txs = await router.withProvider((p) => p.getAddressTxs(address, sync?.lastSeenTxid ?? undefined));
   const hackers = getHackerAddressSet(store);
   for (const t of txs.reverse()) {
-    await processTxForHackerContext(store, router, t.txid, hackers, 0);
+    await processTxForHackTrace(store, router, t.txid, hackers);
   }
+  if (txs.length > 0) {
+    store.upsertSyncState(address, {
+      lastSeenTxid: txs[0]!.txid,
+      lastBlockHeight: txs[0]!.status?.block_height ?? null,
+    });
+  }
+}
+
+async function pollDownstream(store: Store, router: ChainRouter, address: string): Promise<void> {
+  const addr = store.getAddress(address);
+  const hop = addr?.hopFromHacker ?? 0;
+  const sync = store.getSyncState(address);
+  const txs = await router.withProvider((p) => p.getAddressTxs(address, sync?.lastSeenTxid ?? undefined));
+  const hackers = getHackerAddressSet(store);
+  await processAddressTxs(store, router, address, txs, hackers, hop);
   if (txs.length > 0) {
     store.upsertSyncState(address, {
       lastSeenTxid: txs[0]!.txid,
@@ -93,15 +128,16 @@ async function expandDownstream(
   const addr = store.getAddress(address);
   const hop = addr?.hopFromHacker ?? 0;
   const hackers = getHackerAddressSet(store);
-  const txs = await router.withProvider((p) => p.getAddressTxs(address));
-  for (const t of txs) {
-    const tx = await router.withProvider((p) => p.getTx(t.txid));
-    const hasSpend = tx.vin.some((i) => i.prevout?.scriptpubkey_address === address);
-    if (hasSpend) {
-      await processTxForHackerContext(store, router, t.txid, hackers, hop);
-    }
-  }
+  const txs = await router.withProvider((p) => getAddressTxsAll(p, address));
+  await processAddressTxs(store, router, address, txs, hackers, hop);
   store.setExpandStatus(address, "expanded");
+
+  if (txs.length > 0) {
+    store.upsertSyncState(address, {
+      lastSeenTxid: txs[0]!.txid,
+      lastBlockHeight: txs[0]!.status?.block_height ?? null,
+    });
+  }
 
   if ((hop ?? 0) + 1 >= config.maxCrawlDepth) {
     for (const e of store.getEdgesFromAddress(address)) {
@@ -148,6 +184,9 @@ export async function processJob(
     case "poll_hacker_address":
       await pollHacker(store, router, payload.address as string);
       break;
+    case "poll_downstream_address":
+      await pollDownstream(store, router, payload.address as string);
+      break;
     case "expand_downstream":
       await expandDownstream(store, router, payload.address as string, config);
       break;
@@ -158,13 +197,7 @@ export async function processJob(
       await syncColdcardwatch(store, config);
       break;
     case "process_tx":
-      await processTxForHackerContext(
-        store,
-        router,
-        payload.txid as string,
-        getHackerAddressSet(store),
-        0,
-      );
+      await processTxForHackTrace(store, router, payload.txid as string, getHackerAddressSet(store));
       break;
     default:
       throw new Error(`Unknown job type: ${job.type}`);

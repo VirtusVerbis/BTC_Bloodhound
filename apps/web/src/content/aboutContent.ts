@@ -10,6 +10,11 @@ export interface ApiReference {
   docsUrl: string;
 }
 
+export interface KeyboardCommand {
+  key: string;
+  description: string;
+}
+
 export const disclaimerItems = [
   "This website is for visual reference only and does not guarantee any accuracy whatsoever.",
   "Data is scraped and aggregated from public web sources.",
@@ -18,6 +23,13 @@ export const disclaimerItems = [
 
 export const purposeText =
   "Bitcoin Bloodhound maps consolidation addresses, victim inputs, and downstream flows from the 2026 Coldcard entropy exploit. It is an exploratory on-chain visualization tool, not a forensic or legal record.";
+
+export const keyboardCommands: KeyboardCommand[] = [
+  { key: "[", description: "Zoom out the graph." },
+  { key: "]", description: "Zoom in the graph." },
+  { key: "Page Up", description: "Select the previous hacker in the dropdown (stops at the top entry)." },
+  { key: "Page Down", description: "Select the next hacker in the dropdown (stops at the bottom entry)." },
+];
 
 export const hackCoverageLinks: ExternalLink[] = [
   {

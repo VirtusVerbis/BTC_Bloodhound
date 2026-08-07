@@ -10,6 +10,7 @@ export interface AddressDetail {
     source: string;
     hopFromHacker: number | null;
     expandStatus: string;
+    lastExpandedAt: string | null;
     totalReceivedSats: number;
     liveBalanceSats: number | null;
     liveBalanceAt: string | null;
@@ -56,6 +57,15 @@ export function AddressDetailDrawer({
             <p>
               Role: {detail.address.role} · source: {detail.address.source}
               {detail.address.hopFromHacker != null && ` · hop ${detail.address.hopFromHacker}`}
+            </p>
+            <p>
+              Expand: {detail.address.expandStatus}
+              {detail.address.lastExpandedAt &&
+                ` · last ${formatLocalDateTime(detail.address.lastExpandedAt) ?? detail.address.lastExpandedAt}`}
+            </p>
+            <p>
+              Outgoing flows indexed:{" "}
+              {detail.relatedTxs.filter((t) => t.direction === "out").length || "none"}
             </p>
             <p>Total received (hack): {satsToBtc(detail.address.totalReceivedSats)} BTC</p>
             {detail.address.liveBalanceSats != null && (

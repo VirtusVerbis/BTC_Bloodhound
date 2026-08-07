@@ -62,6 +62,15 @@ body {
   color: var(--color-text-muted);
 }
 
+.stats-hacker-count {
+  color: var(--color-hacker-border);
+}
+
+.stats-hack-btc {
+  color: var(--color-hacker-border);
+  font-weight: 700;
+}
+
 .controls-row {
   display: flex;
   flex-wrap: wrap;
@@ -337,4 +346,18 @@ button.primary {
 .about-note {
   margin-top: 0.75rem !important;
   font-size: 0.9rem;
+}
+
+.about-section kbd {
+  display: inline-block;
+  padding: 0.1em 0.45em;
+  font-family: ui-monospace, monospace;
+  font-size: 0.9em;
+  background: var(--color-panel);
+  border: 1px solid #444;
+  border-radius: 4px;
+}
+
+.sync-stats > span {
+  cursor: help;
 }

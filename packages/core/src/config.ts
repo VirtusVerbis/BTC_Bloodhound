@@ -2,6 +2,7 @@ export const JOB_PRIORITY = {
   POLL_HACKER: 10,
   SYNC_COLDCARDWATCH: 9,
   REFRESH_BALANCE: 8,
+  POLL_DOWNSTREAM: 7,
   USER_EXPAND: 6,
   PROCESS_TX: 4,
   BACKFILL_HACKER: 2,
@@ -13,6 +14,7 @@ export type JobType =
   | "backfill_hacker_address"
   | "process_tx"
   | "poll_hacker_address"
+  | "poll_downstream_address"
   | "expand_downstream"
   | "refresh_live_balance"
   | "sync_coldcardwatch";
@@ -25,6 +27,8 @@ export interface AppConfig {
   jobsPerTick: number;
   cronIntervalSec: number;
   crawlEnqueuePerCron: number;
+  downstreamPollIntervalSec: number;
+  downstreamPollEnqueuePerCron: number;
   maxCrawlDepth: number;
   maxGraphDepth: number;
   maxGraphOutputs: number;
@@ -45,7 +49,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     rateLimitMs: Number(env.RATE_LIMIT_MS ?? 3000),
     jobsPerTick: Number(env.JOBS_PER_TICK ?? 1),
     cronIntervalSec: Number(env.CRON_INTERVAL_SEC ?? 60),
-    crawlEnqueuePerCron: Number(env.CRAWL_ENQUEUE_PER_CRON ?? 1),
+    crawlEnqueuePerCron: Number(env.CRAWL_ENQUEUE_PER_CRON ?? 5),
+    downstreamPollIntervalSec: Number(env.DOWNSTREAM_POLL_INTERVAL_SEC ?? 600),
+    downstreamPollEnqueuePerCron: Number(env.DOWNSTREAM_POLL_ENQUEUE_PER_CRON ?? 10),
     maxCrawlDepth: Number(env.MAX_CRAWL_DEPTH ?? 5),
     maxGraphDepth: Number(env.MAX_GRAPH_DEPTH ?? 2),
     maxGraphOutputs: Number(env.MAX_GRAPH_OUTPUTS ?? 20),

@@ -25,6 +25,7 @@ export interface ChainAddressStats {
 export interface ChainProvider {
   name: string;
   getAddressTxs(address: string, lastSeenTxid?: string): Promise<ChainTxSummary[]>;
+  getAddressTxsChainPage(address: string, lastTxid: string): Promise<ChainTxSummary[]>;
   getTx(txid: string): Promise<ChainTxDetail>;
   getAddressStats(address: string): Promise<ChainAddressStats>;
 }
