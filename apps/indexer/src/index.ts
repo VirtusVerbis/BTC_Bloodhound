@@ -6,8 +6,12 @@ import {
   loadConfig,
   processJobs,
   runLoadLocalWatchlist,
+  runReBackfillHackers,
+  runRebuildHackEdges,
+  runRebuildHackEdgesWait,
   runSeedPublicHackers,
   scheduleDownstreamCrawl,
+  scheduleBtcUsdPriceRefresh,
 } from "@cointrace/core";
 
 const config = loadConfig();
@@ -31,12 +35,29 @@ async function main() {
     console.log("Local watchlist loaded");
     return;
   }
+  if (cmd === "re-backfill-hackers") {
+    const n = await runReBackfillHackers(store);
+    console.log(`Re-backfill queued for ${n} hacker address(es)`);
+    return;
+  }
+  if (cmd === "rebuild-hack-edges") {
+    const wait = process.argv.includes("--wait");
+    if (wait) {
+      const n = await runRebuildHackEdgesWait(store, router, config);
+      console.log(`Rebuild finished for ${n} transaction(s)`);
+    } else {
+      const n = await runRebuildHackEdges(store, config);
+      console.log(`Rebuild queued for ${n} transaction(s); run indexer to process (rebuild mode auto-activates)`);
+    }
+    return;
+  }
   if (cmd === "run") {
     console.log("Indexer running...");
     let lastCron = 0;
     while (true) {
       const now = Date.now();
       if (now - lastCron >= config.cronIntervalSec * 1000) {
+        scheduleBtcUsdPriceRefresh(store, config);
         scheduleDownstreamCrawl(store, config);
         lastCron = now;
       }

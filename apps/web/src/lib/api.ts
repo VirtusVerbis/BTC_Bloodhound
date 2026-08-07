@@ -20,6 +20,18 @@ export function satsToBtc(sats: number) {
   return satsToBtcNumber(sats).toLocaleString(undefined, { maximumFractionDigits: 8 });
 }
 
+export function satsToUsd(sats: number, btcUsdPrice: number) {
+  return satsToBtcNumber(sats) * btcUsdPrice;
+}
+
+export function formatUsd(amount: number) {
+  return amount.toLocaleString(undefined, {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: amount >= 100 ? 0 : 2,
+  });
+}
+
 export function isValidIsoDate(iso: string) {
   return !Number.isNaN(new Date(iso).getTime());
 }

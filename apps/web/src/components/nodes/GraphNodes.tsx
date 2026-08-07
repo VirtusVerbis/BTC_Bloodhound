@@ -1,6 +1,7 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { AddressLine, ExplorerActions } from "../ExplorerActions";
-import { satsToBtc } from "../../lib/api";
+import { useBtcUsdPrice } from "../../context/BtcUsdContext";
+import { formatUsd, satsToBtc, satsToUsd } from "../../lib/api";
 
 export type GraphNodeData = {
   type?: string;
@@ -30,6 +31,12 @@ function balanceAge(at: string | null | undefined) {
   return mins < 1 ? "just now" : `${mins}m ago`;
 }
 
+function UsdUnderBtc({ sats }: { sats: number }) {
+  const btcUsdPrice = useBtcUsdPrice();
+  if (btcUsdPrice == null) return null;
+  return <div className="usd-value">{formatUsd(satsToUsd(sats, btcUsdPrice))}</div>;
+}
+
 export function HackerNode({ data }: NodeProps) {
   const d = data as GraphNodeData;
   return (
@@ -40,11 +47,15 @@ export function HackerNode({ data }: NodeProps) {
       {d.address && <AddressLine address={d.address} />}
       {d.label && <div>{d.label}</div>}
       {d.totalReceivedSats != null && (
-        <div>Total received (hack): {satsToBtc(d.totalReceivedSats)} BTC</div>
+        <div>
+          Total received (hack): {satsToBtc(d.totalReceivedSats)} BTC
+          <UsdUnderBtc sats={d.totalReceivedSats} />
+        </div>
       )}
       {d.liveBalanceSats != null && (
         <div style={{ color: "var(--color-text-muted)" }}>
           Current balance: {satsToBtc(d.liveBalanceSats)} BTC · {balanceAge(d.liveBalanceAt)}
+          <UsdUnderBtc sats={d.liveBalanceSats} />
         </div>
       )}
       {d.address && <ExplorerActions address={d.address} />}
@@ -60,7 +71,12 @@ export function DownstreamNode({ data }: NodeProps) {
       <Handle type="source" position={Position.Right} style={handleStyle} />
       <div>Downstream</div>
       {d.address && <AddressLine address={d.address} />}
-      {d.incomingSats != null && <div>In: {satsToBtc(d.incomingSats)} BTC</div>}
+      {d.incomingSats != null && (
+        <div>
+          In: {satsToBtc(d.incomingSats)} BTC
+          <UsdUnderBtc sats={d.incomingSats} />
+        </div>
+      )}
       {d.hopFromHacker != null && <div>hop {d.hopFromHacker}</div>}
       <div className="node-actions nodrag">
         <button type="button" className="primary" onClick={d.onExpand}>
@@ -80,6 +96,7 @@ export function VictimClusterNode({ data }: NodeProps) {
       <div>Victims</div>
       <div>
         {d.childCount ?? 0} addresses · {satsToBtc(d.totalSats ?? 0)} BTC
+        <UsdUnderBtc sats={d.totalSats ?? 0} />
       </div>
       <div className="node-actions nodrag">
         <button type="button" onClick={d.onExpand}>
@@ -97,7 +114,12 @@ export function VictimNode({ data }: NodeProps) {
       <Handle type="source" position={Position.Right} style={handleStyle} />
       <div>Victim</div>
       {d.address && <AddressLine address={d.address} />}
-      {d.incomingSats != null && <div>{satsToBtc(d.incomingSats)} BTC</div>}
+      {d.incomingSats != null && (
+        <div>
+          {satsToBtc(d.incomingSats)} BTC
+          <UsdUnderBtc sats={d.incomingSats} />
+        </div>
+      )}
       {d.address && <ExplorerActions address={d.address} />}
     </div>
   );

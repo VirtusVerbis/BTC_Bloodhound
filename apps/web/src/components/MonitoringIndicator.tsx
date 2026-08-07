@@ -1,3 +1,5 @@
+import { formatSourceLabel } from "../lib/hackerGroups";
+
 export interface MonitoringSyncSource {
   source: string;
   lastSyncAt: string | null;
@@ -11,13 +13,10 @@ export interface MonitoringSyncStatus {
   lastExternalSyncAt?: string | null;
   lastJobAt?: string | null;
   externalSources?: MonitoringSyncSource[];
+  apiThresholdExceeded?: boolean;
+  lastApiThresholdAt?: string | null;
+  apiThresholdCount?: number;
 }
-
-const SOURCE_LABELS: Record<string, string> = {
-  coldcardwatch: "coldcardwatch.com",
-  coldcard_hack_tracker: "coldcard-hack-tracker.vercel.app",
-  coldcard_sweep_watch: "coldcard-watch.vercel.app",
-};
 
 function formatLocal(iso: string | null | undefined) {
   if (!iso) return "—";
@@ -26,11 +25,17 @@ function formatLocal(iso: string | null | undefined) {
 }
 
 function monitoringTooltip(sync: MonitoringSyncStatus) {
-  return [
+  const lines = [
     `Chain API: ${formatLocal(sync.lastChainApiAt)}`,
     `External sync: ${formatLocal(sync.lastExternalSyncAt)}`,
     `Indexer jobs: ${formatLocal(sync.lastJobAt)}`,
-  ].join("\n");
+  ];
+  if (sync.apiThresholdExceeded) {
+    lines.push(
+      `API threshold hit: ${formatLocal(sync.lastApiThresholdAt)} (${sync.apiThresholdCount ?? 0} total)`,
+    );
+  }
+  return lines.join("\n");
 }
 
 interface MonitoringIndicatorProps {
@@ -41,6 +46,7 @@ interface MonitoringIndicatorProps {
 export function MonitoringIndicator({ sync, onNavigateMonitoring }: MonitoringIndicatorProps) {
   const active = sync?.monitoringActive !== false;
   const lastActivity = sync?.lastActivityAt;
+  const thresholdExceeded = sync?.apiThresholdExceeded === true;
 
   return (
     <div className="monitoring-indicator">
@@ -53,6 +59,14 @@ export function MonitoringIndicator({ sync, onNavigateMonitoring }: MonitoringIn
           onNavigateMonitoring();
         }}
       >
+        {thresholdExceeded && (
+          <span
+            className="monitoring-threshold-warning"
+            title={`Last hit: ${formatLocal(sync?.lastApiThresholdAt)} · ${sync?.apiThresholdCount ?? 0} total`}
+          >
+            API Thresholds Exceeded!
+          </span>
+        )}
         <span
           className={`monitoring-dot${active ? " monitoring-dot--active" : " monitoring-dot--paused"}`}
           aria-hidden
@@ -66,8 +80,6 @@ export function MonitoringIndicator({ sync, onNavigateMonitoring }: MonitoringIn
   );
 }
 
-export function formatSourceLabel(source: string) {
-  return SOURCE_LABELS[source] ?? source;
-}
+export { formatSourceLabel };
 
 export { formatLocal as formatMonitoringTime };

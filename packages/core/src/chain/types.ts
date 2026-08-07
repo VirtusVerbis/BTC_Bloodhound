@@ -18,8 +18,8 @@ export interface ChainTxDetail extends ChainTxSummary {
 }
 
 export interface ChainAddressStats {
-  chain_stats: { funded_txo_sum: number; spent_txo_sum: number };
-  mempool_stats?: { funded_txo_sum: number; spent_txo_sum: number };
+  chain_stats: { funded_txo_sum: number; spent_txo_sum: number; tx_count: number };
+  mempool_stats?: { funded_txo_sum: number; spent_txo_sum: number; tx_count?: number };
 }
 
 export interface ChainProvider {

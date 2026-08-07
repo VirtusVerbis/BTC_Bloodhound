@@ -108,6 +108,35 @@ export function runMigrations(sqlite: Database.Database): void {
   if (!schedulerCols.some((c) => c.name === "last_provider_success_at")) {
     sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN last_provider_success_at TEXT`);
   }
+  if (!schedulerCols.some((c) => c.name === "last_api_threshold_at")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN last_api_threshold_at TEXT`);
+  }
+  if (!schedulerCols.some((c) => c.name === "api_threshold_count")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN api_threshold_count INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!schedulerCols.some((c) => c.name === "backfill_heal_audit_index")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN backfill_heal_audit_index INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!schedulerCols.some((c) => c.name === "btc_usd_price")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN btc_usd_price INTEGER`);
+  }
+  if (!schedulerCols.some((c) => c.name === "btc_usd_price_at")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN btc_usd_price_at TEXT`);
+  }
+
+  const syncCols = sqlite.prepare("PRAGMA table_info(sync_state)").all() as Array<{ name: string }>;
+  if (!syncCols.some((c) => c.name === "backfill_state_json")) {
+    sqlite.exec(`ALTER TABLE sync_state ADD COLUMN backfill_state_json TEXT`);
+  }
+  if (!syncCols.some((c) => c.name === "backfill_complete")) {
+    sqlite.exec(`ALTER TABLE sync_state ADD COLUMN backfill_complete INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!syncCols.some((c) => c.name === "last_backfill_audit_at")) {
+    sqlite.exec(`ALTER TABLE sync_state ADD COLUMN last_backfill_audit_at TEXT`);
+  }
+  if (!syncCols.some((c) => c.name === "chain_tx_count_at_audit")) {
+    sqlite.exec(`ALTER TABLE sync_state ADD COLUMN chain_tx_count_at_audit INTEGER`);
+  }
 }
 
 export * from "./schema.js";

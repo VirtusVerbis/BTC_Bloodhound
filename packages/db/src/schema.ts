@@ -41,6 +41,10 @@ export const syncState = sqliteTable("sync_state", {
   lastSeenTxid: text("last_seen_txid"),
   lastBlockHeight: integer("last_block_height"),
   lastPolledAt: text("last_polled_at"),
+  backfillStateJson: text("backfill_state_json"),
+  backfillComplete: integer("backfill_complete").notNull().default(0),
+  lastBackfillAuditAt: text("last_backfill_audit_at"),
+  chainTxCountAtAudit: integer("chain_tx_count_at_audit"),
 });
 
 export const jobs = sqliteTable("jobs", {
@@ -67,7 +71,12 @@ export const schedulerState = sqliteTable("scheduler_state", {
   nextProviderCallAt: text("next_provider_call_at"),
   lastProviderUsed: text("last_provider_used"),
   lastProviderSuccessAt: text("last_provider_success_at"),
+  lastApiThresholdAt: text("last_api_threshold_at"),
+  apiThresholdCount: integer("api_threshold_count").notNull().default(0),
+  backfillHealAuditIndex: integer("backfill_heal_audit_index").notNull().default(0),
   rateLimitMs: integer("rate_limit_ms").notNull().default(3000),
+  btcUsdPrice: integer("btc_usd_price"),
+  btcUsdPriceAt: text("btc_usd_price_at"),
 });
 
 export type Address = typeof addresses.$inferSelect;

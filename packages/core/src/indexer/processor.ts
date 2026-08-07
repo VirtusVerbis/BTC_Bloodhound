@@ -4,7 +4,7 @@ import type { Job, Store } from "@cointrace/db";
 import type { AppConfig } from "../config.js";
 import { JOB_PRIORITY } from "../config.js";
 import type { ChainRouter } from "../chain/router.js";
-import { getAddressTxsAll, txInvolvesSpend } from "../chain/esplora.js";
+import { txInvolvesSpend } from "../chain/esplora.js";
 import { getHackerAddressSet, processTxForHackTrace } from "../graph/builder.js";
 import { applyColdcardWatchSync, fetchColdcardWatch } from "../sources/coldcardwatch.js";
 import {
@@ -12,6 +12,18 @@ import {
   fetchColdcardHackTracker,
 } from "../sources/coldcardHackTracker.js";
 import { applyColdcardSweepWatchSync, fetchColdcardSweepWatch } from "../sources/coldcardSweepWatch.js";
+import { fetchMempoolBtcUsd } from "../price/mempoolPrices.js";
+import { processTxPriority } from "./rebuildMode.js";
+
+export interface BackfillPayload {
+  address: string;
+  chainCursor?: string;
+  pendingTxids?: string[];
+  processedIndex?: number;
+  pagesExhausted?: boolean;
+  newestTxid?: string;
+  newestBlockHeight?: number | null;
+}
 
 async function processAddressTxs(
   store: Store,
@@ -79,19 +91,211 @@ export async function runLoadLocalWatchlist(store: Store, localPath: string): Pr
   }
 }
 
-async function backfillHacker(store: Store, router: ChainRouter, address: string): Promise<void> {
-  const hackers = getHackerAddressSet(store);
-  const txs = await router.withProvider((p) => getAddressTxsAll(p, address));
-  for (const t of [...txs].reverse()) {
-    await processTxForHackTrace(store, router, t.txid, hackers);
+export async function runReBackfillHackers(store: Store): Promise<number> {
+  const hackers = store.listHackers();
+  let delay = 0;
+  for (const h of hackers) {
+    store.setExpandStatus(h.address, "pending");
+    store.upsertBackfillState(h.address, null, false);
+    store.enqueueJob(
+      "backfill_hacker_address",
+      { address: h.address },
+      JOB_PRIORITY.BACKFILL_HACKER,
+      new Date(Date.now() + delay * 1000).toISOString(),
+    );
+    delay += 5;
   }
-  if (txs.length > 0) {
+  return hackers.length;
+}
+
+export async function runRebuildHackEdges(store: Store, config: AppConfig): Promise<number> {
+  const txids = store.listIndexedTxids();
+  store.deleteHackTraceEdges();
+  store.resetHackerTotalReceived();
+  const priority = processTxPriority(store, config);
+  let delay = 0;
+  for (const txid of txids) {
+    store.enqueueJob(
+      "process_tx",
+      { txid },
+      priority,
+      new Date(Date.now() + delay * 1000).toISOString(),
+    );
+    delay += 3;
+  }
+  return txids.length;
+}
+
+export async function runRebuildHackEdgesWait(
+  store: Store,
+  router: ChainRouter,
+  config: AppConfig,
+): Promise<number> {
+  const total = await runRebuildHackEdges(store, config);
+  console.log(`Processing ${total} transaction(s)...`);
+  let processed = 0;
+  while (store.countActiveJobs("process_tx") > 0) {
+    const n = await processJobs(store, router, config);
+    processed += n;
+    if (processed > 0 && processed % 25 === 0) {
+      const remaining = store.countActiveJobs("process_tx");
+      console.log(`Rebuild progress: ${processed} jobs processed, ${remaining} remaining`);
+    }
+    if (n === 0) await new Promise((r) => setTimeout(r, 500));
+  }
+  store.recalcAllTotalReceived();
+  console.log(`Rebuild complete: ${processed} jobs processed`);
+  return total;
+}
+
+function parseBackfillPayload(raw: Record<string, unknown>): BackfillPayload {
+  return {
+    address: raw.address as string,
+    chainCursor: raw.chainCursor as string | undefined,
+    pendingTxids: raw.pendingTxids as string[] | undefined,
+    processedIndex: raw.processedIndex as number | undefined,
+    pagesExhausted: raw.pagesExhausted as boolean | undefined,
+    newestTxid: raw.newestTxid as string | undefined,
+    newestBlockHeight: raw.newestBlockHeight as number | null | undefined,
+  };
+}
+
+function hydrateBackfillPayload(store: Store, rawPayload: Record<string, unknown>): BackfillPayload {
+  const parsed = parseBackfillPayload(rawPayload);
+  const hasContinuation =
+    parsed.chainCursor != null ||
+    (parsed.pendingTxids != null && parsed.pendingTxids.length > 0) ||
+    parsed.pagesExhausted === true ||
+    parsed.newestTxid != null;
+  if (hasContinuation) return parsed;
+
+  const saved = store.getBackfillState(parsed.address);
+  if (saved?.payload) {
+    return parseBackfillPayload({ address: parsed.address, ...saved.payload });
+  }
+  return parsed;
+}
+
+export function buildBackfillJobPayload(
+  store: Store,
+  address: string,
+): Record<string, unknown> {
+  const saved = store.getBackfillState(address);
+  if (saved?.payload) {
+    return { address, ...saved.payload };
+  }
+  return { address };
+}
+
+function toPersistedPayload(payload: BackfillPayload): Record<string, unknown> {
+  return {
+    address: payload.address,
+    chainCursor: payload.chainCursor,
+    pendingTxids: payload.pendingTxids,
+    processedIndex: payload.processedIndex,
+    pagesExhausted: payload.pagesExhausted,
+    newestTxid: payload.newestTxid,
+    newestBlockHeight: payload.newestBlockHeight,
+  };
+}
+
+async function backfillHacker(
+  store: Store,
+  router: ChainRouter,
+  config: AppConfig,
+  rawPayload: Record<string, unknown>,
+): Promise<void> {
+  const payload = hydrateBackfillPayload(store, rawPayload);
+  const address = payload.address;
+  let pendingTxids = payload.pendingTxids ?? [];
+  let processedIndex = payload.processedIndex ?? 0;
+  let chainCursor = payload.chainCursor;
+  let pagesExhausted = payload.pagesExhausted ?? false;
+  let newestTxid = payload.newestTxid;
+  let newestBlockHeight = payload.newestBlockHeight ?? null;
+
+  const hackers = getHackerAddressSet(store);
+  store.setExpandStatus(address, "backfilling");
+
+  if (processedIndex >= pendingTxids.length && !pagesExhausted) {
+    const { txs } = await router.fetchAddressTxPage(address, chainCursor);
+    if (txs.length === 0) {
+      pagesExhausted = true;
+    } else {
+      if (!newestTxid) {
+        newestTxid = txs[0]!.txid;
+        newestBlockHeight = txs[0]!.status?.block_height ?? null;
+      }
+      pendingTxids = [...txs].reverse().map((t) => t.txid);
+      processedIndex = 0;
+      chainCursor = txs[txs.length - 1]!.txid;
+    }
+  }
+
+  let processed = 0;
+  while (processedIndex < pendingTxids.length && processed < config.backfillTxsPerJob) {
+    const txid = pendingTxids[processedIndex]!;
+    processedIndex++;
+    if (store.getTransaction(txid)) continue;
+    await processTxForHackTrace(store, router, txid, hackers);
+    processed++;
+  }
+
+  const hasPending = processedIndex < pendingTxids.length;
+  const needsMore = hasPending || !pagesExhausted;
+
+  const currentPayload: BackfillPayload = {
+    address,
+    chainCursor,
+    pendingTxids: hasPending ? pendingTxids : [],
+    processedIndex: hasPending ? processedIndex : 0,
+    pagesExhausted,
+    newestTxid,
+    newestBlockHeight,
+  };
+
+  if (needsMore) {
+    store.upsertBackfillState(address, toPersistedPayload(currentPayload), false);
+    store.enqueueJob(
+      "backfill_hacker_address",
+      toPersistedPayload(currentPayload),
+      JOB_PRIORITY.BACKFILL_HACKER,
+    );
+    return;
+  }
+
+  if (newestTxid) {
     store.upsertSyncState(address, {
-      lastSeenTxid: txs[0]!.txid,
-      lastBlockHeight: txs[0]!.status?.block_height ?? null,
+      lastSeenTxid: newestTxid,
+      lastBlockHeight: newestBlockHeight,
     });
   }
+  store.upsertBackfillState(address, null, true);
   store.setExpandStatus(address, "expanded");
+}
+
+async function auditHackerBackfill(
+  store: Store,
+  router: ChainRouter,
+  config: AppConfig,
+  address: string,
+): Promise<void> {
+  const stats = await router.withProvider((p) => p.getAddressStats(address));
+  const chainTxCount = stats.chain_stats.tx_count;
+  const indexedTxs = store.countIndexedTxsForHacker(address);
+  store.updateBackfillAudit(address, chainTxCount);
+
+  if (chainTxCount > indexedTxs + config.backfillHealTxSlack) {
+    store.setExpandStatus(address, "backfilling");
+    store.upsertBackfillState(address, null, false);
+    store.enqueueJob(
+      "backfill_hacker_address",
+      buildBackfillJobPayload(store, address),
+      JOB_PRIORITY.BACKFILL_HACKER,
+    );
+  } else {
+    store.upsertBackfillState(address, null, true);
+  }
 }
 
 async function pollHacker(store: Store, router: ChainRouter, address: string): Promise<void> {
@@ -133,7 +337,7 @@ async function expandDownstream(
   const addr = store.getAddress(address);
   const hop = addr?.hopFromHacker ?? 0;
   const hackers = getHackerAddressSet(store);
-  const txs = await router.withProvider((p) => getAddressTxsAll(p, address));
+  const txs = await router.fetchAddressTxsAll(address, config.backfillMaxTxs);
   await processAddressTxs(store, router, address, txs, hackers, hop);
   store.setExpandStatus(address, "expanded");
 
@@ -194,13 +398,16 @@ export async function processJob(
   config: AppConfig,
   job: Job,
 ): Promise<void> {
-  const payload = JSON.parse(job.payloadJson) as Record<string, string | boolean>;
+  const payload = JSON.parse(job.payloadJson) as Record<string, unknown>;
   switch (job.type) {
     case "seed_public_hackers":
       await runSeedPublicHackers(store, config.seedFilePath);
       break;
     case "backfill_hacker_address":
-      await backfillHacker(store, router, payload.address as string);
+      await backfillHacker(store, router, config, payload);
+      break;
+    case "audit_hacker_backfill":
+      await auditHackerBackfill(store, router, config, payload.address as string);
       break;
     case "poll_hacker_address":
       await pollHacker(store, router, payload.address as string);
@@ -214,6 +421,11 @@ export async function processJob(
     case "refresh_live_balance":
       await refreshBalance(store, router, payload.address as string);
       break;
+    case "refresh_btc_usd_price": {
+      const { usd, at } = await fetchMempoolBtcUsd(config.mempoolBase);
+      store.setBtcUsdPrice(usd, at);
+      break;
+    }
     case "sync_coldcardwatch":
       await syncColdcardwatch(store, config);
       break;

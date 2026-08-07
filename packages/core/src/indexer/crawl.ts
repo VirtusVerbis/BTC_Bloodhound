@@ -1,8 +1,82 @@
 import type { Store } from "@cointrace/db";
 import type { AppConfig } from "../config.js";
 import { JOB_PRIORITY } from "../config.js";
+import { buildBackfillJobPayload } from "./processor.js";
+import { isRebuildActive } from "./rebuildMode.js";
+
+function enqueueBackfillResume(store: Store, address: string): void {
+  store.enqueueJob(
+    "backfill_hacker_address",
+    buildBackfillJobPayload(store, address),
+    JOB_PRIORITY.BACKFILL_HACKER,
+  );
+}
+
+export function scheduleHackerBackfillHeal(store: Store, config: AppConfig): void {
+  const ts = Date.now();
+  const hackers = store.listHackers();
+  if (hackers.length === 0) return;
+
+  for (const h of hackers) {
+    if (store.hasPendingJob("backfill_hacker_address", h.address)) continue;
+    if (store.hasPendingJob("audit_hacker_backfill", h.address)) continue;
+
+    const addr = store.getAddress(h.address);
+    const status = addr?.expandStatus ?? "pending";
+    const backfill = store.getBackfillState(h.address);
+
+    if (status === "pending" || status === "backfilling") {
+      enqueueBackfillResume(store, h.address);
+      continue;
+    }
+
+    if (status === "expanded" && !backfill?.backfillComplete) {
+      enqueueBackfillResume(store, h.address);
+    }
+  }
+
+  let auditsEnqueued = 0;
+  let idx = store.getBackfillHealAuditIndex() % hackers.length;
+  let scanned = 0;
+
+  while (auditsEnqueued < config.backfillHealAuditPerCron && scanned < hackers.length) {
+    const h = hackers[idx]!;
+    idx = (idx + 1) % hackers.length;
+    scanned++;
+
+    if (store.hasPendingJob("backfill_hacker_address", h.address)) continue;
+    if (store.hasPendingJob("audit_hacker_backfill", h.address)) continue;
+
+    const addr = store.getAddress(h.address);
+    if (addr?.expandStatus !== "expanded") continue;
+
+    const backfill = store.getBackfillState(h.address);
+    if (!backfill?.backfillComplete) continue;
+
+    const lastAudit = backfill.lastBackfillAuditAt
+      ? new Date(backfill.lastBackfillAuditAt).getTime()
+      : 0;
+    if (ts - lastAudit < config.backfillHealAuditIntervalSec * 1000) continue;
+
+    store.enqueueJob("audit_hacker_backfill", { address: h.address }, JOB_PRIORITY.BACKFILL_HACKER);
+    auditsEnqueued++;
+  }
+
+  store.setBackfillHealAuditIndex(idx);
+}
+
+export function scheduleBtcUsdPriceRefresh(store: Store, config: AppConfig): void {
+  const ts = Date.now();
+  const price = store.getBtcUsdPrice();
+  const lastAt = price?.at ? new Date(price.at).getTime() : 0;
+  if (ts - lastAt < config.btcUsdPriceRefreshIntervalSec * 1000) return;
+  if (store.hasPendingJob("refresh_btc_usd_price")) return;
+  store.enqueueJob("refresh_btc_usd_price", {}, JOB_PRIORITY.REFRESH_BTC_USD);
+}
 
 export function scheduleDownstreamCrawl(store: Store, config: AppConfig): void {
+  if (isRebuildActive(store, config)) return;
+
   const ts = Date.now();
 
   const cwSync = store.getSourceSync("coldcardwatch");
@@ -39,6 +113,8 @@ export function scheduleDownstreamCrawl(store: Store, config: AppConfig): void {
       store.enqueueJob("refresh_live_balance", { address: h.address }, JOB_PRIORITY.REFRESH_BALANCE);
     }
   }
+
+  scheduleHackerBackfillHeal(store, config);
 
   const frontier = store.getDownstreamFrontier(config.crawlEnqueuePerCron, config.maxCrawlDepth);
   for (const row of frontier) {

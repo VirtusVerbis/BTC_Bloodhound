@@ -6,6 +6,7 @@
   --color-queued-border: #888888;
   --color-text: #e8e8e8;
   --color-text-muted: #999;
+  --color-usd: #4caf50;
   --color-edge: #f7931a;
   --color-panel: #111;
   --color-input-bg: #1a1a1a;
@@ -35,6 +36,27 @@ body {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5625rem;
+}
+
+.graph-panel-controls-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.375rem;
+}
+
+.graph-panel-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.graph-panel-switch input {
+  width: auto;
+  min-height: unset;
+  cursor: pointer;
 }
 
 .graph-panel-controls label {
@@ -100,6 +122,12 @@ body {
 .monitoring-indicator-link:hover .monitoring-label {
   color: var(--color-text);
   text-decoration: underline;
+}
+
+.monitoring-threshold-warning {
+  color: #f44336;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .monitoring-dot {
@@ -174,6 +202,10 @@ body {
 .stats-hack-btc {
   color: var(--color-hacker-border);
   font-weight: 700;
+}
+
+.usd-value {
+  color: var(--color-usd);
 }
 
 .controls-row {

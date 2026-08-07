@@ -77,8 +77,10 @@ export class Store {
     return this.db.select().from(addresses).where(eq(addresses.address, address)).get();
   }
 
-  listHackers(q?: string) {
-    const base = eq(addresses.isFlaggedHacker, true);
+  listHackers(q?: string, activeOnly?: boolean) {
+    const conditions = [eq(addresses.isFlaggedHacker, true)];
+    if (activeOnly) conditions.push(gt(addresses.totalReceivedSats, 0));
+    const base = and(...conditions);
     if (q?.trim()) {
       const pattern = `%${q.trim()}%`;
       return this.db
@@ -117,9 +119,16 @@ export class Store {
       )
       .get();
     if (existing) {
-      if (data.blockTime != null) {
-        this.db.update(edges).set({ blockTime: data.blockTime }).where(eq(edges.id, existing.id)).run();
-      }
+      this.db
+        .update(edges)
+        .set({
+          amountSats: data.amountSats,
+          blockTime: data.blockTime ?? existing.blockTime,
+          hopFromHacker: data.hopFromHacker ?? existing.hopFromHacker,
+          direction: data.direction,
+        })
+        .where(eq(edges.id, existing.id))
+        .run();
     } else {
       this.db.insert(edges).values(data).run();
     }
@@ -139,6 +148,27 @@ export class Store {
       .set({ totalReceivedSats: row?.total ?? 0 })
       .where(eq(addresses.address, hackerAddress))
       .run();
+  }
+
+  recalcAllTotalReceived() {
+    for (const hacker of this.listHackers()) {
+      this.recalcTotalReceived(hacker.address);
+    }
+  }
+
+  deleteHackTraceEdges() {
+    this.db
+      .delete(edges)
+      .where(or(eq(edges.direction, "in_to_hacker"), eq(edges.direction, "out_from_hacker")))
+      .run();
+  }
+
+  listIndexedTxids() {
+    return this.db.select({ txid: transactions.txid }).from(transactions).all().map((r) => r.txid);
+  }
+
+  resetHackerTotalReceived() {
+    this.db.update(addresses).set({ totalReceivedSats: 0 }).where(eq(addresses.isFlaggedHacker, true)).run();
   }
 
   upsertTransaction(data: { txid: string; blockHeight?: number | null; blockTime?: string | null; feeSats?: number | null }) {
@@ -349,6 +379,20 @@ export class Store {
     return Number(result.lastInsertRowid);
   }
 
+  countActiveJobs(type: string) {
+    const row = this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.type, type),
+          or(eq(jobs.status, "pending"), eq(jobs.status, "running")),
+        ),
+      )
+      .get();
+    return row?.count ?? 0;
+  }
+
   hasPendingJob(type: string, address?: string) {
     if (!address) {
       return !!this.db
@@ -438,11 +482,38 @@ export class Store {
     nextProviderCallAt?: string;
     lastProviderUsed?: string;
     lastProviderSuccessAt?: string;
+    lastApiThresholdAt?: string;
+    apiThresholdCount?: number;
+    backfillHealAuditIndex?: number;
     rateLimitMs?: number;
+    btcUsdPrice?: number;
+    btcUsdPriceAt?: string;
   }) {
     this.db
       .update(schedulerState)
       .set(data)
+      .where(eq(schedulerState.id, 1))
+      .run();
+  }
+
+  setBtcUsdPrice(usd: number, at: string) {
+    this.updateSchedulerState({ btcUsdPrice: usd, btcUsdPriceAt: at });
+  }
+
+  getBtcUsdPrice(): { usd: number; at: string } | null {
+    const state = this.getSchedulerState();
+    if (state?.btcUsdPrice == null || !state.btcUsdPriceAt) return null;
+    return { usd: state.btcUsdPrice, at: state.btcUsdPriceAt };
+  }
+
+  recordApiThreshold() {
+    const state = this.getSchedulerState();
+    this.db
+      .update(schedulerState)
+      .set({
+        lastApiThresholdAt: now(),
+        apiThresholdCount: (state?.apiThresholdCount ?? 0) + 1,
+      })
       .where(eq(schedulerState.id, 1))
       .run();
   }
@@ -475,6 +546,98 @@ export class Store {
         })
         .run();
     }
+  }
+
+  countIndexedTxsForHacker(address: string): number {
+    const row = this.db
+      .select({ count: sql<number>`count(distinct ${edges.txid})` })
+      .from(edges)
+      .where(or(eq(edges.toAddress, address), eq(edges.fromAddress, address)))
+      .get();
+    return row?.count ?? 0;
+  }
+
+  getBackfillState(address: string) {
+    const row = this.getSyncState(address);
+    if (!row) return null;
+    let payload: Record<string, unknown> | null = null;
+    if (row.backfillStateJson) {
+      try {
+        payload = JSON.parse(row.backfillStateJson) as Record<string, unknown>;
+      } catch {
+        payload = null;
+      }
+    }
+    return {
+      payload,
+      backfillComplete: row.backfillComplete === 1,
+      lastBackfillAuditAt: row.lastBackfillAuditAt ?? null,
+      chainTxCountAtAudit: row.chainTxCountAtAudit ?? null,
+    };
+  }
+
+  upsertBackfillState(
+    address: string,
+    payload: Record<string, unknown> | null,
+    complete?: boolean,
+  ) {
+    const existing = this.getSyncState(address);
+    const patch: {
+      backfillStateJson?: string | null;
+      backfillComplete?: number;
+    } = {};
+    if (complete === true) {
+      patch.backfillStateJson = null;
+      patch.backfillComplete = 1;
+    } else {
+      if (payload) patch.backfillStateJson = JSON.stringify(payload);
+      if (complete === false) patch.backfillComplete = 0;
+    }
+    if (existing) {
+      this.db.update(syncState).set(patch).where(eq(syncState.address, address)).run();
+    } else {
+      this.db
+        .insert(syncState)
+        .values({
+          address,
+          backfillStateJson: patch.backfillStateJson ?? null,
+          backfillComplete: patch.backfillComplete ?? 0,
+        })
+        .run();
+    }
+  }
+
+  updateBackfillAudit(address: string, chainTxCount: number) {
+    const existing = this.getSyncState(address);
+    const ts = now();
+    if (existing) {
+      this.db
+        .update(syncState)
+        .set({
+          lastBackfillAuditAt: ts,
+          chainTxCountAtAudit: chainTxCount,
+        })
+        .where(eq(syncState.address, address))
+        .run();
+    } else {
+      this.db
+        .insert(syncState)
+        .values({
+          address,
+          lastBackfillAuditAt: ts,
+          chainTxCountAtAudit: chainTxCount,
+          backfillComplete: 0,
+        })
+        .run();
+    }
+  }
+
+  getBackfillHealAuditIndex(): number {
+    return this.getSchedulerState()?.backfillHealAuditIndex ?? 0;
+  }
+
+  setBackfillHealAuditIndex(index: number) {
+    this.updateSchedulerState({ backfillHealAuditIndex: index });
   }
 
   getSourceSync(source: string) {
@@ -595,9 +758,14 @@ export class Store {
       .run();
   }
 
-  getMonitoringStatus(staleSec: number) {
+  getMonitoringStatus(staleSec: number, thresholdCooldownSec: number) {
     const scheduler = this.getSchedulerState();
     const lastChainApiAt = scheduler?.lastProviderSuccessAt ?? null;
+    const lastApiThresholdAt = scheduler?.lastApiThresholdAt ?? null;
+    const apiThresholdCount = scheduler?.apiThresholdCount ?? 0;
+    const apiThresholdExceeded =
+      lastApiThresholdAt != null &&
+      Date.now() - new Date(lastApiThresholdAt).getTime() <= thresholdCooldownSec * 1000;
 
     const sources = this.db.select().from(sourceSyncState).all();
     const externalSources = sources.map((s) => ({
@@ -637,6 +805,9 @@ export class Store {
       lastJobAt,
       lastActivityAt,
       monitoringActive,
+      apiThresholdExceeded,
+      lastApiThresholdAt,
+      apiThresholdCount,
       externalSources,
     };
   }
@@ -650,7 +821,7 @@ export class Store {
     const hackers = this.db
       .select({ count: sql<number>`count(*)` })
       .from(addresses)
-      .where(eq(addresses.isFlaggedHacker, true))
+      .where(and(eq(addresses.isFlaggedHacker, true), gt(addresses.totalReceivedSats, 0)))
       .get();
     const totalIn = this.db
       .select({ total: sql<number>`coalesce(sum(${edges.amountSats}), 0)` })
@@ -669,12 +840,15 @@ export class Store {
       .orderBy(desc(jobs.id))
       .limit(1)
       .get();
+    const scheduler = this.getSchedulerState();
     return {
       victimCount: victims?.count ?? 0,
       hackerCount: hackers?.count ?? 0,
       totalInSats: totalIn?.total ?? 0,
       totalOutSats: totalOut?.total ?? 0,
       lastJobAt: lastJob?.createdAt ?? null,
+      btcUsdPrice: scheduler?.btcUsdPrice ?? null,
+      btcUsdPriceAt: scheduler?.btcUsdPriceAt ?? null,
     };
   }
 }

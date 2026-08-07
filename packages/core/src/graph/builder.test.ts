@@ -1,20 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
-import { collectSpenders, processTxForHackTrace } from "./builder.js";
+import { collectSpenders, computeHackTraceEdges, processTxForHackTrace } from "./builder.js";
 import type { ChainTxDetail } from "../chain/types.js";
 import type { ChainRouter } from "../chain/router.js";
 import { openDatabase, runMigrations, Store } from "@cointrace/db";
 
-function makeTx(vinAddrs: string[], voutAddrs: string[]): ChainTxDetail {
+function makeTx(
+  vin: Array<{ address: string; value: number; coinbase?: boolean }>,
+  vout: Array<{ address: string; value: number }>,
+  txid = "abc123",
+): ChainTxDetail {
   return {
-    txid: "abc123",
+    txid,
     status: { block_height: 100, block_time: 1_700_000_000 },
     fee: 500,
-    vin: vinAddrs.map((addr) => ({
-      prevout: { scriptpubkey_address: addr, value: 1000 },
-    })),
-    vout: voutAddrs.map((addr) => ({
-      scriptpubkey_address: addr,
-      value: 1000,
+    vin: vin.map((input) =>
+      input.coinbase
+        ? { is_coinbase: true }
+        : {
+            prevout: { scriptpubkey_address: input.address, value: input.value },
+          },
+    ),
+    vout: vout.map((output) => ({
+      scriptpubkey_address: output.address,
+      value: output.value,
     })),
   };
 }
@@ -44,6 +52,90 @@ describe("collectSpenders", () => {
   });
 });
 
+describe("computeHackTraceEdges", () => {
+  const hackers = new Set(["hack1", "hack2"]);
+
+  it("attributes each victim input by prevout value, not full output", () => {
+    const tx = makeTx(
+      [
+        { address: "v1", value: 10_000 },
+        { address: "v2", value: 20_000 },
+        { address: "v3", value: 30_000 },
+      ],
+      [{ address: "hack1", value: 60_000 }],
+    );
+
+    const { inToHacker } = computeHackTraceEdges(tx, hackers);
+    expect(inToHacker).toHaveLength(3);
+    expect(inToHacker).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ fromAddress: "v1", toAddress: "hack1", amountSats: 10_000 }),
+        expect.objectContaining({ fromAddress: "v2", toAddress: "hack1", amountSats: 20_000 }),
+        expect.objectContaining({ fromAddress: "v3", toAddress: "hack1", amountSats: 30_000 }),
+      ]),
+    );
+  });
+
+  it("aggregates same victim UTXOs in one tx", () => {
+    const tx = makeTx(
+      [
+        { address: "v1", value: 10_000 },
+        { address: "v1", value: 15_000 },
+      ],
+      [{ address: "hack1", value: 25_000 }],
+    );
+
+    const { inToHacker, victimAddresses } = computeHackTraceEdges(tx, hackers);
+    expect(victimAddresses).toEqual(["v1"]);
+    expect(inToHacker).toEqual([
+      expect.objectContaining({ fromAddress: "v1", toAddress: "hack1", amountSats: 25_000 }),
+    ]);
+  });
+
+  it("does not create in_to_hacker when hacker sweeps to hacker", () => {
+    const tx = makeTx([{ address: "hack1", value: 100_000 }], [{ address: "hack2", value: 99_000 }]);
+
+    const { inToHacker, outFromHacker } = computeHackTraceEdges(tx, hackers);
+    expect(inToHacker).toHaveLength(0);
+    expect(outFromHacker).toEqual([
+      expect.objectContaining({
+        fromAddress: "hack1",
+        toAddress: "hack2",
+        amountSats: 99_000,
+        direction: "out_from_hacker",
+      }),
+    ]);
+  });
+
+  it("splits victim input proportionally across multiple hacker outputs", () => {
+    const tx = makeTx([{ address: "v1", value: 100_000 }], [
+      { address: "hack1", value: 40_000 },
+      { address: "hack2", value: 60_000 },
+    ]);
+
+    const { inToHacker } = computeHackTraceEdges(tx, hackers);
+    expect(inToHacker).toHaveLength(2);
+    expect(inToHacker).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ fromAddress: "v1", toAddress: "hack1", amountSats: 40_000 }),
+        expect.objectContaining({ fromAddress: "v1", toAddress: "hack2", amountSats: 60_000 }),
+      ]),
+    );
+  });
+
+  it("does not multiply output amount across many victim inputs", () => {
+    const inputs = Array.from({ length: 20 }, (_, i) => ({
+      address: `v${i}`,
+      value: 5_000,
+    }));
+    const tx = makeTx(inputs, [{ address: "hack1", value: 100_000 }]);
+
+    const { inToHacker } = computeHackTraceEdges(tx, hackers);
+    expect(inToHacker).toHaveLength(20);
+    expect(inToHacker.reduce((sum, edge) => sum + edge.amountSats, 0)).toBe(100_000);
+  });
+});
+
 describe("processTxForHackTrace", () => {
   it("records hop-2 downstream when hop-1 address spends", async () => {
     const { sqlite, db } = openDatabase(":memory:");
@@ -56,7 +148,7 @@ describe("processTxForHackTrace", () => {
       expandStatus: "expanded",
     });
 
-    const tx = makeTx(["down1"], ["child2"]);
+    const tx = makeTx([{ address: "down1", value: 1000 }], [{ address: "child2", value: 1000 }]);
     const router = {
       withProvider: vi.fn(),
     } as unknown as ChainRouter;
@@ -87,7 +179,7 @@ describe("processTxForHackTrace", () => {
       hopFromHacker: 0,
     });
 
-    const tx = makeTx(["hack1"], ["down1"]);
+    const tx = makeTx([{ address: "hack1", value: 1000 }], [{ address: "down1", value: 1000 }]);
     const router = { withProvider: vi.fn() } as unknown as ChainRouter;
     const hackers = new Set(["hack1"]);
 
@@ -96,5 +188,36 @@ describe("processTxForHackTrace", () => {
     const down = store.getAddress("down1");
     expect(down?.hopFromHacker).toBe(1);
     expect(store.getEdgesFromAddress("hack1")).toHaveLength(1);
+    expect(store.getEdgesToAddress("hack1")).toHaveLength(0);
+  });
+
+  it("stores per-input victim amounts for multi-input deposits", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    store.upsertAddress({
+      address: "hack1",
+      role: "hacker",
+      isFlaggedHacker: true,
+      hopFromHacker: 0,
+    });
+
+    const tx = makeTx(
+      [
+        { address: "v1", value: 10_000 },
+        { address: "v2", value: 20_000 },
+        { address: "v3", value: 30_000 },
+      ],
+      [{ address: "hack1", value: 60_000 }],
+    );
+    const router = { withProvider: vi.fn() } as unknown as ChainRouter;
+    const hackers = new Set(["hack1"]);
+
+    await processTxForHackTrace(store, router, tx.txid, hackers, { tx });
+
+    expect(store.getAddress("hack1")?.totalReceivedSats).toBe(60_000);
+    const inEdges = store.getEdgesToAddress("hack1").filter((e) => e.direction === "in_to_hacker");
+    expect(inEdges).toHaveLength(3);
+    expect(inEdges.reduce((sum, e) => sum + e.amountSats, 0)).toBe(60_000);
   });
 });

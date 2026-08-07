@@ -71,6 +71,24 @@ const queuedEdgeDefaults = {
   style: { stroke: "#888", strokeDasharray: "4 4" },
 };
 
+function formatEdgeLabel(e: { txid?: string; amount: number }, show: boolean): string | undefined {
+  if (!show) return undefined;
+  if (e.txid) return `${satsToBtc(e.amount)} BTC`;
+  if (e.amount > 0) return `${satsToBtc(e.amount)} BTC`;
+  return undefined;
+}
+
+function mapApiEdges(apiEdges: ApiGraphEdge[], showEdgeLabels: boolean): Edge[] {
+  return apiEdges.map((e) => ({
+    id: e.id,
+    source: e.source,
+    target: e.target,
+    ...edgeDefaults,
+    label: formatEdgeLabel(e, showEdgeLabels),
+    data: { txid: e.txid, time: e.time },
+  }));
+}
+
 function useMediaQuery(query: string) {
   const [match, setMatch] = useState(() => window.matchMedia(query).matches);
   useEffect(() => {
@@ -133,6 +151,8 @@ export function HackGraph({
   hacker,
   expandVictims,
   minEdgeSats,
+  maxVictimNodes,
+  maxDownstreamNodes,
   victimSearch,
   onNodeClick,
   onCollapseVictims,
@@ -141,6 +161,8 @@ export function HackGraph({
   hacker: string;
   expandVictims: boolean;
   minEdgeSats: number;
+  maxVictimNodes: number;
+  maxDownstreamNodes: number;
   victimSearch: string | null;
   onNodeClick: (address: string) => void;
   onCollapseVictims?: () => void;
@@ -157,10 +179,12 @@ export function HackGraph({
     rfNodes: Node[];
     rfEdges: Edge[];
     mode: GraphMode;
+    apiEdges: ApiGraphEdge[];
   } | null>(null);
   const victimSortRef = useRef<VictimSortOption>("btc-desc");
   const [fitViewTrigger, setFitViewTrigger] = useState(0);
   const [victimSort, setVictimSort] = useState<VictimSortOption>("btc-desc");
+  const [showEdgeLabels, setShowEdgeLabels] = useState(false);
   const [queued, setQueued] = useState<QueuedJob[]>([]);
   const [countdownTick, setCountdownTick] = useState(0);
 
@@ -175,7 +199,7 @@ export function HackGraph({
     setVictimSort("btc-desc");
     victimSortRef.current = "btc-desc";
     pendingFitRef.current = true;
-  }, [hacker, victimSearch, minEdgeSats, expandVictims]);
+  }, [hacker, victimSearch, minEdgeSats, expandVictims, maxVictimNodes, maxDownstreamNodes]);
 
   useEffect(() => {
     if (expandVictims && !prevExpandRef.current) {
@@ -245,7 +269,12 @@ export function HackGraph({
       setNodes([]);
       setEdges([]);
 
-      const params = new URLSearchParams({ depth: "2", min_edge_sats: String(minEdgeSats) });
+      const params = new URLSearchParams({
+        depth: "2",
+        min_edge_sats: String(minEdgeSats),
+        max_victims: String(maxVictimNodes),
+        max_downstream: String(maxDownstreamNodes),
+      });
 
       if (victimSearch) {
         params.set("victim", victimSearch);
@@ -307,16 +336,9 @@ export function HackGraph({
         position: positionsRef.current[n.id] ?? { x: 0, y: 0 },
       }));
 
-      const rfEdges: Edge[] = graph.edges.map((e) => ({
-        id: e.id,
-        source: e.source,
-        target: e.target,
-        ...edgeDefaults,
-        label: e.txid ? `${satsToBtc(e.amount)} BTC` : e.amount > 0 ? `${satsToBtc(e.amount)} BTC` : undefined,
-        data: { txid: e.txid, time: e.time },
-      }));
+      const rfEdges = mapApiEdges(graph.edges, showEdgeLabels);
 
-      graphDataRef.current = { rfNodes, rfEdges, mode };
+      graphDataRef.current = { rfNodes, rfEdges, mode, apiEdges: graph.edges };
       applyLayout(rfNodes, rfEdges, mode, victimSortRef.current);
 
       if (pendingFitRef.current) {
@@ -324,8 +346,16 @@ export function HackGraph({
         setFitViewTrigger((t) => t + 1);
       }
     },
-    [hacker, expandVictims, minEdgeSats, victimSearch, expandAddress, onHackerChange, setNodes, setEdges, applyLayout],
+    [hacker, expandVictims, minEdgeSats, maxVictimNodes, maxDownstreamNodes, showEdgeLabels, victimSearch, expandAddress, onHackerChange, setNodes, setEdges, applyLayout],
   );
+
+  useEffect(() => {
+    const cached = graphDataRef.current;
+    if (!cached?.apiEdges) return;
+    const rfEdges = mapApiEdges(cached.apiEdges, showEdgeLabels);
+    graphDataRef.current = { ...cached, rfEdges };
+    setEdges(rfEdges);
+  }, [showEdgeLabels, setEdges]);
 
   useEffect(() => {
     if (!expandVictims || victimSearch || !graphDataRef.current) return;
@@ -472,9 +502,19 @@ export function HackGraph({
           <Background color="#222" gap={20} />
           <Panel position="top-left">
             <div className="graph-panel-controls">
-              <button type="button" onClick={resetLayout}>
-                Reset layout
-              </button>
+              <div className="graph-panel-controls-stack">
+                <button type="button" onClick={resetLayout}>
+                  Reset layout
+                </button>
+                <label className="graph-panel-switch">
+                  <input
+                    type="checkbox"
+                    checked={showEdgeLabels}
+                    onChange={(e) => setShowEdgeLabels(e.target.checked)}
+                  />
+                  Show line labels
+                </label>
+              </div>
               <label>
                 Sort by{" "}
                 <select

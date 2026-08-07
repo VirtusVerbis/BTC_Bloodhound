@@ -1,17 +1,13 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AboutPage } from "./components/AboutPage";
 import { HackGraph } from "./components/HackGraph";
 import { AddressDetailDrawer } from "./components/AddressDetailDrawer";
 import { MonitoringIndicator, type MonitoringSyncStatus } from "./components/MonitoringIndicator";
-import { api, btcToSats, satsToBtc, satsToBtcNumber } from "./lib/api";
+import { BtcUsdProvider } from "./context/BtcUsdContext";
+import { api, btcToSats, formatUsd, satsToBtc, satsToBtcNumber, satsToUsd } from "./lib/api";
+import { groupHackersBySource, type Hacker } from "./lib/hackerGroups";
 
 type AppTab = "tracker" | "about";
-
-interface Hacker {
-  address: string;
-  label: string | null;
-  totalReceivedSats: number;
-}
 
 interface Stats {
   victimCount: number;
@@ -19,6 +15,8 @@ interface Stats {
   totalInSats: number;
   totalOutSats: number;
   lastJobAt: string | null;
+  btcUsdPrice: number | null;
+  btcUsdPriceAt: string | null;
 }
 
 interface SyncStatus extends MonitoringSyncStatus {
@@ -47,19 +45,30 @@ export default function App() {
   const [drawerAddr, setDrawerAddr] = useState<string | null>(null);
   const [expandVictims, setExpandVictims] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const [defaultMinEdgeSats, setDefaultMinEdgeSats] = useState(1000);
   const [minEdgeSats, setMinEdgeSats] = useState(1000);
   const [minAmountUnit, setMinAmountUnit] = useState<"sats" | "btc">("sats");
+  const [maxVictimNodes, setMaxVictimNodes] = useState(100);
+  const [maxDownstreamNodes, setMaxDownstreamNodes] = useState(100);
   const [victimSearchInput, setVictimSearchInput] = useState("");
   const [activeVictimSearch, setActiveVictimSearch] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<AppTab>("tracker");
+  const prevApiThresholdRef = useRef(false);
 
   const loadHackers = useCallback(async (q?: string) => {
     const params = q ? `?q=${encodeURIComponent(q)}` : "";
     const res = await api<{ hackers: Hacker[] }>(`/api/hackers${params}`);
     setHackers(res.hackers);
-    if (!selected && res.hackers[0]) setSelected(res.hackers[0].address);
+    const visible = groupHackersBySource(res.hackers).flatMap((g) => g.items);
+    if (!selected || !visible.some((h) => h.address === selected)) {
+      setSelected(visible[0]?.address ?? "");
+    }
   }, [selected]);
+
+  const hackerGroups = useMemo(() => groupHackersBySource(hackers), [hackers]);
+  const sortedHackers = useMemo(
+    () => hackerGroups.flatMap((g) => g.items),
+    [hackerGroups],
+  );
 
   useEffect(() => {
     loadHackers(filter).catch(console.error);
@@ -67,17 +76,26 @@ export default function App() {
 
   useEffect(() => {
     api<AppConfig>("/api/config")
-      .then((cfg) => {
-        setDefaultMinEdgeSats(cfg.minEdgeSats);
-        setMinEdgeSats(cfg.minEdgeSats);
-      })
+      .then((cfg) => setMinEdgeSats(cfg.minEdgeSats))
       .catch(console.error);
   }, []);
 
   useEffect(() => {
     const load = () => {
       api<Stats>("/api/stats").then(setStats).catch(console.error);
-      api<SyncStatus>("/api/sync/status").then(setSync).catch(console.error);
+      api<SyncStatus>("/api/sync/status")
+        .then((status) => {
+          if (status.apiThresholdExceeded && !prevApiThresholdRef.current) {
+            window.dispatchEvent(
+              new CustomEvent("cointrace-toast", {
+                detail: "API rate limit hit — indexing slowed",
+              }),
+            );
+          }
+          prevApiThresholdRef.current = status.apiThresholdExceeded === true;
+          setSync(status);
+        })
+        .catch(console.error);
     };
     load();
     const iv = setInterval(load, 15000);
@@ -102,25 +120,25 @@ export default function App() {
   }, [toast]);
 
   useEffect(() => {
-    if (activeTab !== "tracker" || hackers.length === 0) return;
+    if (activeTab !== "tracker" || sortedHackers.length === 0) return;
 
     const onKey = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target)) return;
       if (e.key !== "PageUp" && e.key !== "PageDown") return;
 
       e.preventDefault();
-      const idx = hackers.findIndex((h) => h.address === selected);
+      const idx = sortedHackers.findIndex((h) => h.address === selected);
       const current = idx >= 0 ? idx : 0;
       const next =
         e.key === "PageDown"
-          ? Math.min(current + 1, hackers.length - 1)
+          ? Math.min(current + 1, sortedHackers.length - 1)
           : Math.max(current - 1, 0);
-      if (next !== current) setSelected(hackers[next].address);
+      if (next !== current) setSelected(sortedHackers[next].address);
     };
 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [activeTab, hackers, selected]);
+  }, [activeTab, sortedHackers, selected]);
 
   const findVictim = () => {
     const addr = victimSearchInput.trim().toLowerCase();
@@ -143,6 +161,7 @@ export default function App() {
   };
 
   return (
+    <BtcUsdProvider price={stats?.btcUsdPrice ?? null}>
     <div>
       <header className="app-header">
         <MonitoringIndicator sync={sync} onNavigateMonitoring={navigateToMonitoring} />
@@ -172,7 +191,15 @@ export default function App() {
             <>
               <span>{stats.victimCount} victims indexed</span>
               <span className="stats-hacker-count">{stats.hackerCount} hacker addresses</span>
-              <span className="stats-hack-btc">{satsToBtc(stats.totalInSats)} BTC received (hack)</span>
+              <span className="stats-hack-btc">
+                {satsToBtc(stats.totalInSats)} BTC received (hack)
+                {stats.btcUsdPrice != null && (
+                  <span className="usd-value">
+                    {" "}
+                    {formatUsd(satsToUsd(stats.totalInSats, stats.btcUsdPrice))}
+                  </span>
+                )}
+              </span>
             </>
           )}
           {sync && (
@@ -208,10 +235,14 @@ export default function App() {
           <label>
             Hacker address{" "}
             <select value={selected} onChange={(e) => setSelected(e.target.value)}>
-              {hackers.map((h) => (
-                <option key={h.address} value={h.address}>
-                  {(h.label ?? h.address.slice(0, 12)) + "…"} ({satsToBtc(h.totalReceivedSats)} BTC)
-                </option>
+              {hackerGroups.map((group) => (
+                <optgroup key={group.source} label={group.label}>
+                  {group.items.map((h) => (
+                    <option key={h.address} value={h.address}>
+                      {(h.label ?? h.address.slice(0, 12)) + "…"} ({satsToBtc(h.totalReceivedSats)} BTC)
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           </label>
@@ -243,9 +274,26 @@ export default function App() {
               <option value="btc">BTC</option>
             </select>
           </label>
-          <span className="controls-hint">
-            Default: {defaultMinEdgeSats.toLocaleString()} sats ({satsToBtc(defaultMinEdgeSats)} BTC)
-          </span>
+          <label>
+            Max victim nodes{" "}
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={maxVictimNodes}
+              onChange={(e) => setMaxVictimNodes(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+            />
+          </label>
+          <label>
+            Max downstream nodes{" "}
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={maxDownstreamNodes}
+              onChange={(e) => setMaxDownstreamNodes(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+            />
+          </label>
         </div>
 
         <div className="controls-row">
@@ -272,6 +320,8 @@ export default function App() {
             hacker={selected}
             expandVictims={expandVictims}
             minEdgeSats={minEdgeSats}
+            maxVictimNodes={maxVictimNodes}
+            maxDownstreamNodes={maxDownstreamNodes}
             victimSearch={activeVictimSearch}
             onNodeClick={setDrawerAddr}
             onCollapseVictims={() => setExpandVictims(false)}
@@ -287,5 +337,6 @@ export default function App() {
       {drawerAddr && <AddressDetailDrawer address={drawerAddr} onClose={() => setDrawerAddr(null)} />}
       {toast && <div className="toast">{toast}</div>}
     </div>
+    </BtcUsdProvider>
   );
 }

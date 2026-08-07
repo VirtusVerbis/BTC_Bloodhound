@@ -2,17 +2,56 @@ import type { ChainAddressStats, ChainProvider, ChainTxDetail, ChainTxSummary } 
 
 type TxPage = Array<{ txid: string; status?: { block_height?: number; block_time?: number }; fee?: number }>;
 
+export function isRateLimitError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return msg.includes("429") || msg.includes("too many requests");
+}
+
+async function fetchJsonWithRetry<T>(
+  base: string,
+  providerName: string,
+  path: string,
+  maxRetries = 3,
+): Promise<T> {
+  let lastErr: Error | undefined;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await fetch(`${base}${path}`, {
+        headers: { Accept: "application/json", "User-Agent": "cointrace-indexer/1.0" },
+      });
+      if (res.status === 429) {
+        const retryAfter = res.headers.get("Retry-After");
+        const waitMs = retryAfter
+          ? Math.max(1000, Number(retryAfter) * 1000)
+          : Math.min(30000, 1000 * 2 ** attempt);
+        if (attempt < maxRetries) {
+          await new Promise((r) => setTimeout(r, waitMs));
+          continue;
+        }
+        throw new Error(`${providerName} ${path}: 429 Too Many Requests`);
+      }
+      if (!res.ok) throw new Error(`${providerName} ${path}: ${res.status}`);
+      return res.json() as Promise<T>;
+    } catch (err) {
+      lastErr = err instanceof Error ? err : new Error(String(err));
+      if (attempt < maxRetries && isRateLimitError(lastErr)) {
+        await new Promise((r) => setTimeout(r, Math.min(30000, 1000 * 2 ** attempt)));
+        continue;
+      }
+      throw lastErr;
+    }
+  }
+  throw lastErr ?? new Error(`${providerName} ${path}: fetch failed`);
+}
+
 export class EsploraProvider implements ChainProvider {
   name = "esplora";
 
   constructor(private base: string) {}
 
-  private async fetchJson<T>(path: string): Promise<T> {
-    const res = await fetch(`${this.base}${path}`, {
-      headers: { Accept: "application/json", "User-Agent": "cointrace-indexer/1.0" },
-    });
-    if (!res.ok) throw new Error(`Esplora ${path}: ${res.status}`);
-    return res.json() as Promise<T>;
+  private fetchJson<T>(path: string): Promise<T> {
+    return fetchJsonWithRetry<T>(this.base, "Esplora", path);
   }
 
   async getAddressTxs(address: string, lastSeenTxid?: string): Promise<ChainTxSummary[]> {
@@ -40,12 +79,8 @@ export class MempoolProvider implements ChainProvider {
 
   constructor(private base: string) {}
 
-  private async fetchJson<T>(path: string): Promise<T> {
-    const res = await fetch(`${this.base}${path}`, {
-      headers: { Accept: "application/json", "User-Agent": "cointrace-indexer/1.0" },
-    });
-    if (!res.ok) throw new Error(`Mempool ${path}: ${res.status}`);
-    return res.json() as Promise<T>;
+  private fetchJson<T>(path: string): Promise<T> {
+    return fetchJsonWithRetry<T>(this.base, "Mempool", path);
   }
 
   async getAddressTxs(address: string, lastSeenTxid?: string): Promise<ChainTxSummary[]> {
@@ -73,20 +108,37 @@ export function blockTimeIso(tx: ChainTxSummary | ChainTxDetail): string | null 
   return t ? new Date(t * 1000).toISOString() : null;
 }
 
+export interface AddressTxPageFetcher {
+  fetchFirstPage(address: string): Promise<ChainTxSummary[]>;
+  fetchChainPage(address: string, lastTxid: string): Promise<ChainTxSummary[]>;
+}
+
+function asPageFetcher(source: AddressTxPageFetcher | ChainProvider): AddressTxPageFetcher {
+  if ("fetchFirstPage" in source) return source;
+  return {
+    fetchFirstPage: (address) => source.getAddressTxs(address),
+    fetchChainPage: (address, lastTxid) => source.getAddressTxsChainPage(address, lastTxid),
+  };
+}
+
 export async function getAddressTxsAll(
-  provider: ChainProvider,
+  source: AddressTxPageFetcher | ChainProvider,
   address: string,
   opts?: { maxTxs?: number },
 ): Promise<ChainTxSummary[]> {
-  const maxTxs = opts?.maxTxs ?? 1000;
+  const maxTxs = opts?.maxTxs ?? 10000;
+  const fetcher = asPageFetcher(source);
   const all: ChainTxSummary[] = [];
-  let page = await provider.getAddressTxs(address);
 
-  while (page.length > 0) {
-    all.push(...page);
-    if (all.length >= maxTxs || page.length < 25) break;
+  let page = await fetcher.fetchFirstPage(address);
+  if (page.length === 0) return [];
+
+  all.push(...page);
+  while (all.length < maxTxs) {
     const lastTxid = page[page.length - 1]!.txid;
-    page = await provider.getAddressTxsChainPage(address, lastTxid);
+    page = await fetcher.fetchChainPage(address, lastTxid);
+    if (page.length === 0) break;
+    all.push(...page);
   }
 
   return all.slice(0, maxTxs);

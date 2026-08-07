@@ -2,11 +2,18 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { Store } from "@cointrace/db";
 import type { AppConfig } from "@cointrace/core";
-import { buildGraph, buildVictimGraph, computeJobEta, JOB_PRIORITY } from "@cointrace/core";
+import { buildGraph, buildVictimGraph, computeJobEta, isRebuildActive, JOB_PRIORITY } from "@cointrace/core";
 
 function parseMinEdgeSats(raw: string | undefined, fallback: number) {
   if (raw != null && Number.isFinite(Number(raw)) && Number(raw) >= 0) {
     return Number(raw);
+  }
+  return fallback;
+}
+
+function parsePositiveInt(raw: string | undefined, fallback: number) {
+  if (raw != null && Number.isFinite(Number(raw)) && Number(raw) >= 1) {
+    return Math.floor(Number(raw));
   }
   return fallback;
 }
@@ -22,11 +29,12 @@ export function createApp(store: Store, config: AppConfig) {
 
   app.get("/api/hackers", (c) => {
     const q = c.req.query("q");
-    const hackers = store.listHackers(q);
+    const hackers = store.listHackers(q, true);
     return c.json({
       hackers: hackers.map((h) => ({
         address: h.address,
         label: h.label,
+        source: h.source,
         totalReceivedSats: h.totalReceivedSats,
         liveBalanceSats: h.liveBalanceSats,
         liveBalanceAt: h.liveBalanceAt,
@@ -44,7 +52,8 @@ export function createApp(store: Store, config: AppConfig) {
     const graphOpts = {
       depth,
       expandVictims,
-      maxOutputs: config.maxGraphOutputs,
+      maxVictims: parsePositiveInt(c.req.query("max_victims"), 100),
+      maxOutputs: parsePositiveInt(c.req.query("max_downstream"), 100),
       minEdgeSats,
     };
 
@@ -77,12 +86,14 @@ export function createApp(store: Store, config: AppConfig) {
     const scheduler = store.getSchedulerState();
     const crawl = store.getCrawlStats();
     const monitor = store.getDownstreamMonitorStats(config.maxCrawlDepth, config.downstreamPollIntervalSec);
-    const monitoring = store.getMonitoringStatus(config.monitoringStaleSec);
+    const monitoring = store.getMonitoringStatus(config.monitoringStaleSec, config.apiThresholdCooldownSec);
     return c.json({
       queueDepth: store.getQueueDepth(),
       nextApiCallAt: scheduler?.nextProviderCallAt ?? null,
       rateLimitMs: scheduler?.rateLimitMs ?? config.rateLimitMs,
       lastProviderUsed: scheduler?.lastProviderUsed ?? null,
+      rebuildActive: isRebuildActive(store, config),
+      pendingProcessTx: store.countActiveJobs("process_tx"),
       ...crawl,
       ...monitor,
       ...monitoring,

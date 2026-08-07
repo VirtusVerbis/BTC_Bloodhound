@@ -53,12 +53,14 @@ export function buildGraph(
     depth?: number;
     expandVictims?: boolean;
     maxOutputs?: number;
+    maxVictims?: number;
     minEdgeSats?: number;
     victimFilter?: string;
   },
 ): GraphResult {
   const depth = options.depth ?? 1;
-  const maxOutputs = options.maxOutputs ?? 20;
+  const maxOutputs = options.maxOutputs ?? 100;
+  const maxVictims = options.maxVictims ?? 100;
   const minEdgeSats = options.minEdgeSats ?? 1000;
   const victimFilter = options.victimFilter?.trim().toLowerCase();
   const nodes: GraphNode[] = [];
@@ -89,7 +91,7 @@ export function buildGraph(
 
   if (victimFilter) {
     const victimEdges = store
-      .listVictimsForHacker(hacker, 100)
+      .listVictimsForHacker(hacker, maxVictims)
       .filter((v) => v.address.toLowerCase() === victimFilter && v.amountSats >= minEdgeSats);
     if (victimEdges.length > 0) {
       const totalIncoming = victimEdges.reduce((s, v) => s + v.amountSats, 0);
@@ -133,7 +135,7 @@ export function buildGraph(
     });
   } else {
     const victimNodes = new Map<string, GraphNode>();
-    for (const v of store.listVictimsForHacker(hacker, 100)) {
+    for (const v of store.listVictimsForHacker(hacker, maxVictims)) {
       if (v.amountSats < minEdgeSats) continue;
       const id = v.address;
       let node = victimNodes.get(id);
@@ -295,6 +297,130 @@ export function buildVictimGraph(
   };
 }
 
+export interface HackTraceEdgeDraft {
+  fromAddress: string;
+  toAddress: string;
+  amountSats: number;
+  hopFromHacker: number;
+  direction: "in_to_hacker" | "out_from_hacker";
+}
+
+export interface HackTraceEdges {
+  inToHacker: HackTraceEdgeDraft[];
+  outFromHacker: HackTraceEdgeDraft[];
+  victimAddresses: string[];
+}
+
+function aggregateInputsByAddress(tx: ChainTxDetail, hackerAddresses: Set<string>): Map<string, number> {
+  const byAddress = new Map<string, number>();
+  for (const i of tx.vin) {
+    if (i.is_coinbase) continue;
+    const addr = i.prevout?.scriptpubkey_address;
+    const value = i.prevout?.value;
+    if (!addr || value == null || value <= 0) continue;
+    if (hackerAddresses.has(addr)) continue;
+    byAddress.set(addr, (byAddress.get(addr) ?? 0) + value);
+  }
+  return byAddress;
+}
+
+function aggregateHackerOutputs(tx: ChainTxDetail, hackerAddresses: Set<string>): Map<string, number> {
+  const byAddress = new Map<string, number>();
+  for (const o of tx.vout) {
+    const addr = o.scriptpubkey_address;
+    const value = o.value ?? 0;
+    if (!addr || value <= 0) continue;
+    if (!hackerAddresses.has(addr)) continue;
+    byAddress.set(addr, (byAddress.get(addr) ?? 0) + value);
+  }
+  return byAddress;
+}
+
+function splitProportionally(total: number, weights: number[]): number[] {
+  if (weights.length === 0) return [];
+  const weightSum = weights.reduce((sum, w) => sum + w, 0);
+  if (weightSum <= 0 || total <= 0) return weights.map(() => 0);
+
+  const amounts = weights.map((w) => Math.floor((total * w) / weightSum));
+  let remainder = total - amounts.reduce((sum, n) => sum + n, 0);
+  const ranked = weights
+    .map((w, index) => ({
+      index,
+      fraction: (total * w) / weightSum - amounts[index]!,
+    }))
+    .sort((a, b) => b.fraction - a.fraction);
+  for (let i = 0; i < remainder; i++) {
+    amounts[ranked[i % ranked.length]!.index]! += 1;
+  }
+  return amounts;
+}
+
+export function computeHackTraceEdges(
+  tx: ChainTxDetail,
+  hackerAddresses: Set<string>,
+  options?: HackTraceOptions,
+): HackTraceEdges {
+  const victimInputs = aggregateInputsByAddress(tx, hackerAddresses);
+  const hackerOutputs = aggregateHackerOutputs(tx, hackerAddresses);
+  const inToHacker: HackTraceEdgeDraft[] = [];
+  const outFromHacker: HackTraceEdgeDraft[] = [];
+
+  const hackerOutEntries = [...hackerOutputs.entries()].filter(([, amount]) => amount > 0);
+  const hackerOutAmounts = hackerOutEntries.map(([, amount]) => amount);
+  const totalHackerOut = hackerOutAmounts.reduce((sum, n) => sum + n, 0);
+
+  for (const [victim, inputValue] of victimInputs) {
+    if (inputValue <= 0 || hackerOutEntries.length === 0) continue;
+    const splitAmounts =
+      hackerOutEntries.length === 1
+        ? [inputValue]
+        : splitProportionally(inputValue, hackerOutAmounts);
+    for (let i = 0; i < hackerOutEntries.length; i++) {
+      const amountSats = splitAmounts[i] ?? 0;
+      if (amountSats <= 0) continue;
+      inToHacker.push({
+        fromAddress: victim,
+        toAddress: hackerOutEntries[i]![0],
+        amountSats,
+        hopFromHacker: 0,
+        direction: "in_to_hacker",
+      });
+    }
+  }
+
+  const inputAddresses: string[] = [];
+  for (const i of tx.vin) {
+    const addr = i.prevout?.scriptpubkey_address;
+    if (addr) inputAddresses.push(addr);
+  }
+
+  const outputAddresses = new Map<string, number>();
+  for (const o of tx.vout) {
+    const addr = o.scriptpubkey_address;
+    if (addr) outputAddresses.set(addr, (outputAddresses.get(addr) ?? 0) + (o.value ?? 0));
+  }
+
+  const spenders = collectSpenders(inputAddresses, hackerAddresses, options);
+  for (const { address: inAddr, hop } of spenders) {
+    for (const [outAddr, amount] of outputAddresses) {
+      if (outAddr === inAddr || amount <= 0) continue;
+      outFromHacker.push({
+        fromAddress: inAddr,
+        toAddress: outAddr,
+        amountSats: amount,
+        hopFromHacker: hop + 1,
+        direction: "out_from_hacker",
+      });
+    }
+  }
+
+  return {
+    inToHacker,
+    outFromHacker,
+    victimAddresses: [...victimInputs.keys()],
+  };
+}
+
 export function collectSpenders(
   inputAddresses: string[],
   hackerAddresses: Set<string>,
@@ -336,57 +462,41 @@ export async function processTxForHackTrace(
     feeSats: tx.fee ?? null,
   });
 
-  const outputAddresses = new Map<string, number>();
-  for (const o of tx.vout) {
-    const addr = o.scriptpubkey_address;
-    if (addr) outputAddresses.set(addr, (outputAddresses.get(addr) ?? 0) + (o.value ?? 0));
+  const { inToHacker, outFromHacker, victimAddresses } = computeHackTraceEdges(tx, hackerAddresses, options);
+
+  for (const victim of victimAddresses) {
+    store.upsertAddress({ address: victim, role: "victim", source: "derived" });
   }
 
-  const inputAddresses: string[] = [];
-  for (const i of tx.vin) {
-    const addr = i.prevout?.scriptpubkey_address;
-    if (addr) inputAddresses.push(addr);
+  for (const edge of inToHacker) {
+    store.upsertEdge({
+      fromAddress: edge.fromAddress,
+      toAddress: edge.toAddress,
+      txid,
+      amountSats: edge.amountSats,
+      blockTime,
+      hopFromHacker: edge.hopFromHacker,
+      direction: edge.direction,
+    });
   }
 
-  for (const [outAddr, amount] of outputAddresses) {
-    if (hackerAddresses.has(outAddr)) {
-      for (const inAddr of inputAddresses) {
-        if (inAddr === outAddr) continue;
-        store.upsertAddress({ address: inAddr, role: "victim", source: "derived" });
-        store.upsertEdge({
-          fromAddress: inAddr,
-          toAddress: outAddr,
-          txid,
-          amountSats: amount,
-          blockTime,
-          hopFromHacker: 0,
-          direction: "in_to_hacker",
-        });
-      }
-    }
-  }
-
-  const spenders = collectSpenders(inputAddresses, hackerAddresses, options);
-  for (const { address: inAddr, hop } of spenders) {
-    for (const [outAddr, amount] of outputAddresses) {
-      if (outAddr === inAddr) continue;
-      store.upsertAddress({
-        address: outAddr,
-        role: "downstream",
-        source: "derived",
-        hopFromHacker: hop + 1,
-        expandStatus: "pending",
-      });
-      store.upsertEdge({
-        fromAddress: inAddr,
-        toAddress: outAddr,
-        txid,
-        amountSats: amount,
-        blockTime,
-        hopFromHacker: hop + 1,
-        direction: "out_from_hacker",
-      });
-    }
+  for (const edge of outFromHacker) {
+    store.upsertAddress({
+      address: edge.toAddress,
+      role: "downstream",
+      source: "derived",
+      hopFromHacker: edge.hopFromHacker,
+      expandStatus: "pending",
+    });
+    store.upsertEdge({
+      fromAddress: edge.fromAddress,
+      toAddress: edge.toAddress,
+      txid,
+      amountSats: edge.amountSats,
+      blockTime,
+      hopFromHacker: edge.hopFromHacker,
+      direction: edge.direction,
+    });
   }
 }
 

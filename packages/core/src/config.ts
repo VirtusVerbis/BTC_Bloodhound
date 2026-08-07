@@ -1,8 +1,10 @@
 export const JOB_PRIORITY = {
+  PROCESS_TX_REBUILD: 11,
   POLL_HACKER: 10,
   SYNC_COLDCARDWATCH: 9,
   SYNC_VERCEL_TRACKERS: 9,
   REFRESH_BALANCE: 8,
+  REFRESH_BTC_USD: 8,
   POLL_DOWNSTREAM: 7,
   USER_EXPAND: 6,
   PROCESS_TX: 4,
@@ -13,11 +15,13 @@ export const JOB_PRIORITY = {
 export type JobType =
   | "seed_public_hackers"
   | "backfill_hacker_address"
+  | "audit_hacker_backfill"
   | "process_tx"
   | "poll_hacker_address"
   | "poll_downstream_address"
   | "expand_downstream"
   | "refresh_live_balance"
+  | "refresh_btc_usd_price"
   | "sync_coldcardwatch"
   | "sync_vercel_trackers";
 
@@ -36,15 +40,24 @@ export interface AppConfig {
   maxGraphOutputs: number;
   minEdgeSats: number;
   balanceRefreshIntervalSec: number;
+  btcUsdPriceRefreshIntervalSec: number;
   coldcardwatchSyncIntervalSec: number;
   coldcardwatchBase: string;
   vercelTrackersSyncIntervalSec: number;
   coldcardSweepWatchBase: string;
   coldcardHackTrackerBase: string;
   monitoringStaleSec: number;
+  apiThresholdCooldownSec: number;
+  backfillTxsPerJob: number;
+  backfillMaxTxs: number;
+  backfillHealAuditIntervalSec: number;
+  backfillHealAuditPerCron: number;
+  backfillHealTxSlack: number;
   adminToken: string;
   seedFilePath: string;
   localWatchlistPath: string;
+  indexerRebuildMode: boolean;
+  processTxRebuildPriority: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -63,6 +76,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     maxGraphOutputs: Number(env.MAX_GRAPH_OUTPUTS ?? 20),
     minEdgeSats: Number(env.MIN_EDGE_SATS ?? 1000),
     balanceRefreshIntervalSec: Number(env.BALANCE_REFRESH_INTERVAL_SEC ?? 300),
+    btcUsdPriceRefreshIntervalSec: Number(env.BTC_USD_PRICE_REFRESH_INTERVAL_SEC ?? 60),
     coldcardwatchSyncIntervalSec: Number(env.COLDCARDWATCH_SYNC_INTERVAL_SEC ?? 3600),
     coldcardwatchBase: (env.COLDCARDWATCH_BASE ?? "https://coldcardwatch.com").replace(/\/$/, ""),
     vercelTrackersSyncIntervalSec: Number(env.VERCEL_TRACKERS_SYNC_INTERVAL_SEC ?? 3600),
@@ -74,8 +88,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       env.COLDCARD_HACK_TRACKER_BASE ?? "https://coldcard-hack-tracker.vercel.app"
     ).replace(/\/$/, ""),
     monitoringStaleSec: Number(env.MONITORING_STALE_SEC ?? 600),
+    apiThresholdCooldownSec: Number(env.API_THRESHOLD_COOLDOWN_SEC ?? 300),
+    backfillTxsPerJob: Number(env.BACKFILL_TXS_PER_JOB ?? 5),
+    backfillMaxTxs: Number(env.BACKFILL_MAX_TXS ?? 10000),
+    backfillHealAuditIntervalSec: Number(env.BACKFILL_HEAL_AUDIT_INTERVAL_SEC ?? 86400),
+    backfillHealAuditPerCron: Number(env.BACKFILL_HEAL_AUDIT_PER_CRON ?? 1),
+    backfillHealTxSlack: Number(env.BACKFILL_HEAL_TX_SLACK ?? 5),
     adminToken: env.ADMIN_TOKEN ?? "change-me",
     seedFilePath: env.SEED_FILE ?? "./config/watchlist.seed.json",
     localWatchlistPath: env.LOCAL_WATCHLIST ?? "./config/watchlist.local.json",
+    indexerRebuildMode: env.INDEXER_REBUILD_MODE === "1",
+    processTxRebuildPriority: Number(env.PROCESS_TX_REBUILD_PRIORITY ?? JOB_PRIORITY.PROCESS_TX_REBUILD),
   };
 }
