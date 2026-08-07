@@ -2,7 +2,6 @@ import { and, asc, desc, eq, gt, gte, isNotNull, like, lte, ne, or, sql } from "
 import type { Db } from "./index.js";
 import {
   addresses,
-  addressSubmissions,
   edges,
   jobs,
   schedulerState,
@@ -536,14 +535,6 @@ export class Store {
       .set({ expandStatus: status, lastExpandedAt: now() })
       .where(eq(addresses.address, address))
       .run();
-  }
-
-  createSubmission(data: { address: string; submittedBy?: string; reason?: string }) {
-    const result = this.db
-      .insert(addressSubmissions)
-      .values({ ...data, createdAt: now(), status: "pending" })
-      .run();
-    return Number(result.lastInsertRowid);
   }
 
   getStats() {

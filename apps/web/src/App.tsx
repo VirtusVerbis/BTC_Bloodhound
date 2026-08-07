@@ -38,8 +38,6 @@ export default function App() {
   const [drawerAddr, setDrawerAddr] = useState<string | null>(null);
   const [expandVictims, setExpandVictims] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const [submitAddr, setSubmitAddr] = useState("");
-  const [submitReason, setSubmitReason] = useState("");
   const [defaultMinEdgeSats, setDefaultMinEdgeSats] = useState(1000);
   const [minEdgeSats, setMinEdgeSats] = useState(1000);
   const [minAmountUnit, setMinAmountUnit] = useState<"sats" | "btc">("sats");
@@ -93,18 +91,6 @@ export default function App() {
     const t = setTimeout(() => setToast(null), 2000);
     return () => clearTimeout(t);
   }, [toast]);
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await api("/api/submissions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ address: submitAddr, reason: submitReason }),
-    });
-    setSubmitAddr("");
-    setSubmitReason("");
-    setToast("Submitted for review");
-  };
 
   const findVictim = () => {
     const addr = victimSearchInput.trim().toLowerCase();
@@ -237,24 +223,6 @@ export default function App() {
           />
         </div>
       )}
-
-      <section className="submission-panel">
-        <h3>Submit address for review</h3>
-        <form onSubmit={submit}>
-          <input
-            required
-            placeholder="bc1q…"
-            value={submitAddr}
-            onChange={(e) => setSubmitAddr(e.target.value)}
-          />
-          <input
-            placeholder="Reason (optional)"
-            value={submitReason}
-            onChange={(e) => setSubmitReason(e.target.value)}
-          />
-          <button type="submit">Submit</button>
-        </form>
-      </section>
         </>
       ) : (
         <AboutPage />

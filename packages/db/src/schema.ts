@@ -55,15 +55,6 @@ export const jobs = sqliteTable("jobs", {
   createdAt: text("created_at").notNull(),
 });
 
-export const addressSubmissions = sqliteTable("address_submissions", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  address: text("address").notNull(),
-  submittedBy: text("submitted_by"),
-  reason: text("reason"),
-  status: text("status").notNull().default("pending"),
-  createdAt: text("created_at").notNull(),
-});
-
 export const sourceSyncState = sqliteTable("source_sync_state", {
   source: text("source").primaryKey(),
   lastSyncAt: text("last_sync_at"),

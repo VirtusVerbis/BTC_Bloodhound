@@ -3,6 +3,7 @@ import {
   Background,
   Controls,
   MiniMap,
+  Panel,
   ReactFlow,
   type Edge,
   type Node,
@@ -146,11 +147,18 @@ export function HackGraph({
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const positionsRef = useRef<Record<string, { x: number; y: number }>>({});
+  const loadGenerationRef = useRef(0);
   const prevExpandRef = useRef(expandVictims);
   const pendingFitRef = useRef(false);
   const [fitViewTrigger, setFitViewTrigger] = useState(0);
   const [queued, setQueued] = useState<QueuedJob[]>([]);
   const [countdownTick, setCountdownTick] = useState(0);
+
+  useEffect(() => {
+    positionsRef.current = {};
+    setQueued([]);
+    pendingFitRef.current = true;
+  }, [hacker, victimSearch, minEdgeSats, expandVictims]);
 
   useEffect(() => {
     if (expandVictims && !prevExpandRef.current) {
@@ -176,6 +184,10 @@ export function HackGraph({
 
   const loadGraph = useCallback(
     async (opts?: { expandVictims?: boolean }) => {
+      const generation = ++loadGenerationRef.current;
+      setNodes([]);
+      setEdges([]);
+
       const params = new URLSearchParams({ depth: "2", min_edge_sats: String(minEdgeSats) });
 
       if (victimSearch) {
@@ -197,6 +209,8 @@ export function HackGraph({
         }
         throw e;
       }
+
+      if (generation !== loadGenerationRef.current) return;
 
       const mode = graph.mode ?? (victimSearch ? "victim-filtered" : "hacker");
       if (mode === "victim-filtered" && graph.matchedHackers?.[0]) {
@@ -343,12 +357,7 @@ export function HackGraph({
 
   return (
     <div className="graph-canvas">
-      <div style={{ padding: "0.5rem", display: "flex", gap: "0.5rem" }}>
-        <button type="button" onClick={resetLayout}>
-          Reset layout
-        </button>
-      </div>
-      <div style={{ width: "100%", height: "calc(100% - 44px)" }}>
+      <div style={{ width: "100%", height: "100%" }}>
         <ReactFlow
           nodes={[...nodes, ...queuedNodes]}
           edges={[...edges, ...queuedEdges]}
@@ -370,6 +379,11 @@ export function HackGraph({
           style={{ background: "#000" }}
         >
           <Background color="#222" gap={20} />
+          <Panel position="top-left">
+            <button type="button" onClick={resetLayout}>
+              Reset layout
+            </button>
+          </Panel>
           <FitViewAfterLayout trigger={fitViewTrigger} />
           <GraphKeyboardShortcuts />
           <Controls />

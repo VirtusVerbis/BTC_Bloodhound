@@ -98,17 +98,6 @@ export function createApp(store: Store, config: AppConfig) {
     });
   });
 
-  app.post("/api/submissions", async (c) => {
-    const body = await c.req.json<{ address?: string; submittedBy?: string; reason?: string }>();
-    if (!body.address?.trim()) return c.json({ error: "address required" }, 400);
-    const id = store.createSubmission({
-      address: body.address.trim(),
-      submittedBy: body.submittedBy,
-      reason: body.reason,
-    });
-    return c.json({ id, status: "pending" }, 201);
-  });
-
   app.post("/api/expand/:addr", (c) => {
     const address = c.req.param("addr");
     const addr = store.getAddress(address);
@@ -142,12 +131,6 @@ export function createApp(store: Store, config: AppConfig) {
     });
     store.enqueueJob("backfill_hacker_address", { address: body.address.trim() }, JOB_PRIORITY.BACKFILL_HACKER);
     return c.json({ ok: true });
-  });
-
-  app.post("/api/admin/submissions/:id/approve", async (c) => {
-    const auth = c.req.header("Authorization");
-    if (auth !== `Bearer ${config.adminToken}`) return c.json({ error: "unauthorized" }, 401);
-    return c.json({ ok: true, message: "approval stub — promote via admin/hackers with submission address" });
   });
 
   return app;

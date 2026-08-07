@@ -75,14 +75,7 @@ export function runMigrations(sqlite: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, priority, run_after);
 
-    CREATE TABLE IF NOT EXISTS address_submissions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      address TEXT NOT NULL,
-      submitted_by TEXT,
-      reason TEXT,
-      status TEXT NOT NULL DEFAULT 'pending',
-      created_at TEXT NOT NULL
-    );
+    DROP TABLE IF EXISTS address_submissions;
 
     CREATE TABLE IF NOT EXISTS source_sync_state (
       source TEXT PRIMARY KEY,

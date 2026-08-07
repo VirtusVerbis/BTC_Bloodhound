@@ -241,18 +241,6 @@ button.primary {
   text-align: left;
 }
 
-.submission-panel {
-  padding: 1rem 1.5rem 2rem;
-  border-top: 1px solid #222;
-}
-
-.submission-panel form {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  max-width: 640px;
-}
-
 .toast {
   position: fixed;
   bottom: 1rem;
