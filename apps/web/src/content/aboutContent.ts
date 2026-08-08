@@ -15,6 +15,8 @@ export interface KeyboardCommand {
   description: string;
 }
 
+export const openSourceRepoUrl = "https://github.com/VirtusVerbis/BTC_Bloodhound";
+
 export const disclaimerItems = [
   "This website is for visual reference only and does not guarantee any accuracy whatsoever.",
   "Data is scraped and aggregated from public web sources.",

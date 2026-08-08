@@ -14,6 +14,8 @@ import {
 } from "@xyflow/react";
 import { api, satsToBtc, txUrl } from "../lib/api";
 import {
+  clearInflightGraph,
+  fetchGraphDeduped,
   getCachedGraph,
   graphCacheKey,
   invalidateCachedGraph,
@@ -360,7 +362,7 @@ export function HackGraph({
   );
 
   const loadGraph = useCallback(
-    async (opts?: { expandVictims?: boolean; skipCache?: boolean }) => {
+    async (opts?: { expandVictims?: boolean; skipCache?: boolean; revalidate?: boolean }) => {
       const expanded = opts?.expandVictims ?? expandVictims;
       const key = graphCacheKey({
         hacker,
@@ -391,15 +393,24 @@ export function HackGraph({
 
       if (!opts?.skipCache) {
         const cached = getCachedGraph<ApiGraphResponse>(key);
-        if (cached && generation === loadGenerationRef.current && needsClear) {
-          applyApiGraph(cached);
-          lastGraphKeyRef.current = key;
+        if (cached && generation === loadGenerationRef.current) {
+          if (!opts?.revalidate) {
+            if (needsClear) {
+              applyApiGraph(cached);
+              lastGraphKeyRef.current = key;
+            }
+            return;
+          }
         }
       }
 
       let graph: ApiGraphResponse;
       try {
-        graph = await api<ApiGraphResponse>(`/api/graph?${params}`);
+        graph = await fetchGraphDeduped(
+          key,
+          () => api<ApiGraphResponse>(`/api/graph?${params}`),
+          { force: opts?.skipCache === true },
+        );
       } catch (e) {
         if (victimSearch) {
           window.dispatchEvent(
@@ -446,7 +457,13 @@ export function HackGraph({
 
   useEffect(() => {
     loadGraph().catch(console.error);
-    const iv = setInterval(() => loadGraph().catch(console.error), graphPollMs);
+  }, [loadGraph]);
+
+  useEffect(() => {
+    const iv = setInterval(
+      () => loadGraph({ revalidate: true }).catch(console.error),
+      graphPollMs,
+    );
     return () => clearInterval(iv);
   }, [loadGraph, graphPollMs]);
 
@@ -492,16 +509,16 @@ export function HackGraph({
       }
     }
 
-    invalidateCachedGraph(
-      graphCacheKey({
-        hacker,
-        victimSearch,
-        minEdgeSats,
-        maxVictimNodes,
-        maxDownstreamNodes,
-        expandVictims,
-      }),
-    );
+    const cacheKey = graphCacheKey({
+      hacker,
+      victimSearch,
+      minEdgeSats,
+      maxVictimNodes,
+      maxDownstreamNodes,
+      expandVictims,
+    });
+    invalidateCachedGraph(cacheKey);
+    clearInflightGraph(cacheKey);
     loadGraph({ skipCache: true }).catch(console.error);
   }, [queued, loadGraph, hacker, victimSearch, minEdgeSats, maxVictimNodes, maxDownstreamNodes, expandVictims]);
 

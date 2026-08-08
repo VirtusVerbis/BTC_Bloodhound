@@ -68,7 +68,7 @@ Dual hosting: same codebase runs on Node+SQLite locally and Workers+D1 remotely.
 - Public read APIs power the SPA; writes (`POST /api/expand`, admin) are rate-limited / authenticated.
 - **CSRF tokens are N/A** without cookie sessions; CORS allowlist + rate limits are the controls.
 - App-level per-IP rate limits (expand, GET, graph, admin) apply **only when `ENVIRONMENT=production`**. Local Node and `pnpm cf:dev` skip them (global expand active-job cap still applies). See `EXPAND_*`, `GET_*`, `GRAPH_*`, `ADMIN_*` env knobs.
-- Graph UI poll interval comes from `GET /api/config` (`graphPollMs`: **30s** non-production, **120s** production). The client caches recent `/api/graph` responses by query key and revalidates in the background (dropdown/Page Down reuse).
+- Graph UI poll interval comes from `GET /api/config` (`graphPollMs`: **30s** non-production, **120s** production). The client caches recent `/api/graph` responses by query key (instant revisit via dropdown/Page Down); concurrent misses for the same key share one in-flight request. Only the poll interval revalidates from the network.
 - Production refuses `ADMIN_TOKEN=change-me` and requires explicit `CORS_ORIGINS` (`assertProductionSecrets`).
 - Before deploy: `pnpm audit` (or `npx pnpm@9.15.0 audit`).
 - SQL: Store uses parameterized Drizzle queries; addresses are validated at the API boundary; no raw SQL from request strings.

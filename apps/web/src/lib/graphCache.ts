@@ -8,6 +8,27 @@ interface CacheEntry<T> {
 }
 
 const store = new Map<string, CacheEntry<unknown>>();
+const inflight = new Map<string, Promise<unknown>>();
+
+export function fetchGraphDeduped<T>(
+  key: string,
+  fetchFn: () => Promise<T>,
+  opts?: { force?: boolean },
+): Promise<T> {
+  if (!opts?.force) {
+    const pending = inflight.get(key);
+    if (pending) return pending as Promise<T>;
+  }
+  const promise = fetchFn().finally(() => {
+    if (inflight.get(key) === promise) inflight.delete(key);
+  });
+  if (!opts?.force) inflight.set(key, promise);
+  return promise;
+}
+
+export function clearInflightGraph(key: string): void {
+  inflight.delete(key);
+}
 
 export function graphCacheKey(parts: {
   hacker: string;

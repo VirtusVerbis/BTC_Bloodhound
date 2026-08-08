@@ -7,6 +7,7 @@ import {
   keyboardCommands,
   monitoredExternalSites,
   monitoringIntro,
+  openSourceRepoUrl,
   purposeText,
 } from "../content/aboutContent";
 import {
@@ -44,6 +45,15 @@ export function AboutPage({ sync }: AboutPageProps) {
             <li key={item}>{item}</li>
           ))}
         </ul>
+      </section>
+
+      <section className="about-section">
+        <h2>Open Source Repo</h2>
+        <p>
+          <a href={openSourceRepoUrl} target="_blank" rel="noopener noreferrer">
+            {openSourceRepoUrl}
+          </a>
+        </p>
       </section>
 
       <section className="about-section">
