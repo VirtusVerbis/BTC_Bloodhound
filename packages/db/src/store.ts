@@ -447,6 +447,15 @@ export class Store {
       .run();
   }
 
+  resetRunningJobs(): number {
+    const result = this.db
+      .update(jobs)
+      .set({ status: "pending" })
+      .where(eq(jobs.status, "running"))
+      .run();
+    return result.changes;
+  }
+
   getJob(id: number) {
     return this.db.select().from(jobs).where(eq(jobs.id, id)).get();
   }

@@ -43,6 +43,10 @@ async function main() {
   if (cmd === "rebuild-hack-edges") {
     const wait = process.argv.includes("--wait");
     if (wait) {
+      const reclaimed = store.resetRunningJobs();
+      if (reclaimed > 0) {
+        console.log(`Reclaimed ${reclaimed} orphaned running job(s) to pending`);
+      }
       const n = await runRebuildHackEdgesWait(store, router, config);
       console.log(`Rebuild finished for ${n} transaction(s)`);
     } else {
@@ -52,6 +56,10 @@ async function main() {
     return;
   }
   if (cmd === "run") {
+    const reclaimed = store.resetRunningJobs();
+    if (reclaimed > 0) {
+      console.log(`Reclaimed ${reclaimed} orphaned running job(s) to pending`);
+    }
     console.log("Indexer running...");
     let lastCron = 0;
     while (true) {

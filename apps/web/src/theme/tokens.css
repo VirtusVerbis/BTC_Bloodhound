@@ -34,7 +34,7 @@ body {
 .graph-panel-controls {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.5625rem;
 }
 
