@@ -66,11 +66,25 @@ export interface AppConfig {
   processTxRebuildPriority: number;
   /** Comma-separated CORS origins; empty = reflect request origin only when local defaults apply. */
   corsOrigins: string[];
+  /** True when CORS_ORIGINS env was explicitly set (required in production). */
+  corsOriginsFromEnv: boolean;
   environment: string;
+  expandRateLimit: number;
+  expandRateWindowSec: number;
+  expandMaxActive: number;
+  getRateLimit: number;
+  getRateWindowSec: number;
+  graphRateLimit: number;
+  graphRateWindowSec: number;
+  adminRateLimit: number;
+  adminRateWindowSec: number;
+  maxGraphVictims: number;
+  maxGraphDownstream: number;
 }
 
 export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
   const corsRaw = env.CORS_ORIGINS?.trim();
+  const corsOriginsFromEnv = Boolean(corsRaw);
   const corsOrigins = corsRaw
     ? corsRaw.split(",").map((s) => s.trim()).filter(Boolean)
     : ["http://localhost:5173", "http://127.0.0.1:5173"];
@@ -116,14 +130,29 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     indexerRebuildMode: env.INDEXER_REBUILD_MODE === "1",
     processTxRebuildPriority: Number(env.PROCESS_TX_REBUILD_PRIORITY ?? JOB_PRIORITY.PROCESS_TX_REBUILD),
     corsOrigins,
+    corsOriginsFromEnv,
     environment: env.ENVIRONMENT ?? env.NODE_ENV ?? "development",
+    expandRateLimit: Number(env.EXPAND_RATE_LIMIT ?? 5),
+    expandRateWindowSec: Number(env.EXPAND_RATE_WINDOW_SEC ?? 600),
+    expandMaxActive: Number(env.EXPAND_MAX_ACTIVE ?? 20),
+    getRateLimit: Number(env.GET_RATE_LIMIT ?? 120),
+    getRateWindowSec: Number(env.GET_RATE_WINDOW_SEC ?? 60),
+    graphRateLimit: Number(env.GRAPH_RATE_LIMIT ?? 30),
+    graphRateWindowSec: Number(env.GRAPH_RATE_WINDOW_SEC ?? 60),
+    adminRateLimit: Number(env.ADMIN_RATE_LIMIT ?? 10),
+    adminRateWindowSec: Number(env.ADMIN_RATE_WINDOW_SEC ?? 3600),
+    maxGraphVictims: Number(env.MAX_GRAPH_VICTIMS ?? 200),
+    maxGraphDownstream: Number(env.MAX_GRAPH_DOWNSTREAM ?? 200),
   };
 }
 
-/** Refuse insecure default admin token when running as production. */
+/** Refuse insecure defaults when running as production. */
 export function assertProductionSecrets(config: AppConfig): void {
   if (config.environment !== "production") return;
   if (!config.adminToken || config.adminToken === "change-me") {
     throw new Error("ADMIN_TOKEN must be set to a non-default value in production");
+  }
+  if (!config.corsOriginsFromEnv || config.corsOrigins.length === 0) {
+    throw new Error("CORS_ORIGINS must be set explicitly in production");
   }
 }

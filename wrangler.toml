@@ -19,7 +19,7 @@ migrations_dir = "migrations"
 crons = ["*/1 * * * *"]
 
 [vars]
-# Use ENVIRONMENT=production on real deploy (refuses default ADMIN_TOKEN).
+# Local `pnpm cf:dev` / top-level config — no per-IP API rate limits.
 ENVIRONMENT = "development"
 ESPLORA_BASE = "https://blockstream.info/api"
 MEMPOOL_BASE = "https://mempool.space/api"
@@ -28,6 +28,31 @@ CORS_ORIGINS = "http://localhost:8787,http://127.0.0.1:8787"
 RATE_LIMIT_MS = "3000"
 JOBS_PER_TICK = "1"
 
+# Production deploy: `pnpm cf:deploy` → wrangler deploy --env production
+# Worker name: cointrace-production. Bindings (vars/D1/assets) are non-inheritable.
+[env.production.assets]
+directory = "apps/web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "cointrace"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[env.production.triggers]
+crons = ["*/1 * * * *"]
+
+[env.production.vars]
+ENVIRONMENT = "production"
+ESPLORA_BASE = "https://blockstream.info/api"
+MEMPOOL_BASE = "https://mempool.space/api"
+# Set to your Worker URL(s), e.g. https://cointrace-production.<account>.workers.dev
+CORS_ORIGINS = "https://cointrace-production.workers.dev"
+RATE_LIMIT_MS = "3000"
+JOBS_PER_TICK = "1"
+
 # Secrets (do NOT put in [vars]):
-#   wrangler secret put ADMIN_TOKEN
+#   npx wrangler secret put ADMIN_TOKEN --env production
 # Local wrangler dev: copy .dev.vars.example → .dev.vars

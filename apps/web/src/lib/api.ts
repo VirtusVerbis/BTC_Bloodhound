@@ -68,8 +68,46 @@ export function formatLocalDateTime(iso: string): string | null {
   }
 }
 
+export class ApiError extends Error {
+  status: number;
+  body: string;
+  retryAfterSec: number | null;
+
+  constructor(status: number, body: string, retryAfterSec: number | null = null) {
+    let message = body;
+    try {
+      const parsed = JSON.parse(body) as { error?: string };
+      if (parsed.error) message = parsed.error;
+    } catch {
+      /* keep raw body */
+    }
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.body = body;
+    this.retryAfterSec = retryAfterSec;
+  }
+}
+
+function parseRetryAfterSec(res: Response): number | null {
+  const raw = res.headers.get("Retry-After");
+  if (raw == null || raw === "") return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.floor(n);
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, init);
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    const retryAfterSec = parseRetryAfterSec(res);
+    if (res.status === 429) {
+      const sec = Math.max(1, retryAfterSec ?? 60);
+      window.dispatchEvent(
+        new CustomEvent("cointrace-rate-limit", { detail: { retryAfterSec: sec } }),
+      );
+    }
+    throw new ApiError(res.status, await res.text(), retryAfterSec);
+  }
   return res.json() as Promise<T>;
 }

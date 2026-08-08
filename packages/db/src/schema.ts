@@ -79,6 +79,12 @@ export const schedulerState = sqliteTable("scheduler_state", {
   btcUsdPriceAt: text("btc_usd_price_at"),
 });
 
+export const rateLimits = sqliteTable("rate_limits", {
+  key: text("key").primaryKey(),
+  windowStart: text("window_start").notNull(),
+  count: integer("count").notNull().default(0),
+});
+
 export type Address = typeof addresses.$inferSelect;
 export type Edge = typeof edges.$inferSelect;
 export type Job = typeof jobs.$inferSelect;

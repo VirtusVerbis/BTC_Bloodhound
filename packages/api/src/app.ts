@@ -1,8 +1,24 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import type { Store } from "@cointrace/db";
 import type { AppConfig } from "@cointrace/core";
-import { buildGraph, buildVictimGraph, computeJobEta, isRebuildActive, JOB_PRIORITY } from "@cointrace/core";
+import {
+  buildGraph,
+  buildVictimGraph,
+  computeJobEta,
+  isRebuildActive,
+  JOB_PRIORITY,
+  normalizeBitcoinAddress,
+  timingSafeEqualString,
+} from "@cointrace/core";
+import {
+  clampInt,
+  clientIp,
+  enforceRateLimit,
+  rateLimitResponse,
+  readJsonBodyLimited,
+  securityHeadersMiddleware,
+} from "./security.js";
 
 function parseMinEdgeSats(raw: string | undefined, fallback: number) {
   if (raw != null && Number.isFinite(Number(raw)) && Number(raw) >= 0) {
@@ -18,8 +34,28 @@ function parsePositiveInt(raw: string | undefined, fallback: number) {
   return fallback;
 }
 
+async function applyRateLimit(
+  c: Context,
+  store: Store,
+  config: AppConfig,
+  key: string,
+  limit: number,
+  windowSec: number,
+) {
+  // Per-IP request limits only in production (local Node / wrangler dev skip).
+  if (config.environment !== "production") return null;
+  const result = await enforceRateLimit(store, key, limit, windowSec);
+  if (!result.allowed) {
+    const rl = rateLimitResponse(result.retryAfterSec);
+    return c.json(rl.body, rl.status, rl.headers);
+  }
+  return null;
+}
+
 export function createApp(store: Store, config: AppConfig) {
   const app = new Hono();
+
+  app.use("*", securityHeadersMiddleware);
 
   const allowed = new Set(config.corsOrigins);
   app.use(
@@ -28,7 +64,6 @@ export function createApp(store: Store, config: AppConfig) {
       origin: (origin) => {
         if (!origin) return "";
         if (allowed.has(origin)) return origin;
-        // Same-origin browser requests omit Origin; allowlisted exact matches only for CORS.
         return "";
       },
       allowMethods: ["GET", "POST", "OPTIONS"],
@@ -36,9 +71,52 @@ export function createApp(store: Store, config: AppConfig) {
     }),
   );
 
+  app.onError((err, c) => {
+    console.error(err);
+    if (config.environment === "production") {
+      return c.json({ error: "internal error" }, 500);
+    }
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+  });
+
   app.get("/api/health", (c) => c.json({ ok: true }));
 
-  app.get("/api/config", (c) => c.json({ minEdgeSats: config.minEdgeSats }));
+  app.use("/api/*", async (c, next) => {
+    if (c.req.method !== "GET") return next();
+    const path = new URL(c.req.url).pathname;
+    if (path === "/api/health") return next();
+
+    const ip = clientIp(c);
+    if (path === "/api/graph") {
+      const denied = await applyRateLimit(
+        c,
+        store,
+        config,
+        `get:graph:${ip}`,
+        config.graphRateLimit,
+        config.graphRateWindowSec,
+      );
+      if (denied) return denied;
+    }
+
+    const denied = await applyRateLimit(
+      c,
+      store,
+      config,
+      `get:${ip}`,
+      config.getRateLimit,
+      config.getRateWindowSec,
+    );
+    if (denied) return denied;
+    return next();
+  });
+
+  app.get("/api/config", (c) =>
+    c.json({
+      minEdgeSats: config.minEdgeSats,
+      graphPollMs: config.environment === "production" ? 120_000 : 30_000,
+    }),
+  );
 
   app.get("/api/hackers", async (c) => {
     const q = c.req.query("q");
@@ -56,17 +134,41 @@ export function createApp(store: Store, config: AppConfig) {
   });
 
   app.get("/api/graph", async (c) => {
-    const depth = Number(c.req.query("depth") ?? config.maxGraphDepth);
+    const depthRaw = Number(c.req.query("depth") ?? config.maxGraphDepth);
+    if (!Number.isFinite(depthRaw) || depthRaw < 1) {
+      return c.json({ error: "invalid depth" }, 400);
+    }
+    const depth = clampInt(depthRaw, 1, config.maxGraphDepth);
+
     const expandVictims = c.req.query("expand_victims") === "1";
     const minEdgeSats = parseMinEdgeSats(c.req.query("min_edge_sats"), config.minEdgeSats);
-    const victim = c.req.query("victim")?.trim().toLowerCase();
-    const hacker = c.req.query("hacker");
+
+    const victimRaw = c.req.query("victim")?.trim();
+    const victim = victimRaw ? normalizeBitcoinAddress(victimRaw) : null;
+    if (victimRaw && !victim) return c.json({ error: "invalid victim address" }, 400);
+
+    const hackerRaw = c.req.query("hacker");
+    const hacker = hackerRaw ? normalizeBitcoinAddress(hackerRaw) : null;
+    if (hackerRaw?.trim() && !hacker) return c.json({ error: "invalid hacker address" }, 400);
+
+    const maxVictimsRaw = parsePositiveInt(c.req.query("max_victims"), 100);
+    const maxOutputsRaw = parsePositiveInt(c.req.query("max_downstream"), 100);
+    if (maxVictimsRaw > config.maxGraphVictims || maxOutputsRaw > config.maxGraphDownstream) {
+      return c.json(
+        {
+          error: "graph limits exceeded",
+          maxVictims: config.maxGraphVictims,
+          maxDownstream: config.maxGraphDownstream,
+        },
+        400,
+      );
+    }
 
     const graphOpts = {
       depth,
       expandVictims,
-      maxVictims: parsePositiveInt(c.req.query("max_victims"), 100),
-      maxOutputs: parsePositiveInt(c.req.query("max_downstream"), 100),
+      maxVictims: clampInt(maxVictimsRaw, 1, config.maxGraphVictims),
+      maxOutputs: clampInt(maxOutputsRaw, 1, config.maxGraphDownstream),
       minEdgeSats,
     };
 
@@ -86,7 +188,9 @@ export function createApp(store: Store, config: AppConfig) {
   });
 
   app.get("/api/addresses/:addr", async (c) => {
-    const detail = await store.getAddressDetail(c.req.param("addr"));
+    const address = normalizeBitcoinAddress(c.req.param("addr"));
+    if (!address) return c.json({ error: "invalid address" }, 400);
+    const detail = await store.getAddressDetail(address);
     if (!detail) return c.json({ error: "not found" }, 404);
     return c.json(detail);
   });
@@ -115,6 +219,7 @@ export function createApp(store: Store, config: AppConfig) {
 
   app.get("/api/jobs/:id", async (c) => {
     const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id < 1) return c.json({ error: "invalid job id" }, 400);
     const job = await store.getJob(id);
     if (!job) return c.json({ error: "not found" }, 404);
     const eta = await computeJobEta(store, job, config.rateLimitMs, config.jobsPerTick);
@@ -127,7 +232,27 @@ export function createApp(store: Store, config: AppConfig) {
   });
 
   app.post("/api/expand/:addr", async (c) => {
-    const address = c.req.param("addr");
+    const ip = clientIp(c);
+    const denied = await applyRateLimit(
+      c,
+      store,
+      config,
+      `expand:${ip}`,
+      config.expandRateLimit,
+      config.expandRateWindowSec,
+    );
+    if (denied) return denied;
+
+    const address = normalizeBitcoinAddress(c.req.param("addr"));
+    if (!address) return c.json({ error: "invalid address" }, 400);
+
+    const active = await store.countActiveJobs("expand_downstream");
+    if (active >= config.expandMaxActive) {
+      return c.json({ error: "too many expand jobs active", maxActive: config.expandMaxActive }, 429, {
+        "Retry-After": "60",
+      });
+    }
+
     const addr = await store.getAddress(address);
     if (!addr) return c.json({ error: "address not in database" }, 404);
     if (await store.hasPendingJob("expand_downstream", address)) {
@@ -145,19 +270,39 @@ export function createApp(store: Store, config: AppConfig) {
   });
 
   app.post("/api/admin/hackers", async (c) => {
-    const auth = c.req.header("Authorization");
-    if (auth !== `Bearer ${config.adminToken}`) return c.json({ error: "unauthorized" }, 401);
-    const body = await c.req.json<{ address?: string; label?: string }>();
-    if (!body.address?.trim()) return c.json({ error: "address required" }, 400);
+    const ip = clientIp(c);
+    const denied = await applyRateLimit(
+      c,
+      store,
+      config,
+      `admin:${ip}`,
+      config.adminRateLimit,
+      config.adminRateWindowSec,
+    );
+    if (denied) return denied;
+
+    const auth = c.req.header("Authorization") ?? "";
+    const token = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : "";
+    if (!(await timingSafeEqualString(token, config.adminToken))) {
+      return c.json({ error: "unauthorized" }, 401);
+    }
+
+    const parsed = await readJsonBodyLimited<{ address?: string; label?: string }>(c);
+    if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+
+    const address = normalizeBitcoinAddress(parsed.data.address ?? "");
+    if (!address) return c.json({ error: "valid address required" }, 400);
+    const label = parsed.data.label?.trim() ? parsed.data.label.trim().slice(0, 200) : null;
+
     await store.upsertAddress({
-      address: body.address.trim(),
+      address,
       role: "hacker",
-      label: body.label ?? null,
+      label,
       source: "admin",
       isFlaggedHacker: true,
       hopFromHacker: 0,
     });
-    await store.enqueueJob("backfill_hacker_address", { address: body.address.trim() }, JOB_PRIORITY.BACKFILL_HACKER);
+    await store.enqueueJob("backfill_hacker_address", { address }, JOB_PRIORITY.BACKFILL_HACKER);
     return c.json({ ok: true });
   });
 

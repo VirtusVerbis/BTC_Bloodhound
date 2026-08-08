@@ -47,6 +47,29 @@ function build(env: WorkerEnv) {
   return { config, store, router, app };
 }
 
+function withSecurityHeaders(res: Response): Response {
+  const headers = new Headers(res.headers);
+  headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  headers.set("X-Frame-Options", "DENY");
+  headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+  headers.set(
+    "Content-Security-Policy",
+    [
+      "default-src 'self'",
+      "script-src 'self'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data:",
+      "font-src 'self'",
+      "connect-src 'self' https://mempool.space",
+      "frame-ancestors 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+    ].join("; "),
+  );
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
+
 const worker = {
   async fetch(request: Request, env: WorkerEnv): Promise<Response> {
     const { app } = build(env);
@@ -55,9 +78,9 @@ const worker = {
       return app.fetch(request);
     }
     if (env.ASSETS) {
-      return env.ASSETS.fetch(request);
+      return withSecurityHeaders(await env.ASSETS.fetch(request));
     }
-    return new Response("Not found", { status: 404 });
+    return withSecurityHeaders(new Response("Not found", { status: 404 }));
   },
 
   async scheduled(_event: unknown, env: WorkerEnv): Promise<void> {

@@ -87,7 +87,9 @@ function main() {
 
   const wranglerArgs = ["wrangler", "d1", "execute", "cointrace", "--file", sqlPath];
   if (isLocal) wranglerArgs.push("--local");
-  else wranglerArgs.push("--remote");
+  else {
+    wranglerArgs.push("--remote", "--env", "production");
+  }
 
   console.log(`Running: npx ${wranglerArgs.join(" ")}`);
   const result = spawnSync("npx", wranglerArgs, { stdio: "inherit", shell: true });

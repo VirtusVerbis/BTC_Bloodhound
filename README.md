@@ -31,7 +31,7 @@ pnpm dev:web
 | `pnpm dev:api` | Hono API server (Node + SQLite) |
 | `pnpm dev:web` | Vite dev server |
 | `pnpm cf:dev` | Cloudflare Workers + D1 + static UI (local) |
-| `pnpm cf:deploy` | Deploy Worker + assets to Cloudflare |
+| `pnpm cf:deploy` | Deploy Worker + assets to Cloudflare (`--env production`) |
 | `pnpm db:push-d1` | Copy local SQLite → local D1 |
 | `pnpm db:push-d1:remote` | Copy local SQLite → remote D1 |
 
@@ -57,11 +57,23 @@ Dual hosting: same codebase runs on Node+SQLite locally and Workers+D1 remotely.
    pnpm db:push-d1          # local D1
    pnpm db:push-d1:remote   # production D1
    ```
-5. Set production secret: `npx wrangler secret put ADMIN_TOKEN`
-6. Set `CORS_ORIGINS` in `wrangler.toml` `[vars]` to your Worker/Pages URL(s)
-7. Deploy: `pnpm cf:deploy`
+5. Set production secret: `npx wrangler secret put ADMIN_TOKEN --env production` (never put secrets in `[vars]` or git)
+6. Set `CORS_ORIGINS` under `[env.production.vars]` in `wrangler.toml` to your Worker URL(s). `ENVIRONMENT=production` is already pinned there (`pnpm cf:deploy` uses `--env production`).
+7. Set the same `database_id` on both top-level and `[[env.production.d1_databases]]`.
+8. Deploy: `pnpm cf:deploy` (Worker name: `cointrace-production`)
+9. Cloudflare dashboard (defense-in-depth): enable Bot Fight Mode and/or rate-limiting rules for the Worker hostname; optionally WAF managed rules if available on your plan
 
-Production refuses the default `change-me` admin token (`ENVIRONMENT=production`). Cron (`*/1 * * * *`) runs indexer ticks on the Worker.
+### Security notes (public deploy)
+
+- Public read APIs power the SPA; writes (`POST /api/expand`, admin) are rate-limited / authenticated.
+- **CSRF tokens are N/A** without cookie sessions; CORS allowlist + rate limits are the controls.
+- App-level per-IP rate limits (expand, GET, graph, admin) apply **only when `ENVIRONMENT=production`**. Local Node and `pnpm cf:dev` skip them (global expand active-job cap still applies). See `EXPAND_*`, `GET_*`, `GRAPH_*`, `ADMIN_*` env knobs.
+- Graph UI poll interval comes from `GET /api/config` (`graphPollMs`: **30s** non-production, **120s** production). The client caches recent `/api/graph` responses by query key and revalidates in the background (dropdown/Page Down reuse).
+- Production refuses `ADMIN_TOKEN=change-me` and requires explicit `CORS_ORIGINS` (`assertProductionSecrets`).
+- Before deploy: `pnpm audit` (or `npx pnpm@9.15.0 audit`).
+- SQL: Store uses parameterized Drizzle queries; addresses are validated at the API boundary; no raw SQL from request strings.
+
+Cron (`*/1 * * * *`) runs indexer ticks on the Worker.
 
 ## Architecture
 

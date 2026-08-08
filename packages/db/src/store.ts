@@ -1,10 +1,11 @@
-import { and, asc, desc, eq, gt, gte, isNotNull, like, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, isNotNull, lte, ne, or, sql } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import * as schema from "./schema.js";
 import {
   addresses,
   edges,
   jobs,
+  rateLimits,
   schedulerState,
   sourceSyncState,
   syncState,
@@ -16,6 +17,10 @@ import {
 export type Db = BetterSQLite3Database<typeof schema>;
 
 const now = () => new Date().toISOString();
+
+function escapeLikePattern(raw: string): string {
+  return raw.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
 
 function lastInsertId(result: { lastInsertRowid?: number | bigint; meta?: { last_row_id?: number } }): number {
   if (result.lastInsertRowid != null) return Number(result.lastInsertRowid);
@@ -98,11 +103,19 @@ export class Store {
     if (activeOnly) conditions.push(gt(addresses.totalReceivedSats, 0));
     const base = and(...conditions);
     if (q?.trim()) {
-      const pattern = `%${q.trim()}%`;
+      const pattern = `%${escapeLikePattern(q.trim())}%`;
       return await this.db
         .select()
         .from(addresses)
-        .where(and(base, or(like(addresses.address, pattern), like(addresses.label, pattern))))
+        .where(
+          and(
+            base,
+            or(
+              sql`${addresses.address} LIKE ${pattern} ESCAPE '\\'`,
+              sql`${addresses.label} LIKE ${pattern} ESCAPE '\\'`,
+            ),
+          ),
+        )
         .orderBy(desc(addresses.totalReceivedSats))
         .all();
     }
@@ -420,6 +433,7 @@ export class Store {
         .where(and(eq(jobs.type, type), or(eq(jobs.status, "pending"), eq(jobs.status, "running"))))
         .get());
     }
+    // Address must be pre-validated by API; bind as parameter (no raw SQL concat of user input).
     const pending = await this.db
       .select()
       .from(jobs)
@@ -427,11 +441,53 @@ export class Store {
         and(
           eq(jobs.type, type),
           or(eq(jobs.status, "pending"), eq(jobs.status, "running")),
-          like(jobs.payloadJson, `%"address":"${address}"%`),
+          sql`${jobs.payloadJson} LIKE ${`%"address":"${address}"%`}`,
         ),
       )
       .get();
     return !!pending;
+  }
+
+  /**
+   * Sliding fixed window counter. Returns whether the request is allowed under `limit`
+   * within `windowSec`, and seconds until the window resets when denied.
+   */
+  async consumeRateLimit(
+    key: string,
+    limit: number,
+    windowSec: number,
+  ): Promise<{ allowed: boolean; retryAfterSec: number }> {
+    const ts = Date.now();
+    const windowMs = Math.max(1, windowSec) * 1000;
+    const row = await this.db.select().from(rateLimits).where(eq(rateLimits.key, key)).get();
+    const windowStartMs = row ? new Date(row.windowStart).getTime() : 0;
+    const inWindow = row != null && ts - windowStartMs < windowMs;
+
+    if (!inWindow) {
+      const start = new Date(ts).toISOString();
+      if (row) {
+        await this.db
+          .update(rateLimits)
+          .set({ windowStart: start, count: 1 })
+          .where(eq(rateLimits.key, key))
+          .run();
+      } else {
+        await this.db.insert(rateLimits).values({ key, windowStart: start, count: 1 }).run();
+      }
+      return { allowed: true, retryAfterSec: 0 };
+    }
+
+    if (row.count >= limit) {
+      const retryAfterSec = Math.max(1, Math.ceil((windowStartMs + windowMs - ts) / 1000));
+      return { allowed: false, retryAfterSec };
+    }
+
+    await this.db
+      .update(rateLimits)
+      .set({ count: row.count + 1 })
+      .where(eq(rateLimits.key, key))
+      .run();
+    return { allowed: true, retryAfterSec: 0 };
   }
 
   async claimNextJob() {

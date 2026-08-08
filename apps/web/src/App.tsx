@@ -28,6 +28,7 @@ interface SyncStatus extends MonitoringSyncStatus {
 
 interface AppConfig {
   minEdgeSats: number;
+  graphPollMs?: number;
 }
 
 function isTypingTarget(target: EventTarget | null) {
@@ -45,7 +46,9 @@ export default function App() {
   const [drawerAddr, setDrawerAddr] = useState<string | null>(null);
   const [expandVictims, setExpandVictims] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [rateLimitSecondsLeft, setRateLimitSecondsLeft] = useState<number | null>(null);
   const [minEdgeSats, setMinEdgeSats] = useState(1000);
+  const [graphPollMs, setGraphPollMs] = useState(30_000);
   const [minAmountUnit, setMinAmountUnit] = useState<"sats" | "btc">("sats");
   const [maxVictimNodes, setMaxVictimNodes] = useState(100);
   const [maxDownstreamNodes, setMaxDownstreamNodes] = useState(100);
@@ -76,7 +79,12 @@ export default function App() {
 
   useEffect(() => {
     api<AppConfig>("/api/config")
-      .then((cfg) => setMinEdgeSats(cfg.minEdgeSats))
+      .then((cfg) => {
+        setMinEdgeSats(cfg.minEdgeSats);
+        if (cfg.graphPollMs != null && Number.isFinite(cfg.graphPollMs) && cfg.graphPollMs >= 1000) {
+          setGraphPollMs(Math.floor(cfg.graphPollMs));
+        }
+      })
       .catch(console.error);
   }, []);
 
@@ -105,11 +113,17 @@ export default function App() {
   useEffect(() => {
     const onToast = (e: Event) => setToast((e as CustomEvent).detail as string);
     const onExpandVictims = () => setExpandVictims(true);
+    const onRateLimit = (e: Event) => {
+      const sec = (e as CustomEvent<{ retryAfterSec?: number }>).detail?.retryAfterSec;
+      setRateLimitSecondsLeft(Math.max(1, Number(sec) || 60));
+    };
     window.addEventListener("cointrace-toast", onToast);
     window.addEventListener("cointrace-expand-victims", onExpandVictims);
+    window.addEventListener("cointrace-rate-limit", onRateLimit);
     return () => {
       window.removeEventListener("cointrace-toast", onToast);
       window.removeEventListener("cointrace-expand-victims", onExpandVictims);
+      window.removeEventListener("cointrace-rate-limit", onRateLimit);
     };
   }, []);
 
@@ -118,6 +132,18 @@ export default function App() {
     const t = setTimeout(() => setToast(null), 2000);
     return () => clearTimeout(t);
   }, [toast]);
+
+  const rateLimitActive = rateLimitSecondsLeft != null && rateLimitSecondsLeft > 0;
+  useEffect(() => {
+    if (!rateLimitActive) return;
+    const t = setInterval(() => {
+      setRateLimitSecondsLeft((prev) => {
+        if (prev == null || prev <= 1) return null;
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(t);
+  }, [rateLimitActive]);
 
   useEffect(() => {
     if (activeTab !== "tracker" || sortedHackers.length === 0) return;
@@ -164,7 +190,11 @@ export default function App() {
     <BtcUsdProvider price={stats?.btcUsdPrice ?? null}>
     <div>
       <header className="app-header">
-        <MonitoringIndicator sync={sync} onNavigateMonitoring={navigateToMonitoring} />
+        <MonitoringIndicator
+          sync={sync}
+          onNavigateMonitoring={navigateToMonitoring}
+          rateLimitSecondsLeft={rateLimitSecondsLeft}
+        />
         <h1>Bitcoin Bloodhound — Coldcard Hack Tracker</h1>
         <nav className="app-tabs" role="tablist" aria-label="Main navigation">
           <button
@@ -323,6 +353,7 @@ export default function App() {
             maxVictimNodes={maxVictimNodes}
             maxDownstreamNodes={maxDownstreamNodes}
             victimSearch={activeVictimSearch}
+            graphPollMs={graphPollMs}
             onNodeClick={setDrawerAddr}
             onCollapseVictims={() => setExpandVictims(false)}
             onHackerChange={setSelected}

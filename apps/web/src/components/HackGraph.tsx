@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Background,
   Controls,
@@ -13,6 +13,12 @@ import {
   MarkerType,
 } from "@xyflow/react";
 import { api, satsToBtc, txUrl } from "../lib/api";
+import {
+  getCachedGraph,
+  graphCacheKey,
+  invalidateCachedGraph,
+  setCachedGraph,
+} from "../lib/graphCache";
 import { layoutGraph, type VictimSortOption } from "../lib/layoutGraph";
 import { nodeTypes, type GraphNodeData } from "./nodes/GraphNodes";
 
@@ -89,6 +95,16 @@ function mapApiEdges(apiEdges: ApiGraphEdge[], showEdgeLabels: boolean): Edge[] 
   }));
 }
 
+function filterEdgesToNodes(nodes: ApiGraphNode[], edges: ApiGraphEdge[]): ApiGraphEdge[] {
+  const nodeIds = new Set(nodes.map((n) => n.id));
+  return edges.filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target));
+}
+
+function filterEdgesToVisibleNodes(allNodes: Node[], allEdges: Edge[]): Edge[] {
+  const ids = new Set(allNodes.map((n) => n.id));
+  return allEdges.filter((e) => ids.has(e.source) && ids.has(e.target));
+}
+
 function useMediaQuery(query: string) {
   const [match, setMatch] = useState(() => window.matchMedia(query).matches);
   useEffect(() => {
@@ -154,6 +170,7 @@ export function HackGraph({
   maxVictimNodes,
   maxDownstreamNodes,
   victimSearch,
+  graphPollMs = 30_000,
   onNodeClick,
   onCollapseVictims,
   onHackerChange,
@@ -164,6 +181,7 @@ export function HackGraph({
   maxVictimNodes: number;
   maxDownstreamNodes: number;
   victimSearch: string | null;
+  graphPollMs?: number;
   onNodeClick: (address: string) => void;
   onCollapseVictims?: () => void;
   onHackerChange?: (address: string) => void;
@@ -173,6 +191,7 @@ export function HackGraph({
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const positionsRef = useRef<Record<string, { x: number; y: number }>>({});
   const loadGenerationRef = useRef(0);
+  const lastGraphKeyRef = useRef<string | null>(null);
   const prevExpandRef = useRef(expandVictims);
   const pendingFitRef = useRef(false);
   const graphDataRef = useRef<{
@@ -187,6 +206,24 @@ export function HackGraph({
   const [showEdgeLabels, setShowEdgeLabels] = useState(false);
   const [queued, setQueued] = useState<QueuedJob[]>([]);
   const [countdownTick, setCountdownTick] = useState(0);
+
+  const flowKey = useMemo(
+    () =>
+      graphCacheKey({
+        hacker,
+        victimSearch,
+        minEdgeSats,
+        maxVictimNodes,
+        maxDownstreamNodes,
+        expandVictims,
+      }),
+    [hacker, victimSearch, minEdgeSats, maxVictimNodes, maxDownstreamNodes, expandVictims],
+  );
+
+  useLayoutEffect(() => {
+    setNodes([]);
+    setEdges([]);
+  }, [flowKey, setNodes, setEdges]);
 
   useEffect(() => {
     victimSortRef.current = victimSort;
@@ -236,11 +273,16 @@ export function HackGraph({
           },
         ]);
       } catch (e) {
+        const status = e && typeof e === "object" && "status" in e ? Number((e as { status: number }).status) : 0;
         const raw = e instanceof Error ? e.message : String(e);
         let message = "Expand failed";
-        if (raw.includes("409") || raw.toLowerCase().includes("already queued")) {
+        if (status === 429 || raw.toLowerCase().includes("rate limit") || raw.toLowerCase().includes("too many expand")) {
+          message = "Expand rate limited — try again later";
+        } else if (status === 400 || raw.toLowerCase().includes("invalid address")) {
+          message = "Invalid Bitcoin address";
+        } else if (status === 409 || raw.toLowerCase().includes("already queued")) {
           message = "Expand already queued for this address";
-        } else if (raw.includes("404") || raw.toLowerCase().includes("not in database")) {
+        } else if (status === 404 || raw.toLowerCase().includes("not in database")) {
           message = "Address not found in indexed data";
         }
         window.dispatchEvent(new CustomEvent("cointrace-toast", { detail: message }));
@@ -263,41 +305,8 @@ export function HackGraph({
     [setNodes, setEdges],
   );
 
-  const loadGraph = useCallback(
-    async (opts?: { expandVictims?: boolean }) => {
-      const generation = ++loadGenerationRef.current;
-      setNodes([]);
-      setEdges([]);
-
-      const params = new URLSearchParams({
-        depth: "2",
-        min_edge_sats: String(minEdgeSats),
-        max_victims: String(maxVictimNodes),
-        max_downstream: String(maxDownstreamNodes),
-      });
-
-      if (victimSearch) {
-        params.set("victim", victimSearch);
-      } else {
-        params.set("hacker", hacker);
-        const expanded = opts?.expandVictims ?? expandVictims;
-        if (expanded) params.set("expand_victims", "1");
-      }
-
-      let graph: ApiGraphResponse;
-      try {
-        graph = await api<ApiGraphResponse>(`/api/graph?${params}`);
-      } catch (e) {
-        if (victimSearch) {
-          window.dispatchEvent(
-            new CustomEvent("cointrace-toast", { detail: "Address not found in hack data" }),
-          );
-        }
-        throw e;
-      }
-
-      if (generation !== loadGenerationRef.current) return;
-
+  const applyApiGraph = useCallback(
+    (graph: ApiGraphResponse) => {
       const mode = graph.mode ?? (victimSearch ? "victim-filtered" : "hacker");
       if (mode === "victim-filtered" && graph.matchedHackers?.[0]) {
         onHackerChange?.(graph.matchedHackers[0]);
@@ -336,9 +345,10 @@ export function HackGraph({
         position: positionsRef.current[n.id] ?? { x: 0, y: 0 },
       }));
 
-      const rfEdges = mapApiEdges(graph.edges, showEdgeLabels);
+      const validApiEdges = filterEdgesToNodes(graph.nodes, graph.edges);
+      const rfEdges = mapApiEdges(validApiEdges, showEdgeLabels);
 
-      graphDataRef.current = { rfNodes, rfEdges, mode, apiEdges: graph.edges };
+      graphDataRef.current = { rfNodes, rfEdges, mode, apiEdges: validApiEdges };
       applyLayout(rfNodes, rfEdges, mode, victimSortRef.current);
 
       if (pendingFitRef.current) {
@@ -346,7 +356,74 @@ export function HackGraph({
         setFitViewTrigger((t) => t + 1);
       }
     },
-    [hacker, expandVictims, minEdgeSats, maxVictimNodes, maxDownstreamNodes, showEdgeLabels, victimSearch, expandAddress, onHackerChange, setNodes, setEdges, applyLayout],
+    [victimSearch, onHackerChange, expandAddress, showEdgeLabels, applyLayout],
+  );
+
+  const loadGraph = useCallback(
+    async (opts?: { expandVictims?: boolean; skipCache?: boolean }) => {
+      const expanded = opts?.expandVictims ?? expandVictims;
+      const key = graphCacheKey({
+        hacker,
+        victimSearch,
+        minEdgeSats,
+        maxVictimNodes,
+        maxDownstreamNodes,
+        expandVictims: expanded,
+      });
+      const generation = ++loadGenerationRef.current;
+
+      const keyChanged = key !== lastGraphKeyRef.current;
+      const needsClear = keyChanged || opts?.skipCache === true;
+
+      const params = new URLSearchParams({
+        depth: "2",
+        min_edge_sats: String(minEdgeSats),
+        max_victims: String(maxVictimNodes),
+        max_downstream: String(maxDownstreamNodes),
+      });
+
+      if (victimSearch) {
+        params.set("victim", victimSearch);
+      } else {
+        params.set("hacker", hacker);
+        if (expanded) params.set("expand_victims", "1");
+      }
+
+      if (!opts?.skipCache) {
+        const cached = getCachedGraph<ApiGraphResponse>(key);
+        if (cached && generation === loadGenerationRef.current && needsClear) {
+          applyApiGraph(cached);
+          lastGraphKeyRef.current = key;
+        }
+      }
+
+      let graph: ApiGraphResponse;
+      try {
+        graph = await api<ApiGraphResponse>(`/api/graph?${params}`);
+      } catch (e) {
+        if (victimSearch) {
+          window.dispatchEvent(
+            new CustomEvent("cointrace-toast", { detail: "Address not found in hack data" }),
+          );
+        }
+        throw e;
+      }
+
+      if (generation !== loadGenerationRef.current) return;
+
+      setCachedGraph(key, graph);
+      applyApiGraph(graph);
+      lastGraphKeyRef.current = key;
+    },
+    [
+      hacker,
+      expandVictims,
+      minEdgeSats,
+      maxVictimNodes,
+      maxDownstreamNodes,
+      victimSearch,
+      applyApiGraph,
+    ],
   );
 
   useEffect(() => {
@@ -369,9 +446,9 @@ export function HackGraph({
 
   useEffect(() => {
     loadGraph().catch(console.error);
-    const iv = setInterval(() => loadGraph().catch(console.error), 30000);
+    const iv = setInterval(() => loadGraph().catch(console.error), graphPollMs);
     return () => clearInterval(iv);
-  }, [loadGraph]);
+  }, [loadGraph, graphPollMs]);
 
   useEffect(() => {
     const iv = setInterval(() => setCountdownTick((t) => t + 1), 1000);
@@ -415,8 +492,18 @@ export function HackGraph({
       }
     }
 
-    loadGraph().catch(console.error);
-  }, [queued, loadGraph]);
+    invalidateCachedGraph(
+      graphCacheKey({
+        hacker,
+        victimSearch,
+        minEdgeSats,
+        maxVictimNodes,
+        maxDownstreamNodes,
+        expandVictims,
+      }),
+    );
+    loadGraph({ skipCache: true }).catch(console.error);
+  }, [queued, loadGraph, hacker, victimSearch, minEdgeSats, maxVictimNodes, maxDownstreamNodes, expandVictims]);
 
   useEffect(() => {
     if (queued.length === 0) return;
@@ -446,6 +533,12 @@ export function HackGraph({
     target: `queued:${q.jobId}`,
     ...queuedEdgeDefaults,
   }));
+
+  const flowNodes = useMemo(() => [...nodes, ...queuedNodes], [nodes, queuedNodes]);
+  const flowEdges = useMemo(
+    () => filterEdgesToVisibleNodes(flowNodes, [...edges, ...queuedEdges]),
+    [flowNodes, edges, queuedEdges],
+  );
 
   const onNodeDragStop = useCallback((_: unknown, node: Node) => {
     positionsRef.current[node.id] = node.position;
@@ -480,8 +573,8 @@ export function HackGraph({
     <div className="graph-canvas">
       <div style={{ width: "100%", height: "100%" }}>
         <ReactFlow
-          nodes={[...nodes, ...queuedNodes]}
-          edges={[...edges, ...queuedEdges]}
+          nodes={flowNodes}
+          edges={flowEdges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           nodeTypes={nodeTypes}

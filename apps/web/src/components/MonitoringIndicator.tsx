@@ -41,12 +41,18 @@ function monitoringTooltip(sync: MonitoringSyncStatus) {
 interface MonitoringIndicatorProps {
   sync: MonitoringSyncStatus | null;
   onNavigateMonitoring: () => void;
+  rateLimitSecondsLeft?: number | null;
 }
 
-export function MonitoringIndicator({ sync, onNavigateMonitoring }: MonitoringIndicatorProps) {
+export function MonitoringIndicator({
+  sync,
+  onNavigateMonitoring,
+  rateLimitSecondsLeft = null,
+}: MonitoringIndicatorProps) {
   const active = sync?.monitoringActive !== false;
   const lastActivity = sync?.lastActivityAt;
   const thresholdExceeded = sync?.apiThresholdExceeded === true;
+  const showRateLimit = rateLimitSecondsLeft != null && rateLimitSecondsLeft > 0;
 
   return (
     <div className="monitoring-indicator">
@@ -76,6 +82,11 @@ export function MonitoringIndicator({ sync, onNavigateMonitoring }: MonitoringIn
       <div className="monitoring-updated">
         Last updated: {lastActivity ? formatLocal(lastActivity) : "—"}
       </div>
+      {showRateLimit && (
+        <div className="rate-limit-banner" role="status">
+          Rate limit active — too many requests. Try again in {rateLimitSecondsLeft}s.
+        </div>
+      )}
     </div>
   );
 }

@@ -86,3 +86,9 @@ CREATE TABLE IF NOT EXISTS scheduler_state (
 );
 
 INSERT OR IGNORE INTO scheduler_state (id, rate_limit_ms) VALUES (1, 3000);
+
+CREATE TABLE IF NOT EXISTS rate_limits (
+  key TEXT PRIMARY KEY,
+  window_start TEXT NOT NULL,
+  count INTEGER NOT NULL DEFAULT 0
+);

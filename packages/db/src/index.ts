@@ -138,6 +138,14 @@ export function runMigrations(sqlite: Database.Database): void {
   if (!syncCols.some((c) => c.name === "chain_tx_count_at_audit")) {
     sqlite.exec(`ALTER TABLE sync_state ADD COLUMN chain_tx_count_at_audit INTEGER`);
   }
+
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS rate_limits (
+      key TEXT PRIMARY KEY,
+      window_start TEXT NOT NULL,
+      count INTEGER NOT NULL DEFAULT 0
+    );
+  `);
 }
 
 export * from "./schema.js";
