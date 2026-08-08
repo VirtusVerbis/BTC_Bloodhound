@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, gt, gte, isNotNull, like, lte, ne, or, sql } from "drizzle-orm";
-import type { Db } from "./index.js";
+import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
+import * as schema from "./schema.js";
 import {
   addresses,
   edges,
@@ -11,12 +12,27 @@ import {
   type Edge,
 } from "./schema.js";
 
+/** Typed as better-sqlite3; D1 store casts at runtime (all terminators are awaited). */
+export type Db = BetterSQLite3Database<typeof schema>;
+
 const now = () => new Date().toISOString();
+
+function lastInsertId(result: { lastInsertRowid?: number | bigint; meta?: { last_row_id?: number } }): number {
+  if (result.lastInsertRowid != null) return Number(result.lastInsertRowid);
+  if (result.meta?.last_row_id != null) return Number(result.meta.last_row_id);
+  return 0;
+}
+
+function changesCount(result: { changes?: number; meta?: { changes?: number } }): number {
+  if (result.changes != null) return result.changes;
+  if (result.meta?.changes != null) return result.meta.changes;
+  return 0;
+}
 
 export class Store {
   constructor(public db: Db) {}
 
-  upsertAddress(data: {
+  async upsertAddress(data: {
     address: string;
     role?: string;
     label?: string | null;
@@ -28,14 +44,14 @@ export class Store {
     liveBalanceSats?: number | null;
     liveBalanceAt?: string | null;
   }) {
-    const existing = this.db.select().from(addresses).where(eq(addresses.address, data.address)).get();
+    const existing = await this.db.select().from(addresses).where(eq(addresses.address, data.address)).get();
     const ts = now();
     if (existing) {
       const role =
         existing.role === "hacker" && data.role === "victim"
           ? existing.role
           : data.role ?? existing.role;
-      this.db
+      await this.db
         .update(addresses)
         .set({
           role,
@@ -52,7 +68,7 @@ export class Store {
         .where(eq(addresses.address, data.address))
         .run();
     } else {
-      this.db
+      await this.db
         .insert(addresses)
         .values({
           address: data.address,
@@ -73,24 +89,24 @@ export class Store {
     }
   }
 
-  getAddress(address: string) {
-    return this.db.select().from(addresses).where(eq(addresses.address, address)).get();
+  async getAddress(address: string) {
+    return await this.db.select().from(addresses).where(eq(addresses.address, address)).get();
   }
 
-  listHackers(q?: string, activeOnly?: boolean) {
+  async listHackers(q?: string, activeOnly?: boolean) {
     const conditions = [eq(addresses.isFlaggedHacker, true)];
     if (activeOnly) conditions.push(gt(addresses.totalReceivedSats, 0));
     const base = and(...conditions);
     if (q?.trim()) {
       const pattern = `%${q.trim()}%`;
-      return this.db
+      return await this.db
         .select()
         .from(addresses)
         .where(and(base, or(like(addresses.address, pattern), like(addresses.label, pattern))))
         .orderBy(desc(addresses.totalReceivedSats))
         .all();
     }
-    return this.db
+    return await this.db
       .select()
       .from(addresses)
       .where(base)
@@ -98,7 +114,7 @@ export class Store {
       .all();
   }
 
-  upsertEdge(data: {
+  async upsertEdge(data: {
     fromAddress: string;
     toAddress: string;
     txid: string;
@@ -107,7 +123,7 @@ export class Store {
     hopFromHacker?: number | null;
     direction: string;
   }) {
-    const existing = this.db
+    const existing = await this.db
       .select()
       .from(edges)
       .where(
@@ -119,7 +135,7 @@ export class Store {
       )
       .get();
     if (existing) {
-      this.db
+      await this.db
         .update(edges)
         .set({
           amountSats: data.amountSats,
@@ -130,51 +146,51 @@ export class Store {
         .where(eq(edges.id, existing.id))
         .run();
     } else {
-      this.db.insert(edges).values(data).run();
+      await this.db.insert(edges).values(data).run();
     }
     if (data.direction === "in_to_hacker") {
-      this.recalcTotalReceived(data.toAddress);
+      await this.recalcTotalReceived(data.toAddress);
     }
   }
 
-  recalcTotalReceived(hackerAddress: string) {
-    const row = this.db
+  async recalcTotalReceived(hackerAddress: string) {
+    const row = await this.db
       .select({ total: sql<number>`coalesce(sum(${edges.amountSats}), 0)` })
       .from(edges)
       .where(and(eq(edges.toAddress, hackerAddress), eq(edges.direction, "in_to_hacker")))
       .get();
-    this.db
+    await this.db
       .update(addresses)
       .set({ totalReceivedSats: row?.total ?? 0 })
       .where(eq(addresses.address, hackerAddress))
       .run();
   }
 
-  recalcAllTotalReceived() {
-    for (const hacker of this.listHackers()) {
-      this.recalcTotalReceived(hacker.address);
+  async recalcAllTotalReceived() {
+    for (const hacker of await this.listHackers()) {
+      await this.recalcTotalReceived(hacker.address);
     }
   }
 
-  deleteHackTraceEdges() {
-    this.db
+  async deleteHackTraceEdges() {
+    await this.db
       .delete(edges)
       .where(or(eq(edges.direction, "in_to_hacker"), eq(edges.direction, "out_from_hacker")))
       .run();
   }
 
-  listIndexedTxids() {
-    return this.db.select({ txid: transactions.txid }).from(transactions).all().map((r) => r.txid);
+  async listIndexedTxids() {
+    return (await this.db.select({ txid: transactions.txid }).from(transactions).all()).map((r) => r.txid);
   }
 
-  resetHackerTotalReceived() {
-    this.db.update(addresses).set({ totalReceivedSats: 0 }).where(eq(addresses.isFlaggedHacker, true)).run();
+  async resetHackerTotalReceived() {
+    await this.db.update(addresses).set({ totalReceivedSats: 0 }).where(eq(addresses.isFlaggedHacker, true)).run();
   }
 
-  upsertTransaction(data: { txid: string; blockHeight?: number | null; blockTime?: string | null; feeSats?: number | null }) {
-    const existing = this.db.select().from(transactions).where(eq(transactions.txid, data.txid)).get();
+  async upsertTransaction(data: { txid: string; blockHeight?: number | null; blockTime?: string | null; feeSats?: number | null }) {
+    const existing = await this.db.select().from(transactions).where(eq(transactions.txid, data.txid)).get();
     if (existing) {
-      this.db
+      await this.db
         .update(transactions)
         .set({
           blockHeight: data.blockHeight ?? existing.blockHeight,
@@ -184,36 +200,36 @@ export class Store {
         .where(eq(transactions.txid, data.txid))
         .run();
     } else {
-      this.db.insert(transactions).values(data).run();
+      await this.db.insert(transactions).values(data).run();
     }
   }
 
-  getEdgesForHacker(hacker: string) {
-    return this.db
+  async getEdgesForHacker(hacker: string) {
+    return await this.db
       .select()
       .from(edges)
       .where(or(eq(edges.fromAddress, hacker), eq(edges.toAddress, hacker)))
       .all();
   }
 
-  getEdgesToAddress(address: string) {
-    return this.db.select().from(edges).where(eq(edges.toAddress, address)).all();
+  async getEdgesToAddress(address: string) {
+    return await this.db.select().from(edges).where(eq(edges.toAddress, address)).all();
   }
 
-  getEdgesFromAddress(address: string) {
-    return this.db.select().from(edges).where(eq(edges.fromAddress, address)).all();
+  async getEdgesFromAddress(address: string) {
+    return await this.db.select().from(edges).where(eq(edges.fromAddress, address)).all();
   }
 
-  getTransaction(txid: string) {
-    return this.db.select().from(transactions).where(eq(transactions.txid, txid)).get();
+  async getTransaction(txid: string) {
+    return await this.db.select().from(transactions).where(eq(transactions.txid, txid)).get();
   }
 
-  getVictimStats(hacker: string, minEdgeSats?: number) {
+  async getVictimStats(hacker: string, minEdgeSats?: number) {
     const conditions = [eq(edges.toAddress, hacker), eq(edges.direction, "in_to_hacker")];
     if (minEdgeSats != null) {
       conditions.push(gte(edges.amountSats, minEdgeSats));
     }
-    const row = this.db
+    const row = await this.db
       .select({
         count: sql<number>`count(distinct ${edges.fromAddress})`,
         total: sql<number>`coalesce(sum(${edges.amountSats}), 0)`,
@@ -224,8 +240,8 @@ export class Store {
     return { childCount: row?.count ?? 0, totalSats: row?.total ?? 0 };
   }
 
-  listVictimsForHacker(hacker: string, limit = 100) {
-    return this.db
+  async listVictimsForHacker(hacker: string, limit = 100) {
+    return await this.db
       .select({
         address: edges.fromAddress,
         amountSats: edges.amountSats,
@@ -239,8 +255,8 @@ export class Store {
       .all();
   }
 
-  getBlockTimeByHeight(blockHeight: number) {
-    const row = this.db
+  async getBlockTimeByHeight(blockHeight: number) {
+    const row = await this.db
       .select({ blockTime: transactions.blockTime })
       .from(transactions)
       .where(and(eq(transactions.blockHeight, blockHeight), isNotNull(transactions.blockTime)))
@@ -249,21 +265,24 @@ export class Store {
     return row?.blockTime ?? null;
   }
 
-  resolveHackTiming(edgeList: Edge[]) {
+  async resolveHackTiming(edgeList: Edge[]) {
     type Candidate = {
       txid: string;
       sortHeight: number | null;
       sortTime: string | null;
     };
 
-    const candidates: Candidate[] = edgeList.map((e) => {
-      const tx = this.getTransaction(e.txid);
-      return {
-        txid: e.txid,
-        sortHeight: tx?.blockHeight ?? null,
-        sortTime: tx?.blockTime ?? e.blockTime ?? null,
-      };
-    }).filter((c) => c.sortHeight != null || c.sortTime);
+    const candidates: Candidate[] = [];
+    for (const e of edgeList) {
+      const tx = await this.getTransaction(e.txid);
+      if (tx?.blockHeight != null || tx?.blockTime != null || e.blockTime) {
+        candidates.push({
+          txid: e.txid,
+          sortHeight: tx?.blockHeight ?? null,
+          sortTime: tx?.blockTime ?? e.blockTime ?? null,
+        });
+      }
+    }
 
     if (candidates.length === 0) {
       return { hackOccurredAt: null as string | null, hackBlockHeight: null as number | null };
@@ -277,40 +296,40 @@ export class Store {
     });
 
     const earliest = candidates[0]!;
-    const tx = this.getTransaction(earliest.txid);
+    const tx = await this.getTransaction(earliest.txid);
     const hackBlockHeight = tx?.blockHeight ?? earliest.sortHeight ?? null;
     let hackOccurredAt = tx?.blockTime ?? earliest.sortTime ?? null;
     if (!hackOccurredAt && hackBlockHeight != null) {
-      hackOccurredAt = this.getBlockTimeByHeight(hackBlockHeight);
+      hackOccurredAt = await this.getBlockTimeByHeight(hackBlockHeight);
     }
 
     return { hackOccurredAt, hackBlockHeight };
   }
 
-  getAddressDetail(address: string) {
-    const addr = this.getAddress(address);
+  async getAddressDetail(address: string) {
+    const addr = await this.getAddress(address);
     if (!addr) return null;
-    const incoming = this.getEdgesToAddress(address);
-    const outgoing = this.getEdgesFromAddress(address);
+    const incoming = await this.getEdgesToAddress(address);
+    const outgoing = await this.getEdgesFromAddress(address);
     const allEdges = [...incoming, ...outgoing];
-    const relatedTxs = allEdges
-      .map((e) => {
-        const tx = this.getTransaction(e.txid);
-        return {
-          txid: e.txid,
-          blockTime: tx?.blockTime ?? e.blockTime ?? null,
-          amountSats: e.amountSats,
-          direction: e.fromAddress === address ? "out" : "in",
-          counterparty: e.fromAddress === address ? e.toAddress : e.fromAddress,
-        };
-      })
-      .sort((a, b) => (b.blockTime ?? "").localeCompare(a.blockTime ?? ""));
+    const relatedTxs = [];
+    for (const e of allEdges) {
+      const tx = await this.getTransaction(e.txid);
+      relatedTxs.push({
+        txid: e.txid,
+        blockTime: tx?.blockTime ?? e.blockTime ?? null,
+        amountSats: e.amountSats,
+        direction: e.fromAddress === address ? "out" : "in",
+        counterparty: e.fromAddress === address ? e.toAddress : e.fromAddress,
+      });
+    }
+    relatedTxs.sort((a, b) => (b.blockTime ?? "").localeCompare(a.blockTime ?? ""));
     const totalSent = outgoing.reduce((s, e) => s + e.amountSats, 0);
-    const { hackOccurredAt, hackBlockHeight } = this.resolveHackTiming(allEdges);
+    const { hackOccurredAt, hackBlockHeight } = await this.resolveHackTiming(allEdges);
     return { address: addr, totalSent, relatedTxs, hackOccurredAt, hackBlockHeight };
   }
 
-  listHackersForVictim(victim: string, minEdgeSats?: number) {
+  async listHackersForVictim(victim: string, minEdgeSats?: number) {
     const conditions = [
       eq(edges.fromAddress, victim),
       eq(edges.direction, "in_to_hacker"),
@@ -318,7 +337,7 @@ export class Store {
     if (minEdgeSats != null) {
       conditions.push(gte(edges.amountSats, minEdgeSats));
     }
-    const rows = this.db
+    const rows = await this.db
       .select({
         hackerAddress: edges.toAddress,
         amountSats: edges.amountSats,
@@ -344,7 +363,7 @@ export class Store {
     for (const row of rows) {
       let entry = byHacker.get(row.hackerAddress);
       if (!entry) {
-        const hacker = this.getAddress(row.hackerAddress);
+        const hacker = await this.getAddress(row.hackerAddress);
         entry = {
           address: row.hackerAddress,
           label: hacker?.label ?? null,
@@ -364,8 +383,8 @@ export class Store {
     return [...byHacker.values()].sort((a, b) => b.totalSats - a.totalSats);
   }
 
-  enqueueJob(type: string, payload: Record<string, unknown>, priority: number, runAfter?: string) {
-    const result = this.db
+  async enqueueJob(type: string, payload: Record<string, unknown>, priority: number, runAfter?: string) {
+    const result = await this.db
       .insert(jobs)
       .values({
         type,
@@ -376,11 +395,11 @@ export class Store {
         createdAt: now(),
       })
       .run();
-    return Number(result.lastInsertRowid);
+    return lastInsertId(result as { lastInsertRowid?: number | bigint; meta?: { last_row_id?: number } });
   }
 
-  countActiveJobs(type: string) {
-    const row = this.db
+  async countActiveJobs(type: string) {
+    const row = await this.db
       .select({ count: sql<number>`count(*)` })
       .from(jobs)
       .where(
@@ -393,15 +412,15 @@ export class Store {
     return row?.count ?? 0;
   }
 
-  hasPendingJob(type: string, address?: string) {
+  async hasPendingJob(type: string, address?: string) {
     if (!address) {
-      return !!this.db
+      return !!(await this.db
         .select()
         .from(jobs)
         .where(and(eq(jobs.type, type), or(eq(jobs.status, "pending"), eq(jobs.status, "running"))))
-        .get();
+        .get());
     }
-    const pending = this.db
+    const pending = await this.db
       .select()
       .from(jobs)
       .where(
@@ -415,9 +434,9 @@ export class Store {
     return !!pending;
   }
 
-  claimNextJob() {
+  async claimNextJob() {
     const ts = now();
-    const job = this.db
+    const job = await this.db
       .select()
       .from(jobs)
       .where(and(eq(jobs.status, "pending"), lte(jobs.runAfter, ts)))
@@ -425,17 +444,25 @@ export class Store {
       .limit(1)
       .get();
     if (!job) return null;
-    this.db.update(jobs).set({ status: "running" }).where(eq(jobs.id, job.id)).run();
-    return job;
+    // Claim only if still pending (avoids double-claim under overlapping cron ticks).
+    const claimed = await this.db
+      .update(jobs)
+      .set({ status: "running" })
+      .where(and(eq(jobs.id, job.id), eq(jobs.status, "pending")))
+      .run();
+    if (changesCount(claimed as { changes?: number; meta?: { changes?: number } }) === 0) {
+      return null;
+    }
+    return { ...job, status: "running" as const };
   }
 
-  completeJob(id: number) {
-    this.db.update(jobs).set({ status: "done", lastError: null }).where(eq(jobs.id, id)).run();
+  async completeJob(id: number) {
+    await this.db.update(jobs).set({ status: "done", lastError: null }).where(eq(jobs.id, id)).run();
   }
 
-  failJob(id: number, error: string, runAfter?: string) {
-    const job = this.db.select().from(jobs).where(eq(jobs.id, id)).get();
-    this.db
+  async failJob(id: number, error: string, runAfter?: string) {
+    const job = await this.db.select().from(jobs).where(eq(jobs.id, id)).get();
+    await this.db
       .update(jobs)
       .set({
         status: "pending",
@@ -447,21 +474,21 @@ export class Store {
       .run();
   }
 
-  resetRunningJobs(): number {
-    const result = this.db
+  async resetRunningJobs(): Promise<number> {
+    const result = await this.db
       .update(jobs)
       .set({ status: "pending" })
       .where(eq(jobs.status, "running"))
       .run();
-    return result.changes;
+    return changesCount(result as { changes?: number; meta?: { changes?: number } });
   }
 
-  getJob(id: number) {
-    return this.db.select().from(jobs).where(eq(jobs.id, id)).get();
+  async getJob(id: number) {
+    return await this.db.select().from(jobs).where(eq(jobs.id, id)).get();
   }
 
-  countPendingJobsBefore(priority: number, runAfter: string) {
-    const row = this.db
+  async countPendingJobsBefore(priority: number, runAfter: string) {
+    const row = await this.db
       .select({ count: sql<number>`count(*)` })
       .from(jobs)
       .where(
@@ -474,8 +501,8 @@ export class Store {
     return row?.count ?? 0;
   }
 
-  getQueueDepth() {
-    const row = this.db
+  async getQueueDepth() {
+    const row = await this.db
       .select({ count: sql<number>`count(*)` })
       .from(jobs)
       .where(eq(jobs.status, "pending"))
@@ -483,11 +510,11 @@ export class Store {
     return row?.count ?? 0;
   }
 
-  getSchedulerState() {
-    return this.db.select().from(schedulerState).where(eq(schedulerState.id, 1)).get();
+  async getSchedulerState() {
+    return await this.db.select().from(schedulerState).where(eq(schedulerState.id, 1)).get();
   }
 
-  updateSchedulerState(data: {
+  async updateSchedulerState(data: {
     nextProviderCallAt?: string;
     lastProviderUsed?: string;
     lastProviderSuccessAt?: string;
@@ -498,26 +525,26 @@ export class Store {
     btcUsdPrice?: number;
     btcUsdPriceAt?: string;
   }) {
-    this.db
+    await this.db
       .update(schedulerState)
       .set(data)
       .where(eq(schedulerState.id, 1))
       .run();
   }
 
-  setBtcUsdPrice(usd: number, at: string) {
-    this.updateSchedulerState({ btcUsdPrice: usd, btcUsdPriceAt: at });
+  async setBtcUsdPrice(usd: number, at: string) {
+    await this.updateSchedulerState({ btcUsdPrice: usd, btcUsdPriceAt: at });
   }
 
-  getBtcUsdPrice(): { usd: number; at: string } | null {
-    const state = this.getSchedulerState();
+  async getBtcUsdPrice(): Promise<{ usd: number; at: string } | null> {
+    const state = await this.getSchedulerState();
     if (state?.btcUsdPrice == null || !state.btcUsdPriceAt) return null;
     return { usd: state.btcUsdPrice, at: state.btcUsdPriceAt };
   }
 
-  recordApiThreshold() {
-    const state = this.getSchedulerState();
-    this.db
+  async recordApiThreshold() {
+    const state = await this.getSchedulerState();
+    await this.db
       .update(schedulerState)
       .set({
         lastApiThresholdAt: now(),
@@ -527,15 +554,15 @@ export class Store {
       .run();
   }
 
-  getSyncState(address: string) {
-    return this.db.select().from(syncState).where(eq(syncState.address, address)).get();
+  async getSyncState(address: string) {
+    return await this.db.select().from(syncState).where(eq(syncState.address, address)).get();
   }
 
-  upsertSyncState(address: string, data: { lastSeenTxid?: string; lastBlockHeight?: number | null }) {
-    const existing = this.getSyncState(address);
+  async upsertSyncState(address: string, data: { lastSeenTxid?: string; lastBlockHeight?: number | null }) {
+    const existing = await this.getSyncState(address);
     const ts = now();
     if (existing) {
-      this.db
+      await this.db
         .update(syncState)
         .set({
           lastSeenTxid: data.lastSeenTxid ?? existing.lastSeenTxid,
@@ -545,7 +572,7 @@ export class Store {
         .where(eq(syncState.address, address))
         .run();
     } else {
-      this.db
+      await this.db
         .insert(syncState)
         .values({
           address,
@@ -557,8 +584,8 @@ export class Store {
     }
   }
 
-  countIndexedTxsForHacker(address: string): number {
-    const row = this.db
+  async countIndexedTxsForHacker(address: string): Promise<number> {
+    const row = await this.db
       .select({ count: sql<number>`count(distinct ${edges.txid})` })
       .from(edges)
       .where(or(eq(edges.toAddress, address), eq(edges.fromAddress, address)))
@@ -566,8 +593,8 @@ export class Store {
     return row?.count ?? 0;
   }
 
-  getBackfillState(address: string) {
-    const row = this.getSyncState(address);
+  async getBackfillState(address: string) {
+    const row = await this.getSyncState(address);
     if (!row) return null;
     let payload: Record<string, unknown> | null = null;
     if (row.backfillStateJson) {
@@ -585,12 +612,12 @@ export class Store {
     };
   }
 
-  upsertBackfillState(
+  async upsertBackfillState(
     address: string,
     payload: Record<string, unknown> | null,
     complete?: boolean,
   ) {
-    const existing = this.getSyncState(address);
+    const existing = await this.getSyncState(address);
     const patch: {
       backfillStateJson?: string | null;
       backfillComplete?: number;
@@ -603,9 +630,9 @@ export class Store {
       if (complete === false) patch.backfillComplete = 0;
     }
     if (existing) {
-      this.db.update(syncState).set(patch).where(eq(syncState.address, address)).run();
+      await this.db.update(syncState).set(patch).where(eq(syncState.address, address)).run();
     } else {
-      this.db
+      await this.db
         .insert(syncState)
         .values({
           address,
@@ -616,11 +643,11 @@ export class Store {
     }
   }
 
-  updateBackfillAudit(address: string, chainTxCount: number) {
-    const existing = this.getSyncState(address);
+  async updateBackfillAudit(address: string, chainTxCount: number) {
+    const existing = await this.getSyncState(address);
     const ts = now();
     if (existing) {
-      this.db
+      await this.db
         .update(syncState)
         .set({
           lastBackfillAuditAt: ts,
@@ -629,7 +656,7 @@ export class Store {
         .where(eq(syncState.address, address))
         .run();
     } else {
-      this.db
+      await this.db
         .insert(syncState)
         .values({
           address,
@@ -641,44 +668,44 @@ export class Store {
     }
   }
 
-  getBackfillHealAuditIndex(): number {
-    return this.getSchedulerState()?.backfillHealAuditIndex ?? 0;
+  async getBackfillHealAuditIndex(): Promise<number> {
+    return (await this.getSchedulerState())?.backfillHealAuditIndex ?? 0;
   }
 
-  setBackfillHealAuditIndex(index: number) {
-    this.updateSchedulerState({ backfillHealAuditIndex: index });
+  async setBackfillHealAuditIndex(index: number) {
+    await this.updateSchedulerState({ backfillHealAuditIndex: index });
   }
 
-  getSourceSync(source: string) {
-    return this.db.select().from(sourceSyncState).where(eq(sourceSyncState.source, source)).get();
+  async getSourceSync(source: string) {
+    return await this.db.select().from(sourceSyncState).where(eq(sourceSyncState.source, source)).get();
   }
 
-  upsertSourceSync(source: string, data: { lastAddressCount?: number; lastContentHash?: string }) {
+  async upsertSourceSync(source: string, data: { lastAddressCount?: number; lastContentHash?: string }) {
     const ts = now();
-    const existing = this.getSourceSync(source);
+    const existing = await this.getSourceSync(source);
     if (existing) {
-      this.db
+      await this.db
         .update(sourceSyncState)
         .set({ lastSyncAt: ts, ...data })
         .where(eq(sourceSyncState.source, source))
         .run();
     } else {
-      this.db.insert(sourceSyncState).values({ source, lastSyncAt: ts, ...data }).run();
+      await this.db.insert(sourceSyncState).values({ source, lastSyncAt: ts, ...data }).run();
     }
   }
 
-  getCrawlStats() {
-    const pending = this.db
+  async getCrawlStats() {
+    const pending = await this.db
       .select({ count: sql<number>`count(*)` })
       .from(addresses)
       .where(and(eq(addresses.expandStatus, "pending"), or(eq(addresses.role, "downstream"), eq(addresses.role, "hacker"))))
       .get();
-    const expanded = this.db
+    const expanded = await this.db
       .select({ count: sql<number>`count(*)` })
       .from(addresses)
       .where(eq(addresses.expandStatus, "expanded"))
       .get();
-    const maxHop = this.db
+    const maxHop = await this.db
       .select({ max: sql<number>`max(${addresses.hopFromHacker})` })
       .from(addresses)
       .where(eq(addresses.role, "downstream"))
@@ -690,8 +717,8 @@ export class Store {
     };
   }
 
-  getDownstreamFrontier(limit: number, maxDepth: number) {
-    return this.db
+  async getDownstreamFrontier(limit: number, maxDepth: number) {
+    return await this.db
       .select({ address: addresses.address })
       .from(addresses)
       .where(
@@ -706,9 +733,9 @@ export class Store {
       .all();
   }
 
-  listDownstreamForPoll(limit: number, maxDepth: number, minIntervalSec: number) {
+  async listDownstreamForPoll(limit: number, maxDepth: number, minIntervalSec: number) {
     const cutoff = new Date(Date.now() - minIntervalSec * 1000).toISOString();
-    return this.db
+    return await this.db
       .select({ address: addresses.address })
       .from(addresses)
       .leftJoin(syncState, eq(addresses.address, syncState.address))
@@ -725,8 +752,8 @@ export class Store {
       .all();
   }
 
-  countDownstreamTreeNodes(maxDepth: number) {
-    const row = this.db
+  async countDownstreamTreeNodes(maxDepth: number) {
+    const row = await this.db
       .select({ count: sql<number>`count(*)` })
       .from(addresses)
       .where(and(eq(addresses.role, "downstream"), sql`${addresses.hopFromHacker} < ${maxDepth}`))
@@ -734,9 +761,9 @@ export class Store {
     return row?.count ?? 0;
   }
 
-  countDownstreamPollDue(maxDepth: number, minIntervalSec: number) {
+  async countDownstreamPollDue(maxDepth: number, minIntervalSec: number) {
     const cutoff = new Date(Date.now() - minIntervalSec * 1000).toISOString();
-    const row = this.db
+    const row = await this.db
       .select({ count: sql<number>`count(*)` })
       .from(addresses)
       .leftJoin(syncState, eq(addresses.address, syncState.address))
@@ -752,23 +779,23 @@ export class Store {
     return row?.count ?? 0;
   }
 
-  getDownstreamMonitorStats(maxDepth: number, minIntervalSec: number) {
+  async getDownstreamMonitorStats(maxDepth: number, minIntervalSec: number) {
     return {
-      treeNodeCount: this.countDownstreamTreeNodes(maxDepth),
-      downstreamPollDueCount: this.countDownstreamPollDue(maxDepth, minIntervalSec),
+      treeNodeCount: await this.countDownstreamTreeNodes(maxDepth),
+      downstreamPollDueCount: await this.countDownstreamPollDue(maxDepth, minIntervalSec),
     };
   }
 
-  setExpandStatus(address: string, status: string) {
-    this.db
+  async setExpandStatus(address: string, status: string) {
+    await this.db
       .update(addresses)
       .set({ expandStatus: status, lastExpandedAt: now() })
       .where(eq(addresses.address, address))
       .run();
   }
 
-  getMonitoringStatus(staleSec: number, thresholdCooldownSec: number) {
-    const scheduler = this.getSchedulerState();
+  async getMonitoringStatus(staleSec: number, thresholdCooldownSec: number) {
+    const scheduler = await this.getSchedulerState();
     const lastChainApiAt = scheduler?.lastProviderSuccessAt ?? null;
     const lastApiThresholdAt = scheduler?.lastApiThresholdAt ?? null;
     const apiThresholdCount = scheduler?.apiThresholdCount ?? 0;
@@ -776,7 +803,7 @@ export class Store {
       lastApiThresholdAt != null &&
       Date.now() - new Date(lastApiThresholdAt).getTime() <= thresholdCooldownSec * 1000;
 
-    const sources = this.db.select().from(sourceSyncState).all();
+    const sources = await this.db.select().from(sourceSyncState).all();
     const externalSources = sources.map((s) => ({
       source: s.source,
       lastSyncAt: s.lastSyncAt ?? null,
@@ -791,7 +818,7 @@ export class Store {
       }
     }
 
-    const lastJob = this.db
+    const lastJob = await this.db
       .select()
       .from(jobs)
       .where(ne(jobs.status, "pending"))
@@ -821,35 +848,35 @@ export class Store {
     };
   }
 
-  getStats() {
-    const victims = this.db
+  async getStats() {
+    const victims = await this.db
       .select({ count: sql<number>`count(*)` })
       .from(addresses)
       .where(eq(addresses.role, "victim"))
       .get();
-    const hackers = this.db
+    const hackers = await this.db
       .select({ count: sql<number>`count(*)` })
       .from(addresses)
       .where(and(eq(addresses.isFlaggedHacker, true), gt(addresses.totalReceivedSats, 0)))
       .get();
-    const totalIn = this.db
+    const totalIn = await this.db
       .select({ total: sql<number>`coalesce(sum(${edges.amountSats}), 0)` })
       .from(edges)
       .where(eq(edges.direction, "in_to_hacker"))
       .get();
-    const totalOut = this.db
+    const totalOut = await this.db
       .select({ total: sql<number>`coalesce(sum(${edges.amountSats}), 0)` })
       .from(edges)
       .where(eq(edges.direction, "out_from_hacker"))
       .get();
-    const lastJob = this.db
+    const lastJob = await this.db
       .select()
       .from(jobs)
       .where(ne(jobs.status, "pending"))
       .orderBy(desc(jobs.id))
       .limit(1)
       .get();
-    const scheduler = this.getSchedulerState();
+    const scheduler = await this.getSchedulerState();
     return {
       victimCount: victims?.count ?? 0,
       hackerCount: hackers?.count ?? 0,

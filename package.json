@@ -6,7 +6,18 @@
     "dev:api": "pnpm --filter @cointrace/api dev",
     "dev:web": "pnpm --filter @cointrace/web dev",
     "indexer": "pnpm --filter @cointrace/indexer start",
-    "db:migrate": "pnpm --filter @cointrace/db migrate"
+    "db:migrate": "pnpm --filter @cointrace/db migrate",
+    "db:d1:migrate": "wrangler d1 migrations apply cointrace --local",
+    "db:d1:migrate:remote": "wrangler d1 migrations apply cointrace --remote",
+    "db:push-d1": "node scripts/sqlite-to-d1.mjs --local --clear",
+    "db:push-d1:remote": "node scripts/sqlite-to-d1.mjs --remote --clear",
+    "cf:build": "pnpm -r run build && pnpm --filter @cointrace/web build",
+    "cf:dev": "pnpm cf:build && wrangler dev",
+    "cf:deploy": "pnpm cf:build && wrangler deploy"
+  },
+  "devDependencies": {
+    "better-sqlite3": "^11.7.0",
+    "wrangler": "^4.14.0"
   },
   "engines": {
     "node": ">=20"

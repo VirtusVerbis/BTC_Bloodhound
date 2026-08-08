@@ -2,29 +2,53 @@ import { EsploraProvider, getAddressTxsAll, isRateLimitError, MempoolProvider } 
 import type { ChainProvider, ChainTxSummary } from "./types.js";
 import type { Store } from "@cointrace/db";
 
+/** Thrown when rate limit window is not ready and sleeping is disabled (Workers). */
+export class RateLimitNotReadyError extends Error {
+  readonly retryAt: string;
+
+  constructor(retryAt: string) {
+    super(`Rate limit not ready until ${retryAt}`);
+    this.name = "RateLimitNotReadyError";
+    this.retryAt = retryAt;
+  }
+}
+
+export interface ChainRouterOptions {
+  /** When false, throw RateLimitNotReadyError instead of sleeping (Cloudflare Workers). Default true. */
+  sleepOnRateLimit?: boolean;
+}
+
 export class ChainRouter {
   private providers: ChainProvider[];
   private index = 0;
+  private sleepOnRateLimit: boolean;
 
   constructor(
     esploraBase: string,
     mempoolBase: string,
     private store: Store,
     private rateLimitMs: number,
+    options?: ChainRouterOptions,
   ) {
     this.providers = [new EsploraProvider(esploraBase), new MempoolProvider(mempoolBase)];
+    this.sleepOnRateLimit = options?.sleepOnRateLimit ?? true;
   }
 
   private async waitForRateLimit(): Promise<void> {
-    const state = this.store.getSchedulerState();
-    const nextAt = state?.nextProviderCallAt ? new Date(state.nextProviderCallAt).getTime() : 0;
+    const state = await this.store.getSchedulerState();
+    const nextAtIso = state?.nextProviderCallAt ?? null;
+    const nextAt = nextAtIso ? new Date(nextAtIso).getTime() : 0;
     const wait = Math.max(0, nextAt - Date.now());
-    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    if (wait <= 0) return;
+    if (!this.sleepOnRateLimit) {
+      throw new RateLimitNotReadyError(nextAtIso ?? new Date(Date.now() + wait).toISOString());
+    }
+    await new Promise((r) => setTimeout(r, wait));
   }
 
-  private markCalled(providerName: string, success: boolean) {
+  private async markCalled(providerName: string, success: boolean) {
     const next = new Date(Date.now() + this.rateLimitMs).toISOString();
-    this.store.updateSchedulerState({
+    await this.store.updateSchedulerState({
       nextProviderCallAt: next,
       lastProviderUsed: providerName,
       rateLimitMs: this.rateLimitMs,
@@ -39,12 +63,12 @@ export class ChainRouter {
     this.index = (this.index + 1) % this.providers.length;
     try {
       const result = await fn(provider);
-      this.markCalled(provider.name, true);
+      await this.markCalled(provider.name, true);
       return result;
     } catch (err) {
-      this.markCalled(provider.name, false);
+      await this.markCalled(provider.name, false);
       if (isRateLimitError(err)) {
-        this.store.recordApiThreshold();
+        await this.store.recordApiThreshold();
       }
       throw err;
     }

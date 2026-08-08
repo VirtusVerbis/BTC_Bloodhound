@@ -4,14 +4,12 @@ import { openDatabase, runMigrations, Store } from "@cointrace/db";
 import {
   ChainRouter,
   loadConfig,
-  processJobs,
+  runIndexerTick,
   runLoadLocalWatchlist,
   runReBackfillHackers,
   runRebuildHackEdges,
   runRebuildHackEdgesWait,
   runSeedPublicHackers,
-  scheduleDownstreamCrawl,
-  scheduleBtcUsdPriceRefresh,
 } from "@cointrace/core";
 
 const config = loadConfig();
@@ -26,12 +24,12 @@ const cmd = process.argv[2] ?? "run";
 
 async function main() {
   if (cmd === "seed") {
-    await runSeedPublicHackers(store, config.seedFilePath);
+    await runSeedPublicHackers(store, config.seedFilePath, config.seedDataJson);
     console.log("Seed complete");
     return;
   }
   if (cmd === "load-local") {
-    await runLoadLocalWatchlist(store, config.localWatchlistPath);
+    await runLoadLocalWatchlist(store, config.localWatchlistPath, config.localWatchlistDataJson);
     console.log("Local watchlist loaded");
     return;
   }
@@ -43,7 +41,7 @@ async function main() {
   if (cmd === "rebuild-hack-edges") {
     const wait = process.argv.includes("--wait");
     if (wait) {
-      const reclaimed = store.resetRunningJobs();
+      const reclaimed = await store.resetRunningJobs();
       if (reclaimed > 0) {
         console.log(`Reclaimed ${reclaimed} orphaned running job(s) to pending`);
       }
@@ -56,7 +54,7 @@ async function main() {
     return;
   }
   if (cmd === "run") {
-    const reclaimed = store.resetRunningJobs();
+    const reclaimed = await store.resetRunningJobs();
     if (reclaimed > 0) {
       console.log(`Reclaimed ${reclaimed} orphaned running job(s) to pending`);
     }
@@ -64,13 +62,10 @@ async function main() {
     let lastCron = 0;
     while (true) {
       const now = Date.now();
-      if (now - lastCron >= config.cronIntervalSec * 1000) {
-        scheduleBtcUsdPriceRefresh(store, config);
-        scheduleDownstreamCrawl(store, config);
-        lastCron = now;
-      }
-      const n = await processJobs(store, router, config);
-      if (n === 0) await new Promise((r) => setTimeout(r, 1000));
+      const due = now - lastCron >= config.cronIntervalSec * 1000;
+      const { jobsProcessed } = await runIndexerTick(store, router, config, { schedule: due });
+      if (due) lastCron = now;
+      if (jobsProcessed === 0) await new Promise((r) => setTimeout(r, 1000));
     }
   }
   console.error("Unknown command:", cmd);

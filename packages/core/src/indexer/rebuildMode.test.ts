@@ -44,42 +44,42 @@ function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
 
 function mockStore(overrides: Partial<Store> = {}): Store {
   return {
-    countActiveJobs: vi.fn().mockReturnValue(0),
+    countActiveJobs: vi.fn().mockResolvedValue(0),
     ...overrides,
   } as unknown as Store;
 }
 
 describe("isRebuildActive", () => {
-  it("returns false when no process_tx jobs and env flag off", () => {
-    const store = mockStore({ countActiveJobs: vi.fn().mockReturnValue(0) });
-    expect(isRebuildActive(store, baseConfig())).toBe(false);
+  it("returns false when no process_tx jobs and env flag off", async () => {
+    const store = mockStore({ countActiveJobs: vi.fn().mockResolvedValue(0) });
+    expect(await isRebuildActive(store, baseConfig())).toBe(false);
   });
 
-  it("returns true when process_tx jobs are active", () => {
-    const store = mockStore({ countActiveJobs: vi.fn().mockReturnValue(3) });
-    expect(isRebuildActive(store, baseConfig())).toBe(true);
+  it("returns true when process_tx jobs are active", async () => {
+    const store = mockStore({ countActiveJobs: vi.fn().mockResolvedValue(3) });
+    expect(await isRebuildActive(store, baseConfig())).toBe(true);
     expect(store.countActiveJobs).toHaveBeenCalledWith("process_tx");
   });
 
-  it("returns true when INDEXER_REBUILD_MODE is set", () => {
-    const store = mockStore({ countActiveJobs: vi.fn().mockReturnValue(0) });
-    expect(isRebuildActive(store, baseConfig({ indexerRebuildMode: true }))).toBe(true);
+  it("returns true when INDEXER_REBUILD_MODE is set", async () => {
+    const store = mockStore({ countActiveJobs: vi.fn().mockResolvedValue(0) });
+    expect(await isRebuildActive(store, baseConfig({ indexerRebuildMode: true }))).toBe(true);
   });
 });
 
 describe("processTxPriority", () => {
-  it("returns normal priority when rebuild inactive", () => {
-    const store = mockStore({ countActiveJobs: vi.fn().mockReturnValue(0) });
-    expect(processTxPriority(store, baseConfig())).toBe(JOB_PRIORITY.PROCESS_TX);
+  it("returns normal priority when rebuild inactive", async () => {
+    const store = mockStore({ countActiveJobs: vi.fn().mockResolvedValue(0) });
+    expect(await processTxPriority(store, baseConfig())).toBe(JOB_PRIORITY.PROCESS_TX);
   });
 
-  it("returns elevated priority when rebuild active", () => {
-    const store = mockStore({ countActiveJobs: vi.fn().mockReturnValue(1) });
-    expect(processTxPriority(store, baseConfig())).toBe(JOB_PRIORITY.PROCESS_TX_REBUILD);
+  it("returns elevated priority when rebuild active", async () => {
+    const store = mockStore({ countActiveJobs: vi.fn().mockResolvedValue(1) });
+    expect(await processTxPriority(store, baseConfig())).toBe(JOB_PRIORITY.PROCESS_TX_REBUILD);
   });
 
-  it("respects custom PROCESS_TX_REBUILD_PRIORITY from config", () => {
-    const store = mockStore({ countActiveJobs: vi.fn().mockReturnValue(1) });
-    expect(processTxPriority(store, baseConfig({ processTxRebuildPriority: 15 }))).toBe(15);
+  it("respects custom PROCESS_TX_REBUILD_PRIORITY from config", async () => {
+    const store = mockStore({ countActiveJobs: vi.fn().mockResolvedValue(1) });
+    expect(await processTxPriority(store, baseConfig({ processTxRebuildPriority: 15 }))).toBe(15);
   });
 });

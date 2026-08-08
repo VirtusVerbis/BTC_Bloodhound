@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import type { Store } from "@cointrace/db";
 import { JOB_PRIORITY } from "../config.js";
+import { sha256Hex } from "../util/hash.js";
 import { insertAddressIfMissing } from "./insertIfMissing.js";
 
 export interface ColdcardHackTrackerData {
@@ -19,17 +19,15 @@ export async function fetchColdcardHackTracker(base: string): Promise<ColdcardHa
   };
 
   const addresses = [...new Set(body.addresses.map((a) => a.address.toLowerCase()))].sort();
-  const contentHash = createHash("sha256")
-    .update(`${body.updatedAt ?? ""}\n${addresses.join("\n")}`)
-    .digest("hex");
+  const contentHash = await sha256Hex(`${body.updatedAt ?? ""}\n${addresses.join("\n")}`);
 
   return { addresses, contentHash };
 }
 
-export function applyColdcardHackTrackerSync(store: Store, data: ColdcardHackTrackerData): number {
+export async function applyColdcardHackTrackerSync(store: Store, data: ColdcardHackTrackerData): Promise<number> {
   let inserted = 0;
   for (const address of data.addresses) {
-    const added = insertAddressIfMissing(store, address, {
+    const added = await insertAddressIfMissing(store, address, {
       role: "hacker",
       isFlaggedHacker: true,
       source: "coldcard_hack_tracker",
@@ -38,11 +36,11 @@ export function applyColdcardHackTrackerSync(store: Store, data: ColdcardHackTra
     });
     if (added) {
       inserted++;
-      store.enqueueJob("backfill_hacker_address", { address }, JOB_PRIORITY.BACKFILL_HACKER);
+      await store.enqueueJob("backfill_hacker_address", { address }, JOB_PRIORITY.BACKFILL_HACKER);
     }
   }
 
-  store.upsertSourceSync("coldcard_hack_tracker", {
+  await store.upsertSourceSync("coldcard_hack_tracker", {
     lastAddressCount: data.addresses.length,
     lastContentHash: data.contentHash,
   });

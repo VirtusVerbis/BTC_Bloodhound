@@ -2,10 +2,11 @@ import { serve } from "@hono/node-server";
 import path from "node:path";
 import { mkdirSync } from "node:fs";
 import { openDatabase, runMigrations, Store } from "@cointrace/db";
-import { loadConfig } from "@cointrace/core";
+import { assertProductionSecrets, loadConfig } from "@cointrace/core";
 import { createApp } from "./app.js";
 
 const config = loadConfig();
+assertProductionSecrets(config);
 const dbPath = path.resolve(config.databaseUrl.replace("file:", ""));
 mkdirSync(path.dirname(dbPath), { recursive: true });
 const { sqlite, db } = openDatabase(dbPath);

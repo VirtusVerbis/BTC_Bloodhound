@@ -1,8 +1,9 @@
 import Database from "better-sqlite3";
-import { drizzle, BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "./schema.js";
+import type { Db } from "./store.js";
 
-export type Db = BetterSQLite3Database<typeof schema>;
+export type { Db } from "./store.js";
 
 export function openDatabase(path: string): { sqlite: Database.Database; db: Db } {
   const sqlite = new Database(path);
@@ -141,3 +142,5 @@ export function runMigrations(sqlite: Database.Database): void {
 
 export * from "./schema.js";
 export * from "./store.js";
+// D1 helper is also available via `@cointrace/db/d1` (avoids bundling better-sqlite3 in Workers).
+export { createD1Store, type D1Binding, type D1Db } from "./d1.js";

@@ -25,6 +25,8 @@ export type JobType =
   | "sync_coldcardwatch"
   | "sync_vercel_trackers";
 
+export type EnvMap = Record<string, string | undefined>;
+
 export interface AppConfig {
   databaseUrl: string;
   esploraBase: string;
@@ -56,11 +58,23 @@ export interface AppConfig {
   adminToken: string;
   seedFilePath: string;
   localWatchlistPath: string;
+  /** Inline seed JSON for Workers (avoids filesystem). */
+  seedDataJson: string | null;
+  /** Inline local watchlist JSON for Workers. */
+  localWatchlistDataJson: string | null;
   indexerRebuildMode: boolean;
   processTxRebuildPriority: number;
+  /** Comma-separated CORS origins; empty = reflect request origin only when local defaults apply. */
+  corsOrigins: string[];
+  environment: string;
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
+  const corsRaw = env.CORS_ORIGINS?.trim();
+  const corsOrigins = corsRaw
+    ? corsRaw.split(",").map((s) => s.trim()).filter(Boolean)
+    : ["http://localhost:5173", "http://127.0.0.1:5173"];
+
   return {
     databaseUrl: env.DATABASE_URL ?? "file:./data/cointrace.db",
     esploraBase: (env.ESPLORA_BASE ?? "https://blockstream.info/api").replace(/\/$/, ""),
@@ -97,7 +111,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     adminToken: env.ADMIN_TOKEN ?? "change-me",
     seedFilePath: env.SEED_FILE ?? "./config/watchlist.seed.json",
     localWatchlistPath: env.LOCAL_WATCHLIST ?? "./config/watchlist.local.json",
+    seedDataJson: env.SEED_DATA_JSON ?? null,
+    localWatchlistDataJson: env.LOCAL_WATCHLIST_DATA_JSON ?? null,
     indexerRebuildMode: env.INDEXER_REBUILD_MODE === "1",
     processTxRebuildPriority: Number(env.PROCESS_TX_REBUILD_PRIORITY ?? JOB_PRIORITY.PROCESS_TX_REBUILD),
+    corsOrigins,
+    environment: env.ENVIRONMENT ?? env.NODE_ENV ?? "development",
   };
+}
+
+/** Refuse insecure default admin token when running as production. */
+export function assertProductionSecrets(config: AppConfig): void {
+  if (config.environment !== "production") return;
+  if (!config.adminToken || config.adminToken === "change-me") {
+    throw new Error("ADMIN_TOKEN must be set to a non-default value in production");
+  }
 }

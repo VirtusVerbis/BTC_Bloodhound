@@ -141,7 +141,7 @@ describe("processTxForHackTrace", () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);
     const store = new Store(db);
-    store.upsertAddress({
+    await store.upsertAddress({
       address: "down1",
       role: "downstream",
       hopFromHacker: 1,
@@ -160,10 +160,10 @@ describe("processTxForHackTrace", () => {
       spendingHop: 1,
     });
 
-    const child = store.getAddress("child2");
+    const child = await store.getAddress("child2");
     expect(child?.hopFromHacker).toBe(2);
     expect(child?.expandStatus).toBe("pending");
-    const edges = store.getEdgesFromAddress("down1");
+    const edges = await store.getEdgesFromAddress("down1");
     expect(edges).toHaveLength(1);
     expect(edges[0]?.toAddress).toBe("child2");
   });
@@ -172,7 +172,7 @@ describe("processTxForHackTrace", () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);
     const store = new Store(db);
-    store.upsertAddress({
+    await store.upsertAddress({
       address: "hack1",
       role: "hacker",
       isFlaggedHacker: true,
@@ -185,17 +185,17 @@ describe("processTxForHackTrace", () => {
 
     await processTxForHackTrace(store, router, tx.txid, hackers, { tx });
 
-    const down = store.getAddress("down1");
+    const down = await store.getAddress("down1");
     expect(down?.hopFromHacker).toBe(1);
-    expect(store.getEdgesFromAddress("hack1")).toHaveLength(1);
-    expect(store.getEdgesToAddress("hack1")).toHaveLength(0);
+    expect(await store.getEdgesFromAddress("hack1")).toHaveLength(1);
+    expect(await store.getEdgesToAddress("hack1")).toHaveLength(0);
   });
 
   it("stores per-input victim amounts for multi-input deposits", async () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);
     const store = new Store(db);
-    store.upsertAddress({
+    await store.upsertAddress({
       address: "hack1",
       role: "hacker",
       isFlaggedHacker: true,
@@ -215,8 +215,8 @@ describe("processTxForHackTrace", () => {
 
     await processTxForHackTrace(store, router, tx.txid, hackers, { tx });
 
-    expect(store.getAddress("hack1")?.totalReceivedSats).toBe(60_000);
-    const inEdges = store.getEdgesToAddress("hack1").filter((e) => e.direction === "in_to_hacker");
+    expect((await store.getAddress("hack1"))?.totalReceivedSats).toBe(60_000);
+    const inEdges = (await store.getEdgesToAddress("hack1")).filter((e) => e.direction === "in_to_hacker");
     expect(inEdges).toHaveLength(3);
     expect(inEdges.reduce((sum, e) => sum + e.amountSats, 0)).toBe(60_000);
   });

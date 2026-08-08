@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import type { Store } from "@cointrace/db";
 import { JOB_PRIORITY } from "../config.js";
+import { sha256Hex } from "../util/hash.js";
 import { insertAddressIfMissing } from "./insertIfMissing.js";
 
 export interface ColdcardSweepWatchData {
@@ -29,9 +29,7 @@ export async function fetchColdcardSweepWatch(base: string): Promise<ColdcardSwe
     ...new Set((collectorSection.match(bc1Regex) ?? []).map((a) => a.toLowerCase())),
   ];
 
-  const contentHash = createHash("sha256")
-    .update([...collectors, ...vaults].sort().join("\n"))
-    .digest("hex");
+  const contentHash = await sha256Hex([...collectors, ...vaults].sort().join("\n"));
 
   return {
     collectors,
@@ -40,11 +38,11 @@ export async function fetchColdcardSweepWatch(base: string): Promise<ColdcardSwe
   };
 }
 
-export function applyColdcardSweepWatchSync(store: Store, data: ColdcardSweepWatchData): number {
+export async function applyColdcardSweepWatchSync(store: Store, data: ColdcardSweepWatchData): Promise<number> {
   let inserted = 0;
 
   for (const address of data.collectors) {
-    const added = insertAddressIfMissing(store, address, {
+    const added = await insertAddressIfMissing(store, address, {
       role: "hacker",
       isFlaggedHacker: true,
       source: "coldcard_sweep_watch",
@@ -53,13 +51,13 @@ export function applyColdcardSweepWatchSync(store: Store, data: ColdcardSweepWat
     });
     if (added) {
       inserted++;
-      store.enqueueJob("backfill_hacker_address", { address }, JOB_PRIORITY.BACKFILL_HACKER);
+      await store.enqueueJob("backfill_hacker_address", { address }, JOB_PRIORITY.BACKFILL_HACKER);
     }
   }
 
   for (const address of data.vaults) {
     if (
-      insertAddressIfMissing(store, address, {
+      await insertAddressIfMissing(store, address, {
         role: "victim",
         source: "coldcard_sweep_watch",
       })
@@ -68,7 +66,7 @@ export function applyColdcardSweepWatchSync(store: Store, data: ColdcardSweepWat
     }
   }
 
-  store.upsertSourceSync("coldcard_sweep_watch", {
+  await store.upsertSourceSync("coldcard_sweep_watch", {
     lastAddressCount: data.collectors.length + data.vaults.length,
     lastContentHash: data.contentHash,
   });

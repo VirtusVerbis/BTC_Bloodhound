@@ -43,26 +43,26 @@ function baseConfig(): AppConfig {
 
 function mockStore(overrides: Partial<Store> = {}): Store {
   return {
-    listHackers: vi.fn().mockReturnValue([]),
-    hasPendingJob: vi.fn().mockReturnValue(false),
-    countActiveJobs: vi.fn().mockReturnValue(0),
+    listHackers: vi.fn().mockResolvedValue([]),
+    hasPendingJob: vi.fn().mockResolvedValue(false),
+    countActiveJobs: vi.fn().mockResolvedValue(0),
     getAddress: vi.fn(),
     getBackfillState: vi.fn(),
     enqueueJob: vi.fn(),
-    getBackfillHealAuditIndex: vi.fn().mockReturnValue(0),
+    getBackfillHealAuditIndex: vi.fn().mockResolvedValue(0),
     setBackfillHealAuditIndex: vi.fn(),
-    getBtcUsdPrice: vi.fn().mockReturnValue(null),
+    getBtcUsdPrice: vi.fn().mockResolvedValue(null),
     ...overrides,
   } as unknown as Store;
 }
 
 describe("scheduleHackerBackfillHeal", () => {
-  it("enqueues backfill when hacker is backfilling and no job exists", () => {
+  it("enqueues backfill when hacker is backfilling and no job exists", async () => {
     const addr = "bc1qhack";
     const store = mockStore({
-      listHackers: vi.fn().mockReturnValue([{ address: addr }]),
-      getAddress: vi.fn().mockReturnValue({ address: addr, expandStatus: "backfilling" }),
-      getBackfillState: vi.fn().mockReturnValue({
+      listHackers: vi.fn().mockResolvedValue([{ address: addr }]),
+      getAddress: vi.fn().mockResolvedValue({ address: addr, expandStatus: "backfilling" }),
+      getBackfillState: vi.fn().mockResolvedValue({
         payload: { chainCursor: "txabc", pagesExhausted: false },
         backfillComplete: false,
         lastBackfillAuditAt: null,
@@ -70,7 +70,7 @@ describe("scheduleHackerBackfillHeal", () => {
       }),
     });
 
-    scheduleHackerBackfillHeal(store, baseConfig());
+    await scheduleHackerBackfillHeal(store, baseConfig());
 
     expect(store.enqueueJob).toHaveBeenCalledWith(
       "backfill_hacker_address",
@@ -79,12 +79,12 @@ describe("scheduleHackerBackfillHeal", () => {
     );
   });
 
-  it("enqueues backfill when expanded but backfill_complete is false", () => {
+  it("enqueues backfill when expanded but backfill_complete is false", async () => {
     const addr = "bc1qhack";
     const store = mockStore({
-      listHackers: vi.fn().mockReturnValue([{ address: addr }]),
-      getAddress: vi.fn().mockReturnValue({ address: addr, expandStatus: "expanded" }),
-      getBackfillState: vi.fn().mockReturnValue({
+      listHackers: vi.fn().mockResolvedValue([{ address: addr }]),
+      getAddress: vi.fn().mockResolvedValue({ address: addr, expandStatus: "expanded" }),
+      getBackfillState: vi.fn().mockResolvedValue({
         payload: null,
         backfillComplete: false,
         lastBackfillAuditAt: null,
@@ -92,7 +92,7 @@ describe("scheduleHackerBackfillHeal", () => {
       }),
     });
 
-    scheduleHackerBackfillHeal(store, baseConfig());
+    await scheduleHackerBackfillHeal(store, baseConfig());
 
     expect(store.enqueueJob).toHaveBeenCalledWith(
       "backfill_hacker_address",
@@ -101,12 +101,12 @@ describe("scheduleHackerBackfillHeal", () => {
     );
   });
 
-  it("enqueues audit when expanded, complete, and audit is due", () => {
+  it("enqueues audit when expanded, complete, and audit is due", async () => {
     const addr = "bc1qhack";
     const store = mockStore({
-      listHackers: vi.fn().mockReturnValue([{ address: addr }]),
-      getAddress: vi.fn().mockReturnValue({ address: addr, expandStatus: "expanded" }),
-      getBackfillState: vi.fn().mockReturnValue({
+      listHackers: vi.fn().mockResolvedValue([{ address: addr }]),
+      getAddress: vi.fn().mockResolvedValue({ address: addr, expandStatus: "expanded" }),
+      getBackfillState: vi.fn().mockResolvedValue({
         payload: null,
         backfillComplete: true,
         lastBackfillAuditAt: null,
@@ -114,34 +114,34 @@ describe("scheduleHackerBackfillHeal", () => {
       }),
     });
 
-    scheduleHackerBackfillHeal(store, baseConfig());
+    await scheduleHackerBackfillHeal(store, baseConfig());
 
     expect(store.enqueueJob).toHaveBeenCalledWith("audit_hacker_backfill", { address: addr }, 2);
   });
 
-  it("skips when backfill job is already pending", () => {
+  it("skips when backfill job is already pending", async () => {
     const addr = "bc1qhack";
     const store = mockStore({
-      listHackers: vi.fn().mockReturnValue([{ address: addr }]),
-      hasPendingJob: vi.fn().mockImplementation((type: string) => type === "backfill_hacker_address"),
-      getAddress: vi.fn().mockReturnValue({ address: addr, expandStatus: "backfilling" }),
+      listHackers: vi.fn().mockResolvedValue([{ address: addr }]),
+      hasPendingJob: vi.fn().mockImplementation(async (type: string) => type === "backfill_hacker_address"),
+      getAddress: vi.fn().mockResolvedValue({ address: addr, expandStatus: "backfilling" }),
     });
 
-    scheduleHackerBackfillHeal(store, baseConfig());
+    await scheduleHackerBackfillHeal(store, baseConfig());
 
     expect(store.enqueueJob).not.toHaveBeenCalled();
   });
 
-  it("respects audit per cron cap", () => {
+  it("respects audit per cron cap", async () => {
     const hackers = [
       { address: "bc1qa" },
       { address: "bc1qb" },
       { address: "bc1qc" },
     ];
     const store = mockStore({
-      listHackers: vi.fn().mockReturnValue(hackers),
-      getAddress: vi.fn().mockReturnValue({ expandStatus: "expanded" }),
-      getBackfillState: vi.fn().mockReturnValue({
+      listHackers: vi.fn().mockResolvedValue(hackers),
+      getAddress: vi.fn().mockResolvedValue({ expandStatus: "expanded" }),
+      getBackfillState: vi.fn().mockResolvedValue({
         payload: null,
         backfillComplete: true,
         lastBackfillAuditAt: null,
@@ -149,7 +149,7 @@ describe("scheduleHackerBackfillHeal", () => {
       }),
     });
 
-    scheduleHackerBackfillHeal(store, baseConfig());
+    await scheduleHackerBackfillHeal(store, baseConfig());
 
     expect(store.enqueueJob).toHaveBeenCalledTimes(1);
     expect(store.enqueueJob).toHaveBeenCalledWith("audit_hacker_backfill", expect.any(Object), 2);
@@ -157,29 +157,29 @@ describe("scheduleHackerBackfillHeal", () => {
 });
 
 describe("scheduleDownstreamCrawl", () => {
-  it("skips all cron enqueue when rebuild is active", () => {
+  it("skips all cron enqueue when rebuild is active", async () => {
     const store = mockStore({
-      countActiveJobs: vi.fn().mockReturnValue(5),
-      listHackers: vi.fn().mockReturnValue([{ address: "bc1qhack", liveBalanceAt: null }]),
-      getSourceSync: vi.fn().mockReturnValue(null),
-      getSyncState: vi.fn().mockReturnValue(null),
-      getDownstreamFrontier: vi.fn().mockReturnValue([{ address: "bc1qdown" }]),
-      listDownstreamForPoll: vi.fn().mockReturnValue([{ address: "bc1qdown2" }]),
+      countActiveJobs: vi.fn().mockResolvedValue(5),
+      listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack", liveBalanceAt: null }]),
+      getSourceSync: vi.fn().mockResolvedValue(null),
+      getSyncState: vi.fn().mockResolvedValue(null),
+      getDownstreamFrontier: vi.fn().mockResolvedValue([{ address: "bc1qdown" }]),
+      listDownstreamForPoll: vi.fn().mockResolvedValue([{ address: "bc1qdown2" }]),
     });
 
-    scheduleDownstreamCrawl(store, baseConfig());
+    await scheduleDownstreamCrawl(store, baseConfig());
 
     expect(store.enqueueJob).not.toHaveBeenCalled();
   });
 });
 
 describe("scheduleBtcUsdPriceRefresh", () => {
-  it("enqueues refresh when no price is stored", () => {
+  it("enqueues refresh when no price is stored", async () => {
     const store = mockStore({
-      getBtcUsdPrice: vi.fn().mockReturnValue(null),
+      getBtcUsdPrice: vi.fn().mockResolvedValue(null),
     });
 
-    scheduleBtcUsdPriceRefresh(store, baseConfig());
+    await scheduleBtcUsdPriceRefresh(store, baseConfig());
 
     expect(store.enqueueJob).toHaveBeenCalledWith(
       "refresh_btc_usd_price",
@@ -188,13 +188,13 @@ describe("scheduleBtcUsdPriceRefresh", () => {
     );
   });
 
-  it("enqueues refresh when price is stale", () => {
+  it("enqueues refresh when price is stale", async () => {
     const staleAt = new Date(Date.now() - 120_000).toISOString();
     const store = mockStore({
-      getBtcUsdPrice: vi.fn().mockReturnValue({ usd: 64000, at: staleAt }),
+      getBtcUsdPrice: vi.fn().mockResolvedValue({ usd: 64000, at: staleAt }),
     });
 
-    scheduleBtcUsdPriceRefresh(store, baseConfig());
+    await scheduleBtcUsdPriceRefresh(store, baseConfig());
 
     expect(store.enqueueJob).toHaveBeenCalledWith(
       "refresh_btc_usd_price",
@@ -203,24 +203,24 @@ describe("scheduleBtcUsdPriceRefresh", () => {
     );
   });
 
-  it("skips when price is fresh", () => {
+  it("skips when price is fresh", async () => {
     const freshAt = new Date().toISOString();
     const store = mockStore({
-      getBtcUsdPrice: vi.fn().mockReturnValue({ usd: 64000, at: freshAt }),
+      getBtcUsdPrice: vi.fn().mockResolvedValue({ usd: 64000, at: freshAt }),
     });
 
-    scheduleBtcUsdPriceRefresh(store, baseConfig());
+    await scheduleBtcUsdPriceRefresh(store, baseConfig());
 
     expect(store.enqueueJob).not.toHaveBeenCalled();
   });
 
-  it("skips when refresh job is already pending", () => {
+  it("skips when refresh job is already pending", async () => {
     const store = mockStore({
-      getBtcUsdPrice: vi.fn().mockReturnValue(null),
-      hasPendingJob: vi.fn().mockImplementation((type: string) => type === "refresh_btc_usd_price"),
+      getBtcUsdPrice: vi.fn().mockResolvedValue(null),
+      hasPendingJob: vi.fn().mockImplementation(async (type: string) => type === "refresh_btc_usd_price"),
     });
 
-    scheduleBtcUsdPriceRefresh(store, baseConfig());
+    await scheduleBtcUsdPriceRefresh(store, baseConfig());
 
     expect(store.enqueueJob).not.toHaveBeenCalled();
   });

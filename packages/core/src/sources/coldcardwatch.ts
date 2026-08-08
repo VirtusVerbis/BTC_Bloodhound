@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import type { Store } from "@cointrace/db";
 import { JOB_PRIORITY } from "../config.js";
+import { sha256Hex } from "../util/hash.js";
 
 export interface ColdcardWatchData {
   collectors: string[];
@@ -46,7 +46,7 @@ export async function fetchColdcardWatch(base: string): Promise<ColdcardWatchDat
     }
   }
 
-  const contentHash = createHash("sha256").update([...collectors, ...victims].sort().join("\n")).digest("hex");
+  const contentHash = await sha256Hex([...collectors, ...victims].sort().join("\n"));
 
   return {
     collectors: [...new Set(collectors)],
@@ -56,10 +56,10 @@ export async function fetchColdcardWatch(base: string): Promise<ColdcardWatchDat
   };
 }
 
-export function applyColdcardWatchSync(store: Store, data: ColdcardWatchData): void {
+export async function applyColdcardWatchSync(store: Store, data: ColdcardWatchData): Promise<void> {
   for (const address of data.collectors) {
-    const existing = store.getAddress(address);
-    store.upsertAddress({
+    const existing = await store.getAddress(address);
+    await store.upsertAddress({
       address,
       role: "hacker",
       isFlaggedHacker: true,
@@ -68,30 +68,30 @@ export function applyColdcardWatchSync(store: Store, data: ColdcardWatchData): v
       expandStatus: existing ? existing.expandStatus : "pending",
     });
     if (!existing) {
-      store.enqueueJob("backfill_hacker_address", { address }, JOB_PRIORITY.BACKFILL_HACKER);
-    } else if (!store.hasPendingJob("poll_hacker_address", address)) {
-      store.enqueueJob("poll_hacker_address", { address }, JOB_PRIORITY.POLL_HACKER);
+      await store.enqueueJob("backfill_hacker_address", { address }, JOB_PRIORITY.BACKFILL_HACKER);
+    } else if (!(await store.hasPendingJob("poll_hacker_address", address))) {
+      await store.enqueueJob("poll_hacker_address", { address }, JOB_PRIORITY.POLL_HACKER);
     }
   }
 
   for (const address of data.victims) {
-    store.upsertAddress({ address, role: "victim", source: "coldcardwatch" });
+    await store.upsertAddress({ address, role: "victim", source: "coldcardwatch" });
   }
 
   for (const address of data.downstream) {
-    const existing = store.getAddress(address);
-    store.upsertAddress({
+    const existing = await store.getAddress(address);
+    await store.upsertAddress({
       address,
       role: "downstream",
       source: "coldcardwatch",
       expandStatus: "pending",
     });
     if (!existing) {
-      store.enqueueJob("expand_downstream", { address, cron: true }, JOB_PRIORITY.CRON_EXPAND);
+      await store.enqueueJob("expand_downstream", { address, cron: true }, JOB_PRIORITY.CRON_EXPAND);
     }
   }
 
-  store.upsertSourceSync("coldcardwatch", {
+  await store.upsertSourceSync("coldcardwatch", {
     lastAddressCount: data.collectors.length + data.victims.length,
     lastContentHash: data.contentHash,
   });

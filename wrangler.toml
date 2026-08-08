@@ -1,15 +1,33 @@
-# Cloudflare Workers + D1 + Pages (Phase 5 portability stub)
+# Cloudflare Workers + D1 + static assets (web UI)
 name = "cointrace"
-compatibility_date = "2024-01-01"
+main = "packages/api/dist/worker.js"
+compatibility_date = "2024-11-12"
+compatibility_flags = ["nodejs_compat"]
 
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "cointrace"
-# database_id = "<YOUR_D1_DATABASE_ID>"
+[assets]
+directory = "apps/web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
 
-# [triggers]
-# crons = ["*/1 * * * *"]
+[[d1_databases]]
+binding = "DB"
+database_name = "cointrace"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
 
-# [vars]
-# ESPLORA_BASE = "https://blockstream.info/api"
-# MEMPOOL_BASE = "https://mempool.space/api"
+[triggers]
+crons = ["*/1 * * * *"]
+
+[vars]
+# Use ENVIRONMENT=production on real deploy (refuses default ADMIN_TOKEN).
+ENVIRONMENT = "development"
+ESPLORA_BASE = "https://blockstream.info/api"
+MEMPOOL_BASE = "https://mempool.space/api"
+# Set CORS_ORIGINS to your Worker URL(s), comma-separated (required for browser CORS).
+CORS_ORIGINS = "http://localhost:8787,http://127.0.0.1:8787"
+RATE_LIMIT_MS = "3000"
+JOBS_PER_TICK = "1"
+
+# Secrets (do NOT put in [vars]):
+#   wrangler secret put ADMIN_TOKEN
+# Local wrangler dev: copy .dev.vars.example → .dev.vars

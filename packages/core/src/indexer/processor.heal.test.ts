@@ -46,11 +46,11 @@ describe("audit_hacker_backfill", () => {
   it("reopens backfill when chain tx_count exceeds indexed txs plus slack", async () => {
     const address = "bc1qcollector";
     const store = {
-      countIndexedTxsForHacker: vi.fn().mockReturnValue(50),
+      countIndexedTxsForHacker: vi.fn().mockResolvedValue(50),
       updateBackfillAudit: vi.fn(),
       setExpandStatus: vi.fn(),
       upsertBackfillState: vi.fn(),
-      getBackfillState: vi.fn().mockReturnValue({ payload: null, backfillComplete: true }),
+      getBackfillState: vi.fn().mockResolvedValue({ payload: null, backfillComplete: true }),
       enqueueJob: vi.fn(),
     } as unknown as Store;
 
@@ -90,7 +90,7 @@ describe("audit_hacker_backfill", () => {
   it("marks backfill complete when chain and indexed counts align within slack", async () => {
     const address = "bc1qcollector";
     const store = {
-      countIndexedTxsForHacker: vi.fn().mockReturnValue(100),
+      countIndexedTxsForHacker: vi.fn().mockResolvedValue(100),
       updateBackfillAudit: vi.fn(),
       setExpandStatus: vi.fn(),
       upsertBackfillState: vi.fn(),

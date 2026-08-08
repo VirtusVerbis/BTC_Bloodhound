@@ -46,7 +46,7 @@ export interface GraphResult {
   matchedHackers?: string[];
 }
 
-export function buildGraph(
+export async function buildGraph(
   store: Store,
   hacker: string,
   options: {
@@ -57,7 +57,7 @@ export function buildGraph(
     minEdgeSats?: number;
     victimFilter?: string;
   },
-): GraphResult {
+): Promise<GraphResult> {
   const depth = options.depth ?? 1;
   const maxOutputs = options.maxOutputs ?? 100;
   const maxVictims = options.maxVictims ?? 100;
@@ -67,7 +67,7 @@ export function buildGraph(
   const edges: GraphEdge[] = [];
   const seen = new Set<string>();
 
-  const hackerAddr = store.getAddress(hacker);
+  const hackerAddr = await store.getAddress(hacker);
   if (!hackerAddr?.isFlaggedHacker) {
     return { nodes, edges, mode: victimFilter ? "victim-filtered" : "hacker" };
   }
@@ -87,12 +87,12 @@ export function buildGraph(
   });
   seen.add(hackerId);
 
-  const victimStats = store.getVictimStats(hacker, minEdgeSats);
+  const victimStats = await store.getVictimStats(hacker, minEdgeSats);
 
   if (victimFilter) {
-    const victimEdges = store
-      .listVictimsForHacker(hacker, maxVictims)
-      .filter((v) => v.address.toLowerCase() === victimFilter && v.amountSats >= minEdgeSats);
+    const victimEdges = (await store.listVictimsForHacker(hacker, maxVictims)).filter(
+      (v) => v.address.toLowerCase() === victimFilter && v.amountSats >= minEdgeSats,
+    );
     if (victimEdges.length > 0) {
       const totalIncoming = victimEdges.reduce((s, v) => s + v.amountSats, 0);
       nodes.push({
@@ -135,7 +135,7 @@ export function buildGraph(
     });
   } else {
     const victimNodes = new Map<string, GraphNode>();
-    for (const v of store.listVictimsForHacker(hacker, maxVictims)) {
+    for (const v of await store.listVictimsForHacker(hacker, maxVictims)) {
       if (v.amountSats < minEdgeSats) continue;
       const id = v.address;
       let node = victimNodes.get(id);
@@ -168,15 +168,14 @@ export function buildGraph(
     }
   }
 
-  const outEdges = store
-    .getEdgesFromAddress(hacker)
+  const outEdges = (await store.getEdgesFromAddress(hacker))
     .filter((e) => e.direction === "out_from_hacker" && e.amountSats >= minEdgeSats)
     .sort((a, b) => b.amountSats - a.amountSats)
     .slice(0, maxOutputs);
 
   for (const e of outEdges) {
     const id = e.toAddress;
-    const downstream = store.getAddress(id);
+    const downstream = await store.getAddress(id);
     if (!seen.has(id)) {
       nodes.push({
         id,
@@ -200,14 +199,13 @@ export function buildGraph(
     });
 
     if (depth > 1 && (downstream?.hopFromHacker ?? 1) < depth) {
-      const childEdges = store
-        .getEdgesFromAddress(id)
+      const childEdges = (await store.getEdgesFromAddress(id))
         .filter((ce) => ce.direction === "out_from_hacker" && ce.amountSats >= minEdgeSats)
         .sort((a, b) => b.amountSats - a.amountSats)
         .slice(0, maxOutputs);
       for (const ce of childEdges) {
         const cid = ce.toAddress;
-        const child = store.getAddress(cid);
+        const child = await store.getAddress(cid);
         if (!seen.has(cid)) {
           nodes.push({
             id: cid,
@@ -240,14 +238,14 @@ export function buildGraph(
   };
 }
 
-export function buildVictimGraph(
+export async function buildVictimGraph(
   store: Store,
   victim: string,
   options: { minEdgeSats?: number },
-): GraphResult {
+): Promise<GraphResult> {
   const minEdgeSats = options.minEdgeSats ?? 1000;
   const normalized = victim.trim().toLowerCase();
-  const hackers = store.listHackersForVictim(normalized, minEdgeSats);
+  const hackers = await store.listHackersForVictim(normalized, minEdgeSats);
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
 
@@ -266,7 +264,7 @@ export function buildVictimGraph(
   });
 
   for (const h of hackers) {
-    const hackerAddr = store.getAddress(h.address);
+    const hackerAddr = await store.getAddress(h.address);
     nodes.push({
       id: h.address,
       type: "hacker",
@@ -455,7 +453,7 @@ export async function processTxForHackTrace(
 ): Promise<void> {
   const tx = options.tx ?? (await router.withProvider((p) => p.getTx(txid)));
   const blockTime = blockTimeIso(tx);
-  store.upsertTransaction({
+  await store.upsertTransaction({
     txid,
     blockHeight: tx.status?.block_height ?? null,
     blockTime,
@@ -465,11 +463,11 @@ export async function processTxForHackTrace(
   const { inToHacker, outFromHacker, victimAddresses } = computeHackTraceEdges(tx, hackerAddresses, options);
 
   for (const victim of victimAddresses) {
-    store.upsertAddress({ address: victim, role: "victim", source: "derived" });
+    await store.upsertAddress({ address: victim, role: "victim", source: "derived" });
   }
 
   for (const edge of inToHacker) {
-    store.upsertEdge({
+    await store.upsertEdge({
       fromAddress: edge.fromAddress,
       toAddress: edge.toAddress,
       txid,
@@ -481,14 +479,14 @@ export async function processTxForHackTrace(
   }
 
   for (const edge of outFromHacker) {
-    store.upsertAddress({
+    await store.upsertAddress({
       address: edge.toAddress,
       role: "downstream",
       source: "derived",
       hopFromHacker: edge.hopFromHacker,
       expandStatus: "pending",
     });
-    store.upsertEdge({
+    await store.upsertEdge({
       fromAddress: edge.fromAddress,
       toAddress: edge.toAddress,
       txid,
@@ -511,6 +509,6 @@ export async function processTxForHackerContext(
   await processTxForHackTrace(store, router, txid, hackerAddresses, { spendingHop: parentHop });
 }
 
-export function getHackerAddressSet(store: Store): Set<string> {
-  return new Set(store.listHackers().map((h) => h.address));
+export async function getHackerAddressSet(store: Store): Promise<Set<string>> {
+  return new Set((await store.listHackers()).map((h) => h.address));
 }
