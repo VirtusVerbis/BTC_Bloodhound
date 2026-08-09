@@ -25,7 +25,7 @@ ESPLORA_BASE = "https://blockstream.info/api"
 MEMPOOL_BASE = "https://mempool.space/api"
 # Set CORS_ORIGINS to your Worker URL(s), comma-separated (required for browser CORS).
 CORS_ORIGINS = "http://localhost:8787,http://127.0.0.1:8787"
-RATE_LIMIT_MS = "3000"
+RATE_LIMIT_MS = "8000"
 JOBS_PER_TICK = "1"
 
 # Production deploy: `pnpm cf:deploy` → wrangler deploy --env production
@@ -50,7 +50,7 @@ ESPLORA_BASE = "https://blockstream.info/api"
 MEMPOOL_BASE = "https://mempool.space/api"
 # Set to your Worker URL(s), e.g. https://cointrace-production.<account>.workers.dev
 CORS_ORIGINS = "https://cointrace-production.workers.dev"
-RATE_LIMIT_MS = "3000"
+RATE_LIMIT_MS = "8000"
 JOBS_PER_TICK = "1"
 
 # Secrets (do NOT put in [vars]):

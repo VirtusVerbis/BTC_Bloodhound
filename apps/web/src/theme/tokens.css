@@ -192,9 +192,25 @@ body {
   font-size: 0.85rem;
 }
 
+.app-header-title-row {
+  position: relative;
+  margin-bottom: 0.25rem;
+}
+
 .app-header h1 {
-  margin: 0 0 0.25rem;
+  margin: 0;
   font-size: 1.25rem;
+}
+
+.hack-elapsed-label {
+  position: absolute;
+  left: calc(50% + 5%);
+  top: 25%;
+  transform: translateX(-50%);
+  font-size: 0.85rem;
+  font-weight: 400;
+  color: var(--color-text-muted);
+  white-space: nowrap;
 }
 
 .stats-row {
@@ -503,6 +519,14 @@ button.primary {
   background: var(--color-panel);
   border: 1px solid #444;
   border-radius: 4px;
+}
+
+.sync-stats {
+  position: absolute;
+  right: 1.5rem;
+  bottom: 1rem;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .sync-stats > span {

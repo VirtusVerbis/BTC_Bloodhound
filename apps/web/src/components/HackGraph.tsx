@@ -395,7 +395,7 @@ export function HackGraph({
         const cached = getCachedGraph<ApiGraphResponse>(key);
         if (cached && generation === loadGenerationRef.current) {
           if (!opts?.revalidate) {
-            if (needsClear) {
+            if (needsClear || graphDataRef.current === null) {
               applyApiGraph(cached);
               lastGraphKeyRef.current = key;
             }

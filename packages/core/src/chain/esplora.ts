@@ -8,6 +8,21 @@ export function isRateLimitError(err: unknown): boolean {
   return msg.includes("429") || msg.includes("too many requests");
 }
 
+export function isTransientFetchError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (isRateLimitError(err)) return true;
+  const msg = err.message.toLowerCase();
+  if (msg.includes("fetch failed") || msg.includes("etimedout") || msg.includes("econnreset")) {
+    return true;
+  }
+  const cause = (err as Error & { cause?: unknown }).cause;
+  if (cause instanceof Error) {
+    const code = (cause as NodeJS.ErrnoException).code;
+    return code === "ETIMEDOUT" || code === "ECONNRESET" || code === "ENOTFOUND";
+  }
+  return false;
+}
+
 async function fetchJsonWithRetry<T>(
   base: string,
   providerName: string,

@@ -3,10 +3,15 @@ import { mkdirSync } from "node:fs";
 import { openDatabase, runMigrations, Store } from "@cointrace/db";
 import {
   ChainRouter,
+  JOB_PRIORITY,
   loadConfig,
+  normalizeBitcoinAddress,
   runIndexerTick,
   runLoadLocalWatchlist,
+  runReBackfillHacker,
   runReBackfillHackers,
+  runReBackfillHackersWait,
+  runReBackfillHackerWait,
   runRebuildHackEdges,
   runRebuildHackEdgesWait,
   runSeedPublicHackers,
@@ -34,8 +39,40 @@ async function main() {
     return;
   }
   if (cmd === "re-backfill-hackers") {
-    const n = await runReBackfillHackers(store);
-    console.log(`Re-backfill queued for ${n} hacker address(es)`);
+    const wait = process.argv.includes("--wait");
+    const fresh = process.argv.includes("--fresh");
+    if (wait) {
+      const reclaimed = await store.resetRunningJobs();
+      if (reclaimed > 0) {
+        console.log(`Reclaimed ${reclaimed} orphaned running job(s) to pending`);
+      }
+      const n = await runReBackfillHackersWait(store, router, config, { fresh });
+      console.log(`Re-backfill finished for ${n} hacker address(es)`);
+    } else {
+      const n = await runReBackfillHackers(store, { fresh });
+      console.log(`Re-backfill queued for ${n} hacker address(es)`);
+    }
+    return;
+  }
+  if (cmd === "re-backfill-hacker") {
+    const address = normalizeBitcoinAddress(process.argv[3] ?? "");
+    if (!address) {
+      console.error("Usage: re-backfill-hacker <address> [--wait] [--fresh]");
+      process.exit(1);
+    }
+    const wait = process.argv.includes("--wait");
+    const fresh = process.argv.includes("--fresh");
+    if (wait) {
+      const reclaimed = await store.resetRunningJobs();
+      if (reclaimed > 0) {
+        console.log(`Reclaimed ${reclaimed} orphaned running job(s) to pending`);
+      }
+      await runReBackfillHackerWait(store, router, config, address, { fresh });
+    } else {
+      await runReBackfillHacker(store, address);
+      await store.enqueueJob("backfill_hacker_address", { address }, JOB_PRIORITY.BACKFILL_HACKER);
+      console.log(`Re-backfill queued for ${address}`);
+    }
     return;
   }
   if (cmd === "rebuild-hack-edges") {

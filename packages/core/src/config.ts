@@ -1,3 +1,7 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
+import dotenv from "dotenv";
+
 export const JOB_PRIORITY = {
   PROCESS_TX_REBUILD: 11,
   POLL_HACKER: 10,
@@ -82,7 +86,40 @@ export interface AppConfig {
   maxGraphDownstream: number;
 }
 
+let envFileLoaded = false;
+
+function resolveEnvFilePath(): string {
+  const override = process.env.DOTENV_CONFIG_PATH?.trim();
+  if (override) return path.resolve(override);
+
+  let dir = process.cwd();
+  for (let i = 0; i < 5; i++) {
+    const candidate = path.join(dir, ".env");
+    if (existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return path.resolve(process.cwd(), ".env");
+}
+
+/** Load repo-root `.env` into process.env (Node only; idempotent). */
+export function loadEnvFile(): void {
+  if (envFileLoaded) return;
+  if (typeof process === "undefined" || !process.env) return;
+  envFileLoaded = true;
+  dotenv.config({ path: resolveEnvFilePath() });
+}
+
+/** @internal Reset for unit tests. */
+export function resetLoadEnvFileForTests(): void {
+  envFileLoaded = false;
+}
+
 export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
+  if (env === (process.env as EnvMap)) {
+    loadEnvFile();
+  }
   const corsRaw = env.CORS_ORIGINS?.trim();
   const corsOriginsFromEnv = Boolean(corsRaw);
   const corsOrigins = corsRaw
@@ -93,7 +130,7 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     databaseUrl: env.DATABASE_URL ?? "file:./data/cointrace.db",
     esploraBase: (env.ESPLORA_BASE ?? "https://blockstream.info/api").replace(/\/$/, ""),
     mempoolBase: (env.MEMPOOL_BASE ?? "https://mempool.space/api").replace(/\/$/, ""),
-    rateLimitMs: Number(env.RATE_LIMIT_MS ?? 3000),
+    rateLimitMs: Number(env.RATE_LIMIT_MS ?? 8000),
     jobsPerTick: Number(env.JOBS_PER_TICK ?? 1),
     cronIntervalSec: Number(env.CRON_INTERVAL_SEC ?? 60),
     crawlEnqueuePerCron: Number(env.CRAWL_ENQUEUE_PER_CRON ?? 5),
@@ -141,8 +178,8 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     graphRateWindowSec: Number(env.GRAPH_RATE_WINDOW_SEC ?? 60),
     adminRateLimit: Number(env.ADMIN_RATE_LIMIT ?? 10),
     adminRateWindowSec: Number(env.ADMIN_RATE_WINDOW_SEC ?? 3600),
-    maxGraphVictims: Number(env.MAX_GRAPH_VICTIMS ?? 200),
-    maxGraphDownstream: Number(env.MAX_GRAPH_DOWNSTREAM ?? 200),
+    maxGraphVictims: Number(env.MAX_GRAPH_VICTIMS ?? 1000),
+    maxGraphDownstream: Number(env.MAX_GRAPH_DOWNSTREAM ?? 1000),
   };
 }
 

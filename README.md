@@ -9,6 +9,8 @@ pnpm install
 pnpm -r run build
 cp config/settings.example.env .env
 
+Indexer and the Node API load `.env` automatically on startup (`RATE_LIMIT_MS=8000` in the template — slower Esplora pacing, fewer 429s). Shell exports still override `.env` values. Optional: `DOTENV_CONFIG_PATH=/path/to/.env`.
+
 # Seed hacker addresses + start API
 pnpm --filter @cointrace/indexer seed
 pnpm dev:api
@@ -28,6 +30,15 @@ pnpm dev:web
 | `pnpm --filter @cointrace/indexer seed` | Load `config/watchlist.seed.json` |
 | `pnpm --filter @cointrace/indexer load-local` | Merge `config/watchlist.local.json` |
 | `pnpm --filter @cointrace/indexer run` | Background indexer (cron + job queue) |
+
+### Hacker backfill (stop indexer before `--wait`)
+
+| Command | Description |
+|---------|-------------|
+| `node apps/indexer/dist/index.js re-backfill-hacker <addr> [--wait] [--fresh]` | One hacker: resume by default; `--wait` blocks until done; `--fresh` resets cursor |
+| `node apps/indexer/dist/index.js re-backfill-hackers [--wait] [--fresh]` | All hackers: skips complete unless `--fresh`; queue mode enqueues jobs without wiping resumable cursors |
+
+Queue mode requires the indexer (`run`) to process jobs. `--wait` runs synchronously per hacker (same resume/429 behavior as singular `--wait`).
 | `pnpm dev:api` | Hono API server (Node + SQLite) |
 | `pnpm dev:web` | Vite dev server |
 | `pnpm cf:dev` | Cloudflare Workers + D1 + static UI (local) |
@@ -49,7 +60,7 @@ Web: http://localhost:8080
 Dual hosting: same codebase runs on Node+SQLite locally and Workers+D1 remotely.
 
 1. Create a D1 database: `npx wrangler d1 create cointrace` and set `database_id` in `wrangler.toml`
-2. Copy `.dev.vars.example` → `.dev.vars` and set `ADMIN_TOKEN`
+2. Copy `.dev.vars.example` → `.dev.vars` and set `ADMIN_TOKEN` (`RATE_LIMIT_MS=8000` is in `wrangler.toml` and the example file)
 3. Apply migrations: `pnpm db:d1:migrate` (local) / `pnpm db:d1:migrate:remote`
 4. Optional — copy existing local data (avoids re-crawl):
    ```bash
@@ -60,7 +71,7 @@ Dual hosting: same codebase runs on Node+SQLite locally and Workers+D1 remotely.
 5. Set production secret: `npx wrangler secret put ADMIN_TOKEN --env production` (never put secrets in `[vars]` or git)
 6. Set `CORS_ORIGINS` under `[env.production.vars]` in `wrangler.toml` to your Worker URL(s). `ENVIRONMENT=production` is already pinned there (`pnpm cf:deploy` uses `--env production`).
 7. Set the same `database_id` on both top-level and `[[env.production.d1_databases]]`.
-8. Deploy: `pnpm cf:deploy` (Worker name: `cointrace-production`)
+8. Deploy: `pnpm cf:deploy` (Worker name: `cointrace-production`; `[env.production.vars]` includes `RATE_LIMIT_MS=8000`)
 9. Cloudflare dashboard (defense-in-depth): enable Bot Fight Mode and/or rate-limiting rules for the Worker hostname; optionally WAF managed rules if available on your plan
 
 ### Security notes (public deploy)

@@ -1,10 +1,22 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { AboutPage } from "./components/AboutPage";
+import { HackElapsedLabel } from "./components/HackElapsedLabel";
 import { HackGraph } from "./components/HackGraph";
 import { AddressDetailDrawer } from "./components/AddressDetailDrawer";
 import { MonitoringIndicator, type MonitoringSyncStatus } from "./components/MonitoringIndicator";
 import { BtcUsdProvider } from "./context/BtcUsdContext";
-import { api, btcToSats, formatUsd, satsToBtc, satsToBtcNumber, satsToUsd } from "./lib/api";
+import { api, formatUsd, satsToBtc, satsToUsd } from "./lib/api";
+import {
+  commitGraphNodeDraft,
+  commitMinAmountDraft,
+  DEFAULT_MAX_DOWNSTREAM_NODES,
+  DEFAULT_MAX_VICTIM_NODES,
+  DEFAULT_MIN_EDGE_SATS,
+  formatMinAmountDraft,
+  GRAPH_NODE_INPUT_MAX_LENGTH,
+  MIN_BTC_INPUT_MAX_LENGTH,
+  MIN_SATS_INPUT_MAX_LENGTH,
+} from "./lib/graphInputLimits";
 import { groupHackersBySource, type Hacker } from "./lib/hackerGroups";
 
 type AppTab = "tracker" | "about";
@@ -37,6 +49,14 @@ function isTypingTarget(target: EventTarget | null) {
   return tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable;
 }
 
+function commitOnEnter(e: KeyboardEvent<HTMLInputElement>, commit: () => void) {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    commit();
+    e.currentTarget.blur();
+  }
+}
+
 export default function App() {
   const [hackers, setHackers] = useState<Hacker[]>([]);
   const [selected, setSelected] = useState("");
@@ -47,15 +67,20 @@ export default function App() {
   const [expandVictims, setExpandVictims] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [rateLimitSecondsLeft, setRateLimitSecondsLeft] = useState<number | null>(null);
-  const [minEdgeSats, setMinEdgeSats] = useState(1000);
+  const [minEdgeSats, setMinEdgeSats] = useState(DEFAULT_MIN_EDGE_SATS);
   const [graphPollMs, setGraphPollMs] = useState(30_000);
   const [minAmountUnit, setMinAmountUnit] = useState<"sats" | "btc">("sats");
-  const [maxVictimNodes, setMaxVictimNodes] = useState(100);
-  const [maxDownstreamNodes, setMaxDownstreamNodes] = useState(100);
+  const [maxVictimNodes, setMaxVictimNodes] = useState(DEFAULT_MAX_VICTIM_NODES);
+  const [maxDownstreamNodes, setMaxDownstreamNodes] = useState(DEFAULT_MAX_DOWNSTREAM_NODES);
+  const [minAmountDraft, setMinAmountDraft] = useState(String(DEFAULT_MIN_EDGE_SATS));
+  const [maxVictimDraft, setMaxVictimDraft] = useState(String(DEFAULT_MAX_VICTIM_NODES));
+  const [maxDownstreamDraft, setMaxDownstreamDraft] = useState(String(DEFAULT_MAX_DOWNSTREAM_NODES));
+  const [configMinEdgeSats, setConfigMinEdgeSats] = useState(DEFAULT_MIN_EDGE_SATS);
   const [victimSearchInput, setVictimSearchInput] = useState("");
   const [activeVictimSearch, setActiveVictimSearch] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<AppTab>("tracker");
   const prevApiThresholdRef = useRef(false);
+  const minAmountFocusedRef = useRef(false);
 
   const loadHackers = useCallback(async (q?: string) => {
     const params = q ? `?q=${encodeURIComponent(q)}` : "";
@@ -80,7 +105,11 @@ export default function App() {
   useEffect(() => {
     api<AppConfig>("/api/config")
       .then((cfg) => {
+        setConfigMinEdgeSats(cfg.minEdgeSats);
         setMinEdgeSats(cfg.minEdgeSats);
+        if (!minAmountFocusedRef.current) {
+          setMinAmountDraft(String(cfg.minEdgeSats));
+        }
         if (cfg.graphPollMs != null && Number.isFinite(cfg.graphPollMs) && cfg.graphPollMs >= 1000) {
           setGraphPollMs(Math.floor(cfg.graphPollMs));
         }
@@ -186,6 +215,23 @@ export default function App() {
     });
   };
 
+  const commitMinAmount = useCallback(() => {
+    commitMinAmountDraft(minAmountDraft, minAmountUnit, configMinEdgeSats, setMinEdgeSats, setMinAmountDraft);
+  }, [minAmountDraft, minAmountUnit, configMinEdgeSats]);
+
+  const commitMaxVictim = useCallback(() => {
+    commitGraphNodeDraft(maxVictimDraft, DEFAULT_MAX_VICTIM_NODES, setMaxVictimNodes, setMaxVictimDraft);
+  }, [maxVictimDraft]);
+
+  const commitMaxDownstream = useCallback(() => {
+    commitGraphNodeDraft(
+      maxDownstreamDraft,
+      DEFAULT_MAX_DOWNSTREAM_NODES,
+      setMaxDownstreamNodes,
+      setMaxDownstreamDraft,
+    );
+  }, [maxDownstreamDraft]);
+
   return (
     <BtcUsdProvider price={stats?.btcUsdPrice ?? null}>
     <div>
@@ -195,7 +241,10 @@ export default function App() {
           onNavigateMonitoring={navigateToMonitoring}
           rateLimitSecondsLeft={rateLimitSecondsLeft}
         />
-        <h1>Bitcoin Bloodhound — Coldcard Hack Tracker</h1>
+        <div className="app-header-title-row">
+          <h1>Bitcoin Bloodhound — Coldcard Hack Tracker</h1>
+          <HackElapsedLabel />
+        </div>
         <nav className="app-tabs" role="tablist" aria-label="Main navigation">
           <button
             type="button"
@@ -284,20 +333,27 @@ export default function App() {
           <label>
             Minimum{" "}
             <input
-              type="number"
-              min={0}
-              step={minAmountUnit === "btc" ? "0.00000001" : "1"}
-              value={minAmountUnit === "sats" ? minEdgeSats : satsToBtcNumber(minEdgeSats)}
-              onChange={(e) => {
-                const n = Number(e.target.value) || 0;
-                setMinEdgeSats(
-                  minAmountUnit === "sats" ? Math.max(0, Math.floor(n)) : btcToSats(n),
-                );
+              type="text"
+              inputMode={minAmountUnit === "btc" ? "decimal" : "numeric"}
+              maxLength={minAmountUnit === "btc" ? MIN_BTC_INPUT_MAX_LENGTH : MIN_SATS_INPUT_MAX_LENGTH}
+              value={minAmountDraft}
+              onChange={(e) => setMinAmountDraft(e.target.value)}
+              onFocus={() => {
+                minAmountFocusedRef.current = true;
               }}
+              onBlur={() => {
+                minAmountFocusedRef.current = false;
+                commitMinAmount();
+              }}
+              onKeyDown={(e) => commitOnEnter(e, commitMinAmount)}
             />
             <select
               value={minAmountUnit}
-              onChange={(e) => setMinAmountUnit(e.target.value as "sats" | "btc")}
+              onChange={(e) => {
+                const unit = e.target.value as "sats" | "btc";
+                setMinAmountUnit(unit);
+                setMinAmountDraft(formatMinAmountDraft(minEdgeSats, unit));
+              }}
               aria-label="Minimum amount unit"
             >
               <option value="sats">sats</option>
@@ -307,21 +363,27 @@ export default function App() {
           <label>
             Max victim nodes{" "}
             <input
-              type="number"
-              min={1}
-              step={1}
-              value={maxVictimNodes}
-              onChange={(e) => setMaxVictimNodes(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+              type="text"
+              inputMode="numeric"
+              maxLength={GRAPH_NODE_INPUT_MAX_LENGTH}
+              value={maxVictimDraft}
+              onChange={(e) => setMaxVictimDraft(e.target.value.slice(0, GRAPH_NODE_INPUT_MAX_LENGTH))}
+              onBlur={commitMaxVictim}
+              onKeyDown={(e) => commitOnEnter(e, commitMaxVictim)}
             />
           </label>
           <label>
             Max downstream nodes{" "}
             <input
-              type="number"
-              min={1}
-              step={1}
-              value={maxDownstreamNodes}
-              onChange={(e) => setMaxDownstreamNodes(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+              type="text"
+              inputMode="numeric"
+              maxLength={GRAPH_NODE_INPUT_MAX_LENGTH}
+              value={maxDownstreamDraft}
+              onChange={(e) =>
+                setMaxDownstreamDraft(e.target.value.slice(0, GRAPH_NODE_INPUT_MAX_LENGTH))
+              }
+              onBlur={commitMaxDownstream}
+              onKeyDown={(e) => commitOnEnter(e, commitMaxDownstream)}
             />
           </label>
         </div>

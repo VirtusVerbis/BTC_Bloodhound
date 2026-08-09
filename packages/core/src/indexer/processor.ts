@@ -4,7 +4,7 @@ import type { Job, Store } from "@cointrace/db";
 import type { AppConfig } from "../config.js";
 import { JOB_PRIORITY } from "../config.js";
 import { ChainRouter, RateLimitNotReadyError } from "../chain/router.js";
-import { txInvolvesSpend } from "../chain/esplora.js";
+import { txInvolvesSpend, isRateLimitError, isTransientFetchError } from "../chain/esplora.js";
 import { getHackerAddressSet, processTxForHackTrace } from "../graph/builder.js";
 import { applyColdcardWatchSync, fetchColdcardWatch } from "../sources/coldcardwatch.js";
 import {
@@ -104,21 +104,46 @@ export async function runLoadLocalWatchlist(
   }
 }
 
-export async function runReBackfillHackers(store: Store): Promise<number> {
+export async function runReBackfillHackers(
+  store: Store,
+  opts?: { fresh?: boolean },
+): Promise<number> {
   const hackers = await store.listHackers();
   let delay = 0;
+  let queued = 0;
   for (const h of hackers) {
-    await store.setExpandStatus(h.address, "pending");
-    await store.upsertBackfillState(h.address, null, false);
+    const saved = await store.getBackfillState(h.address);
+
+    if (!opts?.fresh && saved?.backfillComplete) continue;
+
+    let payload: Record<string, unknown>;
+    if (opts?.fresh) {
+      await runReBackfillHacker(store, h.address);
+      payload = { address: h.address };
+    } else if (hasResumableBackfillState(saved)) {
+      payload = await buildBackfillJobPayload(store, h.address);
+      await store.setExpandStatus(h.address, "backfilling");
+    } else {
+      await runReBackfillHacker(store, h.address);
+      payload = { address: h.address };
+    }
+
     await store.enqueueJob(
       "backfill_hacker_address",
-      { address: h.address },
+      payload,
       JOB_PRIORITY.BACKFILL_HACKER,
       new Date(Date.now() + delay * 1000).toISOString(),
     );
     delay += 5;
+    queued++;
   }
-  return hackers.length;
+  return queued;
+}
+
+export async function runReBackfillHacker(store: Store, address: string): Promise<string> {
+  await store.setExpandStatus(address, "pending");
+  await store.upsertBackfillState(address, null, false);
+  return address;
 }
 
 export async function runRebuildHackEdges(store: Store, config: AppConfig): Promise<number> {
@@ -173,6 +198,19 @@ function parseBackfillPayload(raw: Record<string, unknown>): BackfillPayload {
   };
 }
 
+export function hasResumableBackfillState(
+  saved: { payload: Record<string, unknown> | null; backfillComplete: boolean } | null,
+): boolean {
+  if (!saved || saved.backfillComplete || !saved.payload) return false;
+  const p = saved.payload;
+  return (
+    p.chainCursor != null ||
+    (Array.isArray(p.pendingTxids) && p.pendingTxids.length > 0) ||
+    p.pagesExhausted === true ||
+    p.newestTxid != null
+  );
+}
+
 async function hydrateBackfillPayload(store: Store, rawPayload: Record<string, unknown>): Promise<BackfillPayload> {
   const parsed = parseBackfillPayload(rawPayload);
   const hasContinuation =
@@ -217,7 +255,9 @@ async function backfillHacker(
   router: ChainRouter,
   config: AppConfig,
   rawPayload: Record<string, unknown>,
+  options?: { enqueueContinuation?: boolean },
 ): Promise<void> {
+  const enqueueContinuation = options?.enqueueContinuation !== false;
   const payload = await hydrateBackfillPayload(store, rawPayload);
   const address = payload.address;
   let pendingTxids = payload.pendingTxids ?? [];
@@ -269,11 +309,13 @@ async function backfillHacker(
 
   if (needsMore) {
     await store.upsertBackfillState(address, toPersistedPayload(currentPayload), false);
-    await store.enqueueJob(
-      "backfill_hacker_address",
-      toPersistedPayload(currentPayload),
-      JOB_PRIORITY.BACKFILL_HACKER,
-    );
+    if (enqueueContinuation) {
+      await store.enqueueJob(
+        "backfill_hacker_address",
+        toPersistedPayload(currentPayload),
+        JOB_PRIORITY.BACKFILL_HACKER,
+      );
+    }
     return;
   }
 
@@ -285,6 +327,87 @@ async function backfillHacker(
   }
   await store.upsertBackfillState(address, null, true);
   await store.setExpandStatus(address, "expanded");
+}
+
+function rateLimitBackoffMs(err: unknown): number {
+  if (!(err instanceof Error)) return 60_000;
+  const match = err.message.match(/retry-after[:\s]+(\d+)/i);
+  if (match) return Math.max(1000, Number(match[1]) * 1000);
+  return 60_000;
+}
+
+export async function runReBackfillHackerWait(
+  store: Store,
+  router: ChainRouter,
+  config: AppConfig,
+  address: string,
+  opts?: { fresh?: boolean },
+): Promise<void> {
+  const existing = await store.getBackfillState(address);
+  const resume = !opts?.fresh && hasResumableBackfillState(existing);
+  if (!resume) {
+    await runReBackfillHacker(store, address);
+  } else {
+    console.log(`Resuming incomplete backfill for ${address}...`);
+  }
+  console.log(`Backfilling ${address}...`);
+  let iterations = 0;
+  while (true) {
+    try {
+      await backfillHacker(store, router, config, { address }, { enqueueContinuation: false });
+    } catch (err) {
+      if (isRateLimitError(err)) {
+        const waitMs = rateLimitBackoffMs(err);
+        console.warn(
+          `Rate limited during backfill, retrying in ${waitMs / 1000}s: ${err instanceof Error ? err.message : err}`,
+        );
+        await new Promise((r) => setTimeout(r, waitMs));
+        continue;
+      }
+      if (!isTransientFetchError(err)) throw err;
+      console.warn(`Network error during backfill, retrying in 10s: ${err instanceof Error ? err.message : err}`);
+      await new Promise((r) => setTimeout(r, 10_000));
+      continue;
+    }
+    const backfill = await store.getBackfillState(address);
+    const addrAfter = await store.getAddress(address);
+    if (backfill?.backfillComplete) {
+      if (addrAfter?.expandStatus !== "expanded") {
+        await store.setExpandStatus(address, "expanded");
+      }
+      break;
+    }
+    iterations++;
+    if (iterations % 25 === 0) {
+      console.log(`Backfill progress: ${iterations} iteration(s)`);
+    }
+  }
+  await store.recalcTotalReceived(address);
+  const indexed = await store.countIndexedTxsForHacker(address);
+  console.log(`Backfill complete for ${address}: ${indexed} indexed transaction(s)`);
+}
+
+export async function runReBackfillHackersWait(
+  store: Store,
+  router: ChainRouter,
+  config: AppConfig,
+  opts?: { fresh?: boolean },
+): Promise<number> {
+  const hackers = await store.listHackers();
+  let done = 0;
+  for (const h of hackers) {
+    if (!opts?.fresh) {
+      const saved = await store.getBackfillState(h.address);
+      if (saved?.backfillComplete) {
+        console.log(`Skipping ${h.address} (backfill complete)`);
+        continue;
+      }
+    }
+    console.log(`--- Hacker ${done + 1}: ${h.address} ---`);
+    await runReBackfillHackerWait(store, router, config, h.address, { fresh: opts?.fresh });
+    done++;
+  }
+  return done;
 }
 
 async function auditHackerBackfill(

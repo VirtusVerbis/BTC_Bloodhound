@@ -53,8 +53,8 @@ function baseConfig(): AppConfig {
     graphRateWindowSec: 60,
     adminRateLimit: 10,
     adminRateWindowSec: 3600,
-    maxGraphVictims: 200,
-    maxGraphDownstream: 200,
+    maxGraphVictims: 1000,
+    maxGraphDownstream: 1000,
   };
 }
 
