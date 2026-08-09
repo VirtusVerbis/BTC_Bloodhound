@@ -115,6 +115,8 @@ export function createApp(store: Store, config: AppConfig) {
     c.json({
       minEdgeSats: config.minEdgeSats,
       graphPollMs: config.environment === "production" ? 120_000 : 30_000,
+      maxGraphVictims: config.maxGraphVictims,
+      maxGraphDownstream: config.maxGraphDownstream,
     }),
   );
 
@@ -173,14 +175,15 @@ export function createApp(store: Store, config: AppConfig) {
     };
 
     if (victim) {
-      const hackers = await store.listHackersForVictim(victim, minEdgeSats);
+      // Victim search: ignore min_edge_sats / max_victims for resolving and drawing the victim.
+      const hackers = await store.listHackersForVictim(victim);
       if (hackers.length === 0) return c.json({ error: "victim not found" }, 404);
       if (hackers.length === 1) {
         return c.json(
           await buildGraph(store, hackers[0]!.address, { ...graphOpts, victimFilter: victim, expandVictims: false }),
         );
       }
-      return c.json(await buildVictimGraph(store, victim, { minEdgeSats }));
+      return c.json(await buildVictimGraph(store, victim));
     }
 
     if (!hacker) return c.json({ error: "hacker query required" }, 400);

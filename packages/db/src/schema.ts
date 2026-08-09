@@ -74,6 +74,7 @@ export const schedulerState = sqliteTable("scheduler_state", {
   lastApiThresholdAt: text("last_api_threshold_at"),
   apiThresholdCount: integer("api_threshold_count").notNull().default(0),
   backfillHealAuditIndex: integer("backfill_heal_audit_index").notNull().default(0),
+  hackerPollIndex: integer("hacker_poll_index").notNull().default(0),
   rateLimitMs: integer("rate_limit_ms").notNull().default(3000),
   btcUsdPrice: integer("btc_usd_price"),
   btcUsdPriceAt: text("btc_usd_price_at"),

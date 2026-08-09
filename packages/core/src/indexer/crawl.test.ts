@@ -13,6 +13,7 @@ function baseConfig(): AppConfig {
     jobsPerTick: 1,
     cronIntervalSec: 60,
     crawlEnqueuePerCron: 5,
+    pollHackerEnqueuePerCron: 1,
     downstreamPollIntervalSec: 600,
     downstreamPollEnqueuePerCron: 10,
     maxCrawlDepth: 5,
@@ -67,6 +68,8 @@ function mockStore(overrides: Partial<Store> = {}): Store {
     enqueueJob: vi.fn(),
     getBackfillHealAuditIndex: vi.fn().mockResolvedValue(0),
     setBackfillHealAuditIndex: vi.fn(),
+    getHackerPollIndex: vi.fn().mockResolvedValue(0),
+    setHackerPollIndex: vi.fn(),
     getBtcUsdPrice: vi.fn().mockResolvedValue(null),
     ...overrides,
   } as unknown as Store;
@@ -91,7 +94,7 @@ describe("scheduleHackerBackfillHeal", () => {
     expect(store.enqueueJob).toHaveBeenCalledWith(
       "backfill_hacker_address",
       expect.objectContaining({ address: addr, chainCursor: "txabc" }),
-      2,
+      JOB_PRIORITY.BACKFILL_HACKER,
     );
   });
 
@@ -113,7 +116,7 @@ describe("scheduleHackerBackfillHeal", () => {
     expect(store.enqueueJob).toHaveBeenCalledWith(
       "backfill_hacker_address",
       { address: addr },
-      2,
+      JOB_PRIORITY.BACKFILL_HACKER,
     );
   });
 
@@ -132,7 +135,11 @@ describe("scheduleHackerBackfillHeal", () => {
 
     await scheduleHackerBackfillHeal(store, baseConfig());
 
-    expect(store.enqueueJob).toHaveBeenCalledWith("audit_hacker_backfill", { address: addr }, 2);
+    expect(store.enqueueJob).toHaveBeenCalledWith(
+      "audit_hacker_backfill",
+      { address: addr },
+      JOB_PRIORITY.BACKFILL_HACKER,
+    );
   });
 
   it("skips when backfill job is already pending", async () => {
@@ -168,7 +175,7 @@ describe("scheduleHackerBackfillHeal", () => {
     await scheduleHackerBackfillHeal(store, baseConfig());
 
     expect(store.enqueueJob).toHaveBeenCalledTimes(1);
-    expect(store.enqueueJob).toHaveBeenCalledWith("audit_hacker_backfill", expect.any(Object), 2);
+    expect(store.enqueueJob).toHaveBeenCalledWith("audit_hacker_backfill", expect.any(Object), JOB_PRIORITY.BACKFILL_HACKER);
   });
 });
 
@@ -186,6 +193,71 @@ describe("scheduleDownstreamCrawl", () => {
     await scheduleDownstreamCrawl(store, baseConfig());
 
     expect(store.enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it("skips poll when backfill is not complete", async () => {
+    const store = mockStore({
+      listHackers: vi.fn().mockResolvedValue([{ address: "bc1qa" }]),
+      getBackfillState: vi.fn().mockResolvedValue({ backfillComplete: false }),
+      getSourceSync: vi.fn().mockResolvedValue({ lastSyncAt: new Date().toISOString() }),
+      getHackerPollIndex: vi.fn().mockResolvedValue(0),
+      setHackerPollIndex: vi.fn(),
+      getDownstreamFrontier: vi.fn().mockResolvedValue([]),
+      listDownstreamForPoll: vi.fn().mockResolvedValue([]),
+    });
+
+    await scheduleDownstreamCrawl(store, baseConfig());
+
+    expect(store.enqueueJob).not.toHaveBeenCalledWith(
+      "poll_hacker_address",
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("enqueues at most one poll per cron tick across hackers", async () => {
+    const hackers = [{ address: "bc1qa" }, { address: "bc1qb" }, { address: "bc1qc" }];
+    const store = mockStore({
+      listHackers: vi.fn().mockResolvedValue(hackers),
+      getBackfillState: vi.fn().mockResolvedValue({ backfillComplete: true }),
+      getSyncState: vi.fn().mockResolvedValue(null),
+      getSourceSync: vi.fn().mockResolvedValue({ lastSyncAt: new Date().toISOString() }),
+      getHackerPollIndex: vi.fn().mockResolvedValue(0),
+      setHackerPollIndex: vi.fn(),
+      getDownstreamFrontier: vi.fn().mockResolvedValue([]),
+      listDownstreamForPoll: vi.fn().mockResolvedValue([]),
+    });
+
+    await scheduleDownstreamCrawl(store, { ...baseConfig(), pollHackerEnqueuePerCron: 1 });
+
+    const pollCalls = (store.enqueueJob as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c) => c[0] === "poll_hacker_address",
+    );
+    expect(pollCalls).toHaveLength(1);
+    expect(store.setHackerPollIndex).toHaveBeenCalledWith(1);
+  });
+
+  it("round-robins poll starting from hacker_poll_index", async () => {
+    const hackers = [{ address: "bc1qa" }, { address: "bc1qb" }];
+    const store = mockStore({
+      listHackers: vi.fn().mockResolvedValue(hackers),
+      getBackfillState: vi.fn().mockResolvedValue({ backfillComplete: true }),
+      getSyncState: vi.fn().mockResolvedValue(null),
+      getSourceSync: vi.fn().mockResolvedValue({ lastSyncAt: new Date().toISOString() }),
+      getHackerPollIndex: vi.fn().mockResolvedValue(1),
+      setHackerPollIndex: vi.fn(),
+      getDownstreamFrontier: vi.fn().mockResolvedValue([]),
+      listDownstreamForPoll: vi.fn().mockResolvedValue([]),
+    });
+
+    await scheduleDownstreamCrawl(store, baseConfig());
+
+    expect(store.enqueueJob).toHaveBeenCalledWith(
+      "poll_hacker_address",
+      { address: "bc1qb" },
+      JOB_PRIORITY.POLL_HACKER,
+    );
+    expect(store.setHackerPollIndex).toHaveBeenCalledWith(0);
   });
 });
 

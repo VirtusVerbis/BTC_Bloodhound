@@ -7,13 +7,15 @@ import { MonitoringIndicator, type MonitoringSyncStatus } from "./components/Mon
 import { BtcUsdProvider } from "./context/BtcUsdContext";
 import { api, formatUsd, satsToBtc, satsToUsd } from "./lib/api";
 import {
+  clampGraphNodeCount,
   commitGraphNodeDraft,
   commitMinAmountDraft,
   DEFAULT_MAX_DOWNSTREAM_NODES,
+  DEFAULT_MAX_GRAPH_NODE_CAP,
   DEFAULT_MAX_VICTIM_NODES,
   DEFAULT_MIN_EDGE_SATS,
   formatMinAmountDraft,
-  GRAPH_NODE_INPUT_MAX_LENGTH,
+  graphNodeInputMaxLength,
   MIN_BTC_INPUT_MAX_LENGTH,
   MIN_SATS_INPUT_MAX_LENGTH,
 } from "./lib/graphInputLimits";
@@ -41,6 +43,8 @@ interface SyncStatus extends MonitoringSyncStatus {
 interface AppConfig {
   minEdgeSats: number;
   graphPollMs?: number;
+  maxGraphVictims?: number;
+  maxGraphDownstream?: number;
 }
 
 function isTypingTarget(target: EventTarget | null) {
@@ -76,6 +80,8 @@ export default function App() {
   const [maxVictimDraft, setMaxVictimDraft] = useState(String(DEFAULT_MAX_VICTIM_NODES));
   const [maxDownstreamDraft, setMaxDownstreamDraft] = useState(String(DEFAULT_MAX_DOWNSTREAM_NODES));
   const [configMinEdgeSats, setConfigMinEdgeSats] = useState(DEFAULT_MIN_EDGE_SATS);
+  const [graphMaxVictims, setGraphMaxVictims] = useState(DEFAULT_MAX_GRAPH_NODE_CAP);
+  const [graphMaxDownstream, setGraphMaxDownstream] = useState(DEFAULT_MAX_GRAPH_NODE_CAP);
   const [victimSearchInput, setVictimSearchInput] = useState("");
   const [activeVictimSearch, setActiveVictimSearch] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<AppTab>("tracker");
@@ -113,6 +119,24 @@ export default function App() {
         if (cfg.graphPollMs != null && Number.isFinite(cfg.graphPollMs) && cfg.graphPollMs >= 1000) {
           setGraphPollMs(Math.floor(cfg.graphPollMs));
         }
+        const victimsCap =
+          cfg.maxGraphVictims != null && Number.isFinite(cfg.maxGraphVictims) && cfg.maxGraphVictims >= 1
+            ? Math.floor(cfg.maxGraphVictims)
+            : DEFAULT_MAX_GRAPH_NODE_CAP;
+        const downstreamCap =
+          cfg.maxGraphDownstream != null &&
+          Number.isFinite(cfg.maxGraphDownstream) &&
+          cfg.maxGraphDownstream >= 1
+            ? Math.floor(cfg.maxGraphDownstream)
+            : DEFAULT_MAX_GRAPH_NODE_CAP;
+        setGraphMaxVictims(victimsCap);
+        setGraphMaxDownstream(downstreamCap);
+        setMaxVictimNodes((n) => clampGraphNodeCount(n, victimsCap));
+        setMaxVictimDraft((d) => String(clampGraphNodeCount(Number(d) || DEFAULT_MAX_VICTIM_NODES, victimsCap)));
+        setMaxDownstreamNodes((n) => clampGraphNodeCount(n, downstreamCap));
+        setMaxDownstreamDraft((d) =>
+          String(clampGraphNodeCount(Number(d) || DEFAULT_MAX_DOWNSTREAM_NODES, downstreamCap)),
+        );
       })
       .catch(console.error);
   }, []);
@@ -200,12 +224,14 @@ export default function App() {
     if (!addr) return;
     setActiveVictimSearch(addr);
     setExpandVictims(false);
+    // minEdgeSats / maxVictimNodes stay as the user set them; API ignores them while searching.
   };
 
   const clearVictimSearch = () => {
     setVictimSearchInput("");
     setActiveVictimSearch(null);
     setExpandVictims(false);
+    // Resume user min sats / max victims on the next hacker graph load (state unchanged).
   };
 
   const navigateToMonitoring = () => {
@@ -220,8 +246,14 @@ export default function App() {
   }, [minAmountDraft, minAmountUnit, configMinEdgeSats]);
 
   const commitMaxVictim = useCallback(() => {
-    commitGraphNodeDraft(maxVictimDraft, DEFAULT_MAX_VICTIM_NODES, setMaxVictimNodes, setMaxVictimDraft);
-  }, [maxVictimDraft]);
+    commitGraphNodeDraft(
+      maxVictimDraft,
+      DEFAULT_MAX_VICTIM_NODES,
+      setMaxVictimNodes,
+      setMaxVictimDraft,
+      graphMaxVictims,
+    );
+  }, [maxVictimDraft, graphMaxVictims]);
 
   const commitMaxDownstream = useCallback(() => {
     commitGraphNodeDraft(
@@ -229,8 +261,12 @@ export default function App() {
       DEFAULT_MAX_DOWNSTREAM_NODES,
       setMaxDownstreamNodes,
       setMaxDownstreamDraft,
+      graphMaxDownstream,
     );
-  }, [maxDownstreamDraft]);
+  }, [maxDownstreamDraft, graphMaxDownstream]);
+
+  const victimInputMaxLen = graphNodeInputMaxLength(graphMaxVictims);
+  const downstreamInputMaxLen = graphNodeInputMaxLength(graphMaxDownstream);
 
   return (
     <BtcUsdProvider price={stats?.btcUsdPrice ?? null}>
@@ -365,9 +401,9 @@ export default function App() {
             <input
               type="text"
               inputMode="numeric"
-              maxLength={GRAPH_NODE_INPUT_MAX_LENGTH}
+              maxLength={victimInputMaxLen}
               value={maxVictimDraft}
-              onChange={(e) => setMaxVictimDraft(e.target.value.slice(0, GRAPH_NODE_INPUT_MAX_LENGTH))}
+              onChange={(e) => setMaxVictimDraft(e.target.value.slice(0, victimInputMaxLen))}
               onBlur={commitMaxVictim}
               onKeyDown={(e) => commitOnEnter(e, commitMaxVictim)}
             />
@@ -377,10 +413,10 @@ export default function App() {
             <input
               type="text"
               inputMode="numeric"
-              maxLength={GRAPH_NODE_INPUT_MAX_LENGTH}
+              maxLength={downstreamInputMaxLen}
               value={maxDownstreamDraft}
               onChange={(e) =>
-                setMaxDownstreamDraft(e.target.value.slice(0, GRAPH_NODE_INPUT_MAX_LENGTH))
+                setMaxDownstreamDraft(e.target.value.slice(0, downstreamInputMaxLen))
               }
               onBlur={commitMaxDownstream}
               onKeyDown={(e) => commitOnEnter(e, commitMaxDownstream)}

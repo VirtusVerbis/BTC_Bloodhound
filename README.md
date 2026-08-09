@@ -39,6 +39,16 @@ pnpm dev:web
 | `node apps/indexer/dist/index.js re-backfill-hackers [--wait] [--fresh]` | All hackers: skips complete unless `--fresh`; queue mode enqueues jobs without wiping resumable cursors |
 
 Queue mode requires the indexer (`run`) to process jobs. `--wait` runs synchronously per hacker (same resume/429 behavior as singular `--wait`).
+
+### Indexer job scheduling
+
+Fair scheduling keeps graph ingest ahead of maintenance work while `JOBS_PER_TICK=1` (CF free-tier friendly):
+
+- **Reserved ingest slot:** each tick runs a pending `backfill_hacker_address`, `audit_hacker_backfill`, or `expand_downstream` job before polls/balance/price (continuation jobs preferred).
+- **Enqueue caps (per cron tick):** `POLL_HACKER_ENQUEUE_PER_CRON=1` (round-robin), `CRAWL_ENQUEUE_PER_CRON=3`, `DOWNSTREAM_POLL_ENQUEUE_PER_CRON=2`.
+- **Poll gating:** `poll_hacker_address` only enqueues when `backfill_complete=1`.
+- **Priority tiers:** backfill/expand > polls > sync > balance/USD price.
+
 | `pnpm dev:api` | Hono API server (Node + SQLite) |
 | `pnpm dev:web` | Vite dev server |
 | `pnpm cf:dev` | Cloudflare Workers + D1 + static UI (local) |

@@ -14,6 +14,7 @@ function baseConfig(): AppConfig {
     jobsPerTick: 1,
     cronIntervalSec: 60,
     crawlEnqueuePerCron: 5,
+    pollHackerEnqueuePerCron: 1,
     downstreamPollIntervalSec: 600,
     downstreamPollEnqueuePerCron: 10,
     maxCrawlDepth: 5,
@@ -99,7 +100,7 @@ describe("audit_hacker_backfill", () => {
     expect(store.enqueueJob).toHaveBeenCalledWith(
       "backfill_hacker_address",
       { address },
-      2,
+      JOB_PRIORITY.BACKFILL_HACKER,
     );
   });
 

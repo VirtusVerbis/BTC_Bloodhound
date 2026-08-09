@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { collectSpenders, computeHackTraceEdges, processTxForHackTrace } from "./builder.js";
+import {
+  buildGraph,
+  buildVictimGraph,
+  collectSpenders,
+  computeHackTraceEdges,
+  processTxForHackTrace,
+} from "./builder.js";
 import type { ChainTxDetail } from "../chain/types.js";
 import type { ChainRouter } from "../chain/router.js";
 import { openDatabase, runMigrations, Store } from "@cointrace/db";
@@ -219,5 +225,99 @@ describe("processTxForHackTrace", () => {
     const inEdges = (await store.getEdgesToAddress("hack1")).filter((e) => e.direction === "in_to_hacker");
     expect(inEdges).toHaveLength(3);
     expect(inEdges.reduce((sum, e) => sum + e.amountSats, 0)).toBe(60_000);
+  });
+});
+
+describe("victim search graph filters", () => {
+  async function seedHackerWithRankedVictims() {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    await store.upsertAddress({
+      address: "hack1",
+      role: "hacker",
+      label: "Collector 1",
+      isFlaggedHacker: true,
+      hopFromHacker: 0,
+    });
+
+    // Two large victims occupy the top ranks; target is small / low-rank.
+    await store.upsertEdge({
+      fromAddress: "big1",
+      toAddress: "hack1",
+      txid: "tx-big1",
+      amountSats: 5_000_000,
+      direction: "in_to_hacker",
+      blockTime: "2026-01-01T00:00:00.000Z",
+    });
+    await store.upsertEdge({
+      fromAddress: "big2",
+      toAddress: "hack1",
+      txid: "tx-big2",
+      amountSats: 4_000_000,
+      direction: "in_to_hacker",
+      blockTime: "2026-01-02T00:00:00.000Z",
+    });
+    await store.upsertEdge({
+      fromAddress: "tiny-victim",
+      toAddress: "hack1",
+      txid: "tx-tiny",
+      amountSats: 100,
+      direction: "in_to_hacker",
+      blockTime: "2026-01-03T00:00:00.000Z",
+    });
+    return store;
+  }
+
+  it("buildGraph victimFilter draws low-rank / below-min victim despite maxVictims and minEdgeSats", async () => {
+    const store = await seedHackerWithRankedVictims();
+
+    const withoutFilter = await buildGraph(store, "hack1", {
+      expandVictims: true,
+      maxVictims: 2,
+      minEdgeSats: 1000,
+    });
+    expect(withoutFilter.nodes.some((n) => n.id === "tiny-victim")).toBe(false);
+
+    const filtered = await buildGraph(store, "hack1", {
+      expandVictims: false,
+      maxVictims: 2,
+      minEdgeSats: 1000,
+      victimFilter: "tiny-victim",
+    });
+    expect(filtered.mode).toBe("victim-filtered");
+    const victimNode = filtered.nodes.find((n) => n.id === "tiny-victim");
+    expect(victimNode).toMatchObject({
+      type: "victim",
+      address: "tiny-victim",
+      incomingSats: 100,
+    });
+    expect(filtered.edges.some((e) => e.source === "tiny-victim" && e.target === "hack1")).toBe(true);
+  });
+
+  it("buildVictimGraph finds below-min victim when minEdgeSats is not applied", async () => {
+    const store = await seedHackerWithRankedVictims();
+    await store.upsertAddress({
+      address: "hack2",
+      role: "hacker",
+      label: "Collector 2",
+      isFlaggedHacker: true,
+      hopFromHacker: 0,
+    });
+    await store.upsertEdge({
+      fromAddress: "tiny-victim",
+      toAddress: "hack2",
+      txid: "tx-tiny-2",
+      amountSats: 50,
+      direction: "in_to_hacker",
+    });
+
+    const withMin = await buildVictimGraph(store, "tiny-victim", { minEdgeSats: 1000 });
+    expect(withMin.nodes).toHaveLength(0);
+
+    const withoutMin = await buildVictimGraph(store, "tiny-victim");
+    expect(withoutMin.mode).toBe("victim-centric");
+    expect(withoutMin.nodes.some((n) => n.id === "tiny-victim")).toBe(true);
+    expect(withoutMin.matchedHackers?.sort()).toEqual(["hack1", "hack2"]);
   });
 });

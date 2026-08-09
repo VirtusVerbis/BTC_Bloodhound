@@ -4,17 +4,27 @@ import {
   clampMinEdgeSats,
   commitGraphNodeDraft,
   commitMinAmountDraft,
+  DEFAULT_MAX_GRAPH_NODE_CAP,
   DEFAULT_MAX_VICTIM_NODES,
   DEFAULT_MIN_EDGE_SATS,
-  MAX_GRAPH_NODE_COUNT,
+  graphNodeInputMaxLength,
   MAX_SATS_SUPPLY,
 } from "./graphInputLimits";
 
 describe("clampGraphNodeCount", () => {
-  it("clamps to 1..1000", () => {
+  it("clamps to 1..maxCap", () => {
     expect(clampGraphNodeCount(0)).toBe(1);
     expect(clampGraphNodeCount(100)).toBe(100);
-    expect(clampGraphNodeCount(999999)).toBe(MAX_GRAPH_NODE_COUNT);
+    expect(clampGraphNodeCount(999999)).toBe(DEFAULT_MAX_GRAPH_NODE_CAP);
+    expect(clampGraphNodeCount(5000, 10000)).toBe(5000);
+    expect(clampGraphNodeCount(50000, 10000)).toBe(10000);
+  });
+});
+
+describe("graphNodeInputMaxLength", () => {
+  it("matches digit count of cap", () => {
+    expect(graphNodeInputMaxLength(1000)).toBe(4);
+    expect(graphNodeInputMaxLength(10000)).toBe(5);
   });
 });
 
@@ -34,12 +44,20 @@ describe("commitGraphNodeDraft", () => {
     expect(draft).toBe(String(DEFAULT_MAX_VICTIM_NODES));
   });
 
-  it("clamps parsed value", () => {
+  it("clamps parsed value to maxCap", () => {
     let committed = 0;
     let draft = "";
-    commitGraphNodeDraft("5000", DEFAULT_MAX_VICTIM_NODES, (n) => (committed = n), (s) => (draft = s));
-    expect(committed).toBe(MAX_GRAPH_NODE_COUNT);
-    expect(draft).toBe(String(MAX_GRAPH_NODE_COUNT));
+    commitGraphNodeDraft("5000", DEFAULT_MAX_VICTIM_NODES, (n) => (committed = n), (s) => (draft = s), 10000);
+    expect(committed).toBe(5000);
+    expect(draft).toBe("5000");
+  });
+
+  it("clamps parsed value above maxCap", () => {
+    let committed = 0;
+    let draft = "";
+    commitGraphNodeDraft("50000", DEFAULT_MAX_VICTIM_NODES, (n) => (committed = n), (s) => (draft = s), 10000);
+    expect(committed).toBe(10000);
+    expect(draft).toBe("10000");
   });
 });
 

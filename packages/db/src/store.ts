@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, gte, isNotNull, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, lte, ne, or, sql } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import * as schema from "./schema.js";
 import {
@@ -11,7 +11,39 @@ import {
   syncState,
   transactions,
   type Edge,
+  type Job,
 } from "./schema.js";
+
+const INGEST_JOB_TYPES = [
+  "backfill_hacker_address",
+  "audit_hacker_backfill",
+  "expand_downstream",
+] as const;
+
+function isIngestContinuation(payloadJson: string): boolean {
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(payloadJson) as Record<string, unknown>;
+  } catch {
+    return false;
+  }
+
+  if (payload.chainCursor != null && payload.chainCursor !== "") return true;
+
+  const pending = payload.pendingTxids;
+  if (Array.isArray(pending) && pending.length > 0) return true;
+
+  const processedIndex = payload.processedIndex;
+  if (typeof processedIndex === "number" && processedIndex > 0) return true;
+
+  if (payload.pagesExhausted === false) {
+    const pagesFetched = payload.pagesFetched;
+    if (typeof pagesFetched === "number" && pagesFetched > 0) return true;
+    if (payload.chainCursor != null) return true;
+  }
+
+  return false;
+}
 
 /** Typed as better-sqlite3; D1 store casts at runtime (all terminators are awaited). */
 export type Db = BetterSQLite3Database<typeof schema>;
@@ -268,6 +300,27 @@ export class Store {
       .all();
   }
 
+  /** All inbound edges from a specific victim to a hacker (no amount floor or limit). */
+  async listEdgesFromVictimToHacker(victim: string, hacker: string) {
+    return await this.db
+      .select({
+        address: edges.fromAddress,
+        amountSats: edges.amountSats,
+        txid: edges.txid,
+        blockTime: edges.blockTime,
+      })
+      .from(edges)
+      .where(
+        and(
+          eq(edges.fromAddress, victim),
+          eq(edges.toAddress, hacker),
+          eq(edges.direction, "in_to_hacker"),
+        ),
+      )
+      .orderBy(desc(edges.amountSats))
+      .all();
+  }
+
   async getBlockTimeByHeight(blockHeight: number) {
     const row = await this.db
       .select({ blockTime: transactions.blockTime })
@@ -512,6 +565,41 @@ export class Store {
     return { ...job, status: "running" as const };
   }
 
+  async claimNextIngestJob(opts?: { preferContinuation?: boolean }): Promise<Job | null> {
+    const ts = now();
+    const candidates = await this.db
+      .select()
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.status, "pending"),
+          lte(jobs.runAfter, ts),
+          inArray(jobs.type, [...INGEST_JOB_TYPES]),
+        ),
+      )
+      .orderBy(desc(jobs.priority), asc(jobs.runAfter))
+      .limit(32)
+      .all();
+
+    if (candidates.length === 0) return null;
+
+    let pick = candidates[0]!;
+    if (opts?.preferContinuation) {
+      const cont = candidates.find((j) => isIngestContinuation(j.payloadJson));
+      if (cont) pick = cont;
+    }
+
+    const claimed = await this.db
+      .update(jobs)
+      .set({ status: "running" })
+      .where(and(eq(jobs.id, pick.id), eq(jobs.status, "pending")))
+      .run();
+    if (changesCount(claimed as { changes?: number; meta?: { changes?: number } }) === 0) {
+      return null;
+    }
+    return { ...pick, status: "running" as const };
+  }
+
   async completeJob(id: number) {
     await this.db.update(jobs).set({ status: "done", lastError: null }).where(eq(jobs.id, id)).run();
   }
@@ -577,6 +665,7 @@ export class Store {
     lastApiThresholdAt?: string;
     apiThresholdCount?: number;
     backfillHealAuditIndex?: number;
+    hackerPollIndex?: number;
     rateLimitMs?: number;
     btcUsdPrice?: number;
     btcUsdPriceAt?: string;
@@ -637,6 +726,16 @@ export class Store {
           lastPolledAt: ts,
         })
         .run();
+    }
+  }
+
+  async touchSyncPoll(address: string) {
+    const existing = await this.getSyncState(address);
+    const ts = now();
+    if (existing) {
+      await this.db.update(syncState).set({ lastPolledAt: ts }).where(eq(syncState.address, address)).run();
+    } else {
+      await this.db.insert(syncState).values({ address, lastPolledAt: ts }).run();
     }
   }
 
@@ -730,6 +829,14 @@ export class Store {
 
   async setBackfillHealAuditIndex(index: number) {
     await this.updateSchedulerState({ backfillHealAuditIndex: index });
+  }
+
+  async getHackerPollIndex(): Promise<number> {
+    return (await this.getSchedulerState())?.hackerPollIndex ?? 0;
+  }
+
+  async setHackerPollIndex(index: number) {
+    await this.updateSchedulerState({ hackerPollIndex: index });
   }
 
   async getSourceSync(source: string) {

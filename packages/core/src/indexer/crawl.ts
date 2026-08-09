@@ -98,13 +98,34 @@ export async function scheduleDownstreamCrawl(store: Store, config: AppConfig): 
     }
   }
 
-  for (const h of await store.listHackers()) {
+  const hackers = await store.listHackers();
+
+  let pollsEnqueued = 0;
+  let pollIdx = hackers.length > 0 ? (await store.getHackerPollIndex()) % hackers.length : 0;
+  let pollScanned = 0;
+
+  while (pollsEnqueued < config.pollHackerEnqueuePerCron && pollScanned < hackers.length) {
+    const h = hackers[pollIdx]!;
+    pollIdx = (pollIdx + 1) % hackers.length;
+    pollScanned++;
+
+    const backfill = await store.getBackfillState(h.address);
+    if (!backfill?.backfillComplete) continue;
+
     const sync = await store.getSyncState(h.address);
     const lastPoll = sync?.lastPolledAt ? new Date(sync.lastPolledAt).getTime() : 0;
-    if (ts - lastPoll >= config.cronIntervalSec * 1000 && !(await store.hasPendingJob("poll_hacker_address", h.address))) {
-      await store.enqueueJob("poll_hacker_address", { address: h.address }, JOB_PRIORITY.POLL_HACKER);
-    }
+    if (ts - lastPoll < config.cronIntervalSec * 1000) continue;
+    if (await store.hasPendingJob("poll_hacker_address", h.address)) continue;
 
+    await store.enqueueJob("poll_hacker_address", { address: h.address }, JOB_PRIORITY.POLL_HACKER);
+    pollsEnqueued++;
+  }
+
+  if (hackers.length > 0) {
+    await store.setHackerPollIndex(pollIdx);
+  }
+
+  for (const h of hackers) {
     const balanceAt = h.liveBalanceAt ? new Date(h.liveBalanceAt).getTime() : 0;
     if (
       ts - balanceAt >= config.balanceRefreshIntervalSec * 1000 &&

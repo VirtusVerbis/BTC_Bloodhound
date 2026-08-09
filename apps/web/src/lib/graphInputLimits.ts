@@ -3,16 +3,21 @@ import { btcToSats, satsToBtcNumber } from "./api";
 export const DEFAULT_MAX_VICTIM_NODES = 100;
 export const DEFAULT_MAX_DOWNSTREAM_NODES = 100;
 export const DEFAULT_MIN_EDGE_SATS = 1000;
-export const MAX_GRAPH_NODE_COUNT = 1000;
-export const GRAPH_NODE_INPUT_MAX_LENGTH = 6;
+/** Fallback when /api/config has not loaded yet. */
+export const DEFAULT_MAX_GRAPH_NODE_CAP = 10000;
 export const MIN_SATS_INPUT_MAX_LENGTH = 16;
 export const MIN_BTC_INPUT_MAX_LENGTH = 12;
 
 export const MAX_BTC_SUPPLY = 21_000_000;
 export const MAX_SATS_SUPPLY = MAX_BTC_SUPPLY * 100_000_000;
 
-export function clampGraphNodeCount(n: number): number {
-  return Math.min(MAX_GRAPH_NODE_COUNT, Math.max(1, Math.floor(n)));
+export function graphNodeInputMaxLength(maxCap: number): number {
+  return Math.max(1, String(Math.floor(maxCap)).length);
+}
+
+export function clampGraphNodeCount(n: number, maxCap = DEFAULT_MAX_GRAPH_NODE_CAP): number {
+  const cap = Math.max(1, Math.floor(maxCap));
+  return Math.min(cap, Math.max(1, Math.floor(n)));
 }
 
 export function clampMinEdgeSats(sats: number): number {
@@ -28,10 +33,11 @@ export function commitGraphNodeDraft(
   defaultValue: number,
   setCommitted: (n: number) => void,
   setDraft: (s: string) => void,
+  maxCap = DEFAULT_MAX_GRAPH_NODE_CAP,
 ): void {
   const trimmed = draft.trim();
   const parsed = trimmed === "" ? defaultValue : Math.floor(Number(trimmed));
-  const value = clampGraphNodeCount(Number.isFinite(parsed) ? parsed : defaultValue);
+  const value = clampGraphNodeCount(Number.isFinite(parsed) ? parsed : defaultValue, maxCap);
   setCommitted(value);
   setDraft(String(value));
 }

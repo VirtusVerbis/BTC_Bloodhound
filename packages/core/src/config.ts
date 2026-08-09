@@ -4,16 +4,16 @@ import dotenv from "dotenv";
 
 export const JOB_PRIORITY = {
   PROCESS_TX_REBUILD: 11,
-  POLL_HACKER: 10,
-  SYNC_COLDCARDWATCH: 9,
-  SYNC_VERCEL_TRACKERS: 9,
-  REFRESH_BALANCE: 8,
-  REFRESH_BTC_USD: 8,
-  POLL_DOWNSTREAM: 7,
-  USER_EXPAND: 6,
+  BACKFILL_HACKER: 10,
+  USER_EXPAND: 9,
+  CRON_EXPAND: 8,
+  POLL_HACKER: 6,
+  POLL_DOWNSTREAM: 5,
   PROCESS_TX: 4,
-  BACKFILL_HACKER: 2,
-  CRON_EXPAND: 1,
+  SYNC_COLDCARDWATCH: 3,
+  SYNC_VERCEL_TRACKERS: 3,
+  REFRESH_BALANCE: 2,
+  REFRESH_BTC_USD: 1,
 } as const;
 
 export type JobType =
@@ -39,6 +39,7 @@ export interface AppConfig {
   jobsPerTick: number;
   cronIntervalSec: number;
   crawlEnqueuePerCron: number;
+  pollHackerEnqueuePerCron: number;
   downstreamPollIntervalSec: number;
   downstreamPollEnqueuePerCron: number;
   maxCrawlDepth: number;
@@ -133,9 +134,10 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     rateLimitMs: Number(env.RATE_LIMIT_MS ?? 8000),
     jobsPerTick: Number(env.JOBS_PER_TICK ?? 1),
     cronIntervalSec: Number(env.CRON_INTERVAL_SEC ?? 60),
-    crawlEnqueuePerCron: Number(env.CRAWL_ENQUEUE_PER_CRON ?? 5),
+    crawlEnqueuePerCron: Number(env.CRAWL_ENQUEUE_PER_CRON ?? 3),
+    pollHackerEnqueuePerCron: Number(env.POLL_HACKER_ENQUEUE_PER_CRON ?? 1),
     downstreamPollIntervalSec: Number(env.DOWNSTREAM_POLL_INTERVAL_SEC ?? 600),
-    downstreamPollEnqueuePerCron: Number(env.DOWNSTREAM_POLL_ENQUEUE_PER_CRON ?? 10),
+    downstreamPollEnqueuePerCron: Number(env.DOWNSTREAM_POLL_ENQUEUE_PER_CRON ?? 2),
     maxCrawlDepth: Number(env.MAX_CRAWL_DEPTH ?? 5),
     maxGraphDepth: Number(env.MAX_GRAPH_DEPTH ?? 2),
     maxGraphOutputs: Number(env.MAX_GRAPH_OUTPUTS ?? 20),
@@ -178,8 +180,8 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     graphRateWindowSec: Number(env.GRAPH_RATE_WINDOW_SEC ?? 60),
     adminRateLimit: Number(env.ADMIN_RATE_LIMIT ?? 10),
     adminRateWindowSec: Number(env.ADMIN_RATE_WINDOW_SEC ?? 3600),
-    maxGraphVictims: Number(env.MAX_GRAPH_VICTIMS ?? 1000),
-    maxGraphDownstream: Number(env.MAX_GRAPH_DOWNSTREAM ?? 1000),
+    maxGraphVictims: Number(env.MAX_GRAPH_VICTIMS ?? 10000),
+    maxGraphDownstream: Number(env.MAX_GRAPH_DOWNSTREAM ?? 10000),
   };
 }
 

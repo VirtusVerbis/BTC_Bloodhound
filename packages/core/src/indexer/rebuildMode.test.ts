@@ -13,6 +13,7 @@ function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     jobsPerTick: 1,
     cronIntervalSec: 60,
     crawlEnqueuePerCron: 5,
+    pollHackerEnqueuePerCron: 1,
     downstreamPollIntervalSec: 600,
     downstreamPollEnqueuePerCron: 10,
     maxCrawlDepth: 5,

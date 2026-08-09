@@ -90,9 +90,8 @@ export async function buildGraph(
   const victimStats = await store.getVictimStats(hacker, minEdgeSats);
 
   if (victimFilter) {
-    const victimEdges = (await store.listVictimsForHacker(hacker, maxVictims)).filter(
-      (v) => v.address.toLowerCase() === victimFilter && v.amountSats >= minEdgeSats,
-    );
+    // Victim search: load this address's edges directly (ignore maxVictims / minEdgeSats).
+    const victimEdges = await store.listEdgesFromVictimToHacker(victimFilter, hacker);
     if (victimEdges.length > 0) {
       const totalIncoming = victimEdges.reduce((s, v) => s + v.amountSats, 0);
       nodes.push({
@@ -241,11 +240,11 @@ export async function buildGraph(
 export async function buildVictimGraph(
   store: Store,
   victim: string,
-  options: { minEdgeSats?: number },
+  options: { minEdgeSats?: number } = {},
 ): Promise<GraphResult> {
-  const minEdgeSats = options.minEdgeSats ?? 1000;
   const normalized = victim.trim().toLowerCase();
-  const hackers = await store.listHackersForVictim(normalized, minEdgeSats);
+  // Victim search: do not apply minEdgeSats when resolving linked hackers.
+  const hackers = await store.listHackersForVictim(normalized, options.minEdgeSats);
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
 

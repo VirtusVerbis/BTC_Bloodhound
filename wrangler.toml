@@ -27,6 +27,8 @@ MEMPOOL_BASE = "https://mempool.space/api"
 CORS_ORIGINS = "http://localhost:8787,http://127.0.0.1:8787"
 RATE_LIMIT_MS = "8000"
 JOBS_PER_TICK = "1"
+MAX_GRAPH_VICTIMS = "10000"
+MAX_GRAPH_DOWNSTREAM = "10000"
 
 # Production deploy: `pnpm cf:deploy` → wrangler deploy --env production
 # Worker name: cointrace-production. Bindings (vars/D1/assets) are non-inheritable.
@@ -52,6 +54,8 @@ MEMPOOL_BASE = "https://mempool.space/api"
 CORS_ORIGINS = "https://cointrace-production.workers.dev"
 RATE_LIMIT_MS = "8000"
 JOBS_PER_TICK = "1"
+MAX_GRAPH_VICTIMS = "10000"
+MAX_GRAPH_DOWNSTREAM = "10000"
 
 # Secrets (do NOT put in [vars]):
 #   npx wrangler secret put ADMIN_TOKEN --env production

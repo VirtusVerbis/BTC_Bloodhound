@@ -446,6 +446,8 @@ async function pollHacker(store: Store, router: ChainRouter, address: string): P
       lastSeenTxid: txs[0]!.txid,
       lastBlockHeight: txs[0]!.status?.block_height ?? null,
     });
+  } else {
+    await store.touchSyncPoll(address);
   }
 }
 
@@ -461,6 +463,8 @@ async function pollDownstream(store: Store, router: ChainRouter, address: string
       lastSeenTxid: txs[0]!.txid,
       lastBlockHeight: txs[0]!.status?.block_height ?? null,
     });
+  } else {
+    await store.touchSyncPoll(address);
   }
 }
 
@@ -655,7 +659,8 @@ export async function processJob(
 export async function processJobs(store: Store, router: ChainRouter, config: AppConfig): Promise<number> {
   let processed = 0;
   for (let i = 0; i < config.jobsPerTick; i++) {
-    const job = await store.claimNextJob();
+    const job =
+      (await store.claimNextIngestJob({ preferContinuation: true })) ?? (await store.claimNextJob());
     if (!job) break;
     try {
       if (job.type === "sync_coldcardwatch") {
