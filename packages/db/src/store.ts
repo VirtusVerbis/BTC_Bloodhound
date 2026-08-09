@@ -556,13 +556,13 @@ export class Store {
     // Claim only if still pending (avoids double-claim under overlapping cron ticks).
     const claimed = await this.db
       .update(jobs)
-      .set({ status: "running" })
+      .set({ status: "running", startedAt: ts, completedAt: null })
       .where(and(eq(jobs.id, job.id), eq(jobs.status, "pending")))
       .run();
     if (changesCount(claimed as { changes?: number; meta?: { changes?: number } }) === 0) {
       return null;
     }
-    return { ...job, status: "running" as const };
+    return { ...job, status: "running" as const, startedAt: ts, completedAt: null };
   }
 
   async claimNextIngestJob(opts?: { preferContinuation?: boolean }): Promise<Job | null> {
@@ -591,17 +591,21 @@ export class Store {
 
     const claimed = await this.db
       .update(jobs)
-      .set({ status: "running" })
+      .set({ status: "running", startedAt: ts, completedAt: null })
       .where(and(eq(jobs.id, pick.id), eq(jobs.status, "pending")))
       .run();
     if (changesCount(claimed as { changes?: number; meta?: { changes?: number } }) === 0) {
       return null;
     }
-    return { ...pick, status: "running" as const };
+    return { ...pick, status: "running" as const, startedAt: ts, completedAt: null };
   }
 
   async completeJob(id: number) {
-    await this.db.update(jobs).set({ status: "done", lastError: null }).where(eq(jobs.id, id)).run();
+    await this.db
+      .update(jobs)
+      .set({ status: "done", lastError: null, completedAt: now() })
+      .where(eq(jobs.id, id))
+      .run();
   }
 
   async failJob(id: number, error: string, runAfter?: string) {
@@ -613,6 +617,7 @@ export class Store {
         attempts: (job?.attempts ?? 0) + 1,
         lastError: error,
         runAfter: runAfter ?? now(),
+        startedAt: null,
       })
       .where(eq(jobs.id, id))
       .run();
@@ -621,7 +626,7 @@ export class Store {
   async resetRunningJobs(): Promise<number> {
     const result = await this.db
       .update(jobs)
-      .set({ status: "pending" })
+      .set({ status: "pending", startedAt: null })
       .where(eq(jobs.status, "running"))
       .run();
     return changesCount(result as { changes?: number; meta?: { changes?: number } });
@@ -981,14 +986,26 @@ export class Store {
       }
     }
 
-    const lastJob = await this.db
+    const lastDoneJob = await this.db
       .select()
       .from(jobs)
-      .where(ne(jobs.status, "pending"))
-      .orderBy(desc(jobs.id))
+      .where(eq(jobs.status, "done"))
+      .orderBy(sql`coalesce(${jobs.completedAt}, ${jobs.createdAt}) desc`, desc(jobs.id))
       .limit(1)
       .get();
-    const lastJobAt = lastJob?.createdAt ?? null;
+
+    const lastCompletedJobAt = lastDoneJob?.completedAt ?? lastDoneJob?.createdAt ?? null;
+    const lastCompletedJobType = lastDoneJob?.type ?? null;
+    let lastCompletedJobDurationMs: number | null = null;
+    if (lastDoneJob?.startedAt && lastDoneJob?.completedAt) {
+      const startMs = new Date(lastDoneJob.startedAt).getTime();
+      const endMs = new Date(lastDoneJob.completedAt).getTime();
+      if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs >= startMs) {
+        lastCompletedJobDurationMs = endMs - startMs;
+      }
+    }
+
+    const lastJobAt = lastCompletedJobAt;
 
     const candidates = [lastChainApiAt, lastExternalSyncAt, lastJobAt].filter(Boolean) as string[];
     const lastActivityAt =
@@ -1002,6 +1019,9 @@ export class Store {
       lastChainApiAt,
       lastExternalSyncAt,
       lastJobAt,
+      lastCompletedJobType,
+      lastCompletedJobDurationMs,
+      lastCompletedJobAt,
       lastActivityAt,
       monitoringActive,
       apiThresholdExceeded,

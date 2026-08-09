@@ -204,7 +204,7 @@ body {
 
 .hack-elapsed-label {
   position: absolute;
-  left: calc(50% + 5%);
+  left: calc(50% + 15%);
   top: 25%;
   transform: translateX(-50%);
   font-size: 0.85rem;

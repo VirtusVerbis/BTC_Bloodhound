@@ -29,26 +29,36 @@ describe("diffCalendarYMD", () => {
 
 describe("formatHackElapsed", () => {
   it("formats days only before one month", () => {
-    expect(formatHackElapsed(new Date(2026, 7, 7))).toBe("8 Days since July 30, 2026");
+    expect(formatHackElapsed(new Date(2026, 7, 7))).toBe(
+      "8 Days since July 30, 2026.  BTC was $63,934 USD",
+    );
   });
 
   it("formats months and days", () => {
-    expect(formatHackElapsed(new Date(2026, 7, 30))).toBe("1 Month 0 Days since July 30, 2026");
-    expect(formatHackElapsed(new Date(2026, 8, 4))).toBe("1 Month 5 Days since July 30, 2026");
+    expect(formatHackElapsed(new Date(2026, 7, 30))).toBe(
+      "1 Month 0 Days since July 30, 2026.  BTC was $63,934 USD",
+    );
+    expect(formatHackElapsed(new Date(2026, 8, 4))).toBe(
+      "1 Month 5 Days since July 30, 2026.  BTC was $63,934 USD",
+    );
   });
 
   it("formats years, months, and days", () => {
     expect(formatHackElapsed(new Date(2027, 9, 15))).toBe(
-      "1 Year 2 Months 15 Days since July 30, 2026",
+      "1 Year 2 Months 15 Days since July 30, 2026.  BTC was $63,934 USD",
     );
   });
 
   it("returns zero days before the anchor date", () => {
-    expect(formatHackElapsed(new Date(2026, 6, 29))).toBe("0 Days since July 30, 2026");
+    expect(formatHackElapsed(new Date(2026, 6, 29))).toBe(
+      "0 Days since July 30, 2026.  BTC was $63,934 USD",
+    );
   });
 
   it("uses singular units when value is 1", () => {
     expect(formatHackElapsed(new Date(2026, 7, 30))).toContain("1 Month");
-    expect(formatHackElapsed(new Date(2026, 6, 31))).toBe("1 Day since July 30, 2026");
+    expect(formatHackElapsed(new Date(2026, 6, 31))).toBe(
+      "1 Day since July 30, 2026.  BTC was $63,934 USD",
+    );
   });
 });

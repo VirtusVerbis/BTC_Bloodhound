@@ -1,7 +1,7 @@
 /** July 30, 2026 at local midnight — anchor for hack elapsed label. */
 export const HACK_START_DATE = new Date(2026, 6, 30);
 
-const SUFFIX = "since July 30, 2026";
+const SUFFIX = "since July 30, 2026.  BTC was $63,934 USD";
 
 export interface CalendarYMD {
   years: number;

@@ -11,6 +11,7 @@ import {
   purposeText,
 } from "../content/aboutContent";
 import {
+  formatJobDuration,
   formatMonitoringTime,
   formatSourceLabel,
   type MonitoringSyncStatus,
@@ -103,6 +104,11 @@ export function AboutPage({ sync }: AboutPageProps) {
               <li>Chain API: {formatMonitoringTime(sync.lastChainApiAt)}</li>
               <li>External sync: {formatMonitoringTime(sync.lastExternalSyncAt)}</li>
               <li>Indexer jobs: {formatMonitoringTime(sync.lastJobAt)}</li>
+              <li>
+                Last job completed: {sync.lastCompletedJobType?.trim() || "—"}
+                {" · "}
+                Duration: {formatJobDuration(sync.lastCompletedJobDurationMs)}
+              </li>
             </ul>
             {sync.externalSources && sync.externalSources.length > 0 && (
               <>

@@ -57,6 +57,8 @@ export const jobs = sqliteTable("jobs", {
   attempts: integer("attempts").notNull().default(0),
   lastError: text("last_error"),
   createdAt: text("created_at").notNull(),
+  startedAt: text("started_at"),
+  completedAt: text("completed_at"),
 });
 
 export const sourceSyncState = sqliteTable("source_sync_state", {

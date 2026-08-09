@@ -12,6 +12,9 @@ export interface MonitoringSyncStatus {
   lastChainApiAt?: string | null;
   lastExternalSyncAt?: string | null;
   lastJobAt?: string | null;
+  lastCompletedJobType?: string | null;
+  lastCompletedJobDurationMs?: number | null;
+  lastCompletedJobAt?: string | null;
   externalSources?: MonitoringSyncSource[];
   apiThresholdExceeded?: boolean;
   lastApiThresholdAt?: string | null;
@@ -24,11 +27,32 @@ function formatLocal(iso: string | null | undefined) {
   return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
 }
 
+/** Format job execution duration for monitoring display. */
+export function formatJobDuration(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return "—";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const totalSec = ms / 1000;
+  if (totalSec < 60) {
+    const rounded = totalSec >= 10 ? Math.round(totalSec) : Math.round(totalSec * 10) / 10;
+    return `${rounded}s`;
+  }
+  const minutes = Math.floor(totalSec / 60);
+  const seconds = Math.round(totalSec % 60);
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+function formatLastCompletedJob(sync: MonitoringSyncStatus): string {
+  const type = sync.lastCompletedJobType?.trim() || "—";
+  const duration = formatJobDuration(sync.lastCompletedJobDurationMs);
+  return `Last Job Completed: ${type}  Duration: ${duration}`;
+}
+
 function monitoringTooltip(sync: MonitoringSyncStatus) {
   const lines = [
     `Chain API: ${formatLocal(sync.lastChainApiAt)}`,
     `External sync: ${formatLocal(sync.lastExternalSyncAt)}`,
     `Indexer jobs: ${formatLocal(sync.lastJobAt)}`,
+    formatLastCompletedJob(sync),
   ];
   if (sync.apiThresholdExceeded) {
     lines.push(
@@ -81,6 +105,9 @@ export function MonitoringIndicator({
       </a>
       <div className="monitoring-updated">
         Last updated: {lastActivity ? formatLocal(lastActivity) : "—"}
+      </div>
+      <div className="monitoring-updated">
+        {sync ? formatLastCompletedJob(sync) : "Last Job Completed: —  Duration: —"}
       </div>
       {showRateLimit && (
         <div className="rate-limit-banner" role="status">

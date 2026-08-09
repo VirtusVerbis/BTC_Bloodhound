@@ -142,6 +142,14 @@ export function runMigrations(sqlite: Database.Database): void {
     sqlite.exec(`ALTER TABLE sync_state ADD COLUMN chain_tx_count_at_audit INTEGER`);
   }
 
+  const jobCols = sqlite.prepare("PRAGMA table_info(jobs)").all() as Array<{ name: string }>;
+  if (!jobCols.some((c) => c.name === "started_at")) {
+    sqlite.exec(`ALTER TABLE jobs ADD COLUMN started_at TEXT`);
+  }
+  if (!jobCols.some((c) => c.name === "completed_at")) {
+    sqlite.exec(`ALTER TABLE jobs ADD COLUMN completed_at TEXT`);
+  }
+
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS rate_limits (
       key TEXT PRIMARY KEY,
