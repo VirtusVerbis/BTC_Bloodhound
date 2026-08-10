@@ -43,10 +43,27 @@ function build(env: WorkerEnv) {
   assertProductionSecrets(config);
   const store = createD1Store(env.DB);
   const router = new ChainRouter(config.esploraBase, config.mempoolBase, store, config.rateLimitMs, {
-    sleepOnRateLimit: true,
+    sleepOnRateLimit: false,
   });
   const app = createApp(store, config);
   return { config, store, router, app };
+}
+
+async function clearTickLeaseLogged(store: { clearTickLease(): Promise<void> }): Promise<void> {
+  try {
+    await store.clearTickLease();
+  } catch (error) {
+    const err = error as Error & { cause?: unknown };
+    console.error("[cron] clearTickLease failed:", err.message);
+    if (err.cause != null) {
+      console.error("[cron] clearTickLease cause:", String(err.cause));
+      if (err.cause instanceof Error && err.cause.stack) {
+        console.error("[cron] clearTickLease cause stack:", err.cause.stack);
+      }
+    } else if (err.stack) {
+      console.error("[cron] clearTickLease stack:", err.stack);
+    }
+  }
 }
 
 function withSecurityHeaders(res: Response): Response {
@@ -94,7 +111,7 @@ const worker = {
       await store.resetRunningJobs(config.runningJobStaleMs);
       await runIndexerTick(store, router, config, { schedule: true });
     } finally {
-      await store.clearTickLease();
+      await clearTickLeaseLogged(store);
     }
   },
 };
