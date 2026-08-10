@@ -16,14 +16,10 @@ export type GraphNodeData = {
   latestTxTime?: string | null;
   earliestTxTime?: string | null;
   hopFromHacker?: number | null;
-  onExpand?: () => void;
-  countdown?: string;
-  failed?: boolean;
-  onRetry?: () => void;
+  onExpandVictims?: () => void;
 };
 
 const handleStyle = { background: "#f7931a", width: 6, height: 6, border: "none" };
-const queuedHandleStyle = { background: "#888", width: 6, height: 6, border: "none" };
 
 function balanceAge(at: string | null | undefined) {
   if (!at) return "";
@@ -78,11 +74,6 @@ export function DownstreamNode({ data }: NodeProps) {
         </div>
       )}
       {d.hopFromHacker != null && <div>hop {d.hopFromHacker}</div>}
-      <div className="node-actions nodrag">
-        <button type="button" className="primary" onClick={d.onExpand}>
-          Expand
-        </button>
-      </div>
       {d.address && <ExplorerActions address={d.address} />}
     </div>
   );
@@ -99,7 +90,7 @@ export function VictimClusterNode({ data }: NodeProps) {
         <UsdUnderBtc sats={d.totalSats ?? 0} />
       </div>
       <div className="node-actions nodrag">
-        <button type="button" onClick={d.onExpand}>
+        <button type="button" onClick={d.onExpandVictims}>
           Expand
         </button>
       </div>
@@ -125,32 +116,9 @@ export function VictimNode({ data }: NodeProps) {
   );
 }
 
-export function QueuedPlaceholderNode({ data }: NodeProps) {
-  const d = data as GraphNodeData;
-  return (
-    <div className={`node-card queued${d.failed ? " failed" : ""}`}>
-      <Handle type="target" position={Position.Left} style={queuedHandleStyle} />
-      {d.failed ? (
-        <>
-          <div>Failed</div>
-          <button type="button" onClick={d.onRetry}>
-            Retry
-          </button>
-        </>
-      ) : (
-        <>
-          <div>⟳ Queued</div>
-          <div>{d.countdown ?? "…"}</div>
-        </>
-      )}
-    </div>
-  );
-}
-
 export const nodeTypes = {
   hacker: HackerNode,
   downstream: DownstreamNode,
   victimCluster: VictimClusterNode,
   victim: VictimNode,
-  queued: QueuedPlaceholderNode,
 };

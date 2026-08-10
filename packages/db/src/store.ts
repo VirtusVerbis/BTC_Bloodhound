@@ -10,8 +10,8 @@ import {
   sourceSyncState,
   syncState,
   transactions,
-  type Edge,
   type Job,
+  type Transaction,
 } from "./schema.js";
 
 const INGEST_JOB_TYPES = [
@@ -19,6 +19,9 @@ const INGEST_JOB_TYPES = [
   "audit_hacker_backfill",
   "expand_downstream",
 ] as const;
+
+const TXID_BATCH_SIZE = 200;
+const ADDRESS_DETAIL_TX_LIMIT = 50;
 
 function jobPayloadAddressEq(address: string) {
   return sql`json_extract(${jobs.payloadJson}, '$.address') = ${address}`;
@@ -273,6 +276,25 @@ export class Store {
     return await this.db.select().from(transactions).where(eq(transactions.txid, txid)).get();
   }
 
+  async getTransactionsByTxids(txids: string[]): Promise<Map<string, Transaction>> {
+    const unique = [...new Set(txids)];
+    const txById = new Map<string, Transaction>();
+    if (unique.length === 0) return txById;
+
+    for (let i = 0; i < unique.length; i += TXID_BATCH_SIZE) {
+      const chunk = unique.slice(i, i + TXID_BATCH_SIZE);
+      const rows = await this.db
+        .select()
+        .from(transactions)
+        .where(inArray(transactions.txid, chunk))
+        .all();
+      for (const row of rows) {
+        txById.set(row.txid, row);
+      }
+    }
+    return txById;
+  }
+
   async getVictimStats(hacker: string, minEdgeSats?: number) {
     const conditions = [eq(edges.toAddress, hacker), eq(edges.direction, "in_to_hacker")];
     if (minEdgeSats != null) {
@@ -335,40 +357,79 @@ export class Store {
     return row?.blockTime ?? null;
   }
 
-  async resolveHackTiming(edgeList: Edge[]) {
-    type Candidate = {
-      txid: string;
-      sortHeight: number | null;
-      sortTime: string | null;
+  async getAddressDetailAggregates(address: string) {
+    const outgoing = await this.db
+      .select({
+        count: sql<number>`count(*)`,
+        total: sql<number>`coalesce(sum(${edges.amountSats}), 0)`,
+      })
+      .from(edges)
+      .where(eq(edges.fromAddress, address))
+      .get();
+    const touching = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(edges)
+      .where(or(eq(edges.fromAddress, address), eq(edges.toAddress, address)))
+      .get();
+    return {
+      outgoingEdgeCount: outgoing?.count ?? 0,
+      totalSent: outgoing?.total ?? 0,
+      relatedTxsTotal: touching?.count ?? 0,
     };
+  }
 
-    const candidates: Candidate[] = [];
-    for (const e of edgeList) {
-      const tx = await this.getTransaction(e.txid);
-      if (tx?.blockHeight != null || tx?.blockTime != null || e.blockTime) {
-        candidates.push({
-          txid: e.txid,
-          sortHeight: tx?.blockHeight ?? null,
-          sortTime: tx?.blockTime ?? e.blockTime ?? null,
-        });
-      }
-    }
+  async getRecentEdgesForAddress(address: string, limit = ADDRESS_DETAIL_TX_LIMIT) {
+    return await this.db
+      .select({
+        fromAddress: edges.fromAddress,
+        toAddress: edges.toAddress,
+        txid: edges.txid,
+        amountSats: edges.amountSats,
+        blockTime: edges.blockTime,
+        txBlockTime: transactions.blockTime,
+        txBlockHeight: transactions.blockHeight,
+      })
+      .from(edges)
+      .leftJoin(transactions, eq(edges.txid, transactions.txid))
+      .where(or(eq(edges.fromAddress, address), eq(edges.toAddress, address)))
+      .orderBy(sql`coalesce(${transactions.blockTime}, ${edges.blockTime}) desc`)
+      .limit(limit)
+      .all();
+  }
 
-    if (candidates.length === 0) {
+  async resolveHackTimingForAddress(address: string) {
+    const row = await this.db
+      .select({
+        txid: edges.txid,
+        edgeBlockTime: edges.blockTime,
+        txBlockTime: transactions.blockTime,
+        txBlockHeight: transactions.blockHeight,
+      })
+      .from(edges)
+      .leftJoin(transactions, eq(edges.txid, transactions.txid))
+      .where(
+        and(
+          or(eq(edges.fromAddress, address), eq(edges.toAddress, address)),
+          or(
+            isNotNull(transactions.blockHeight),
+            isNotNull(transactions.blockTime),
+            isNotNull(edges.blockTime),
+          ),
+        ),
+      )
+      .orderBy(
+        sql`coalesce(${transactions.blockHeight}, 2147483647) asc`,
+        sql`coalesce(${transactions.blockTime}, ${edges.blockTime}, '9999') asc`,
+      )
+      .limit(1)
+      .get();
+
+    if (!row) {
       return { hackOccurredAt: null as string | null, hackBlockHeight: null as number | null };
     }
 
-    candidates.sort((a, b) => {
-      if (a.sortHeight != null && b.sortHeight != null) return a.sortHeight - b.sortHeight;
-      if (a.sortHeight != null) return -1;
-      if (b.sortHeight != null) return 1;
-      return (a.sortTime ?? "").localeCompare(b.sortTime ?? "");
-    });
-
-    const earliest = candidates[0]!;
-    const tx = await this.getTransaction(earliest.txid);
-    const hackBlockHeight = tx?.blockHeight ?? earliest.sortHeight ?? null;
-    let hackOccurredAt = tx?.blockTime ?? earliest.sortTime ?? null;
+    const hackBlockHeight = row.txBlockHeight ?? null;
+    let hackOccurredAt = row.txBlockTime ?? row.edgeBlockTime ?? null;
     if (!hackOccurredAt && hackBlockHeight != null) {
       hackOccurredAt = await this.getBlockTimeByHeight(hackBlockHeight);
     }
@@ -379,24 +440,37 @@ export class Store {
   async getAddressDetail(address: string) {
     const addr = await this.getAddress(address);
     if (!addr) return null;
-    const incoming = await this.getEdgesToAddress(address);
-    const outgoing = await this.getEdgesFromAddress(address);
-    const allEdges = [...incoming, ...outgoing];
-    const relatedTxs = [];
-    for (const e of allEdges) {
-      const tx = await this.getTransaction(e.txid);
-      relatedTxs.push({
+
+    const { outgoingEdgeCount, totalSent, relatedTxsTotal } =
+      await this.getAddressDetailAggregates(address);
+    const recentEdges = await this.getRecentEdgesForAddress(address, ADDRESS_DETAIL_TX_LIMIT);
+
+    const missingTxids = recentEdges
+      .filter((e) => e.txBlockTime == null && e.blockTime == null)
+      .map((e) => e.txid);
+    const txById = await this.getTransactionsByTxids(missingTxids);
+
+    const relatedTxs = recentEdges.map((e) => {
+      const tx = txById.get(e.txid);
+      return {
         txid: e.txid,
-        blockTime: tx?.blockTime ?? e.blockTime ?? null,
+        blockTime: e.txBlockTime ?? e.blockTime ?? tx?.blockTime ?? null,
         amountSats: e.amountSats,
         direction: e.fromAddress === address ? "out" : "in",
         counterparty: e.fromAddress === address ? e.toAddress : e.fromAddress,
-      });
-    }
-    relatedTxs.sort((a, b) => (b.blockTime ?? "").localeCompare(a.blockTime ?? ""));
-    const totalSent = outgoing.reduce((s, e) => s + e.amountSats, 0);
-    const { hackOccurredAt, hackBlockHeight } = await this.resolveHackTiming(allEdges);
-    return { address: addr, totalSent, relatedTxs, hackOccurredAt, hackBlockHeight };
+      };
+    });
+
+    const { hackOccurredAt, hackBlockHeight } = await this.resolveHackTimingForAddress(address);
+    return {
+      address: addr,
+      totalSent,
+      relatedTxs,
+      outgoingEdgeCount,
+      relatedTxsTotal,
+      hackOccurredAt,
+      hackBlockHeight,
+    };
   }
 
   async listHackersForVictim(victim: string, minEdgeSats?: number) {
@@ -675,6 +749,7 @@ export class Store {
     apiThresholdCount?: number;
     backfillHealAuditIndex?: number;
     hackerPollIndex?: number;
+    maintenanceCronCounter?: number;
     rateLimitMs?: number;
     btcUsdPrice?: number;
     btcUsdPriceAt?: string;
@@ -846,6 +921,13 @@ export class Store {
 
   async setHackerPollIndex(index: number) {
     await this.updateSchedulerState({ hackerPollIndex: index });
+  }
+
+  async incrementMaintenanceCronCounter(): Promise<number> {
+    const state = await this.getSchedulerState();
+    const next = (state?.maintenanceCronCounter ?? 0) + 1;
+    await this.updateSchedulerState({ maintenanceCronCounter: next });
+    return next;
   }
 
   async getSourceSync(source: string) {

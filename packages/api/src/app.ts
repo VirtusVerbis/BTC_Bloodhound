@@ -5,9 +5,7 @@ import type { AppConfig } from "@cointrace/core";
 import {
   buildGraph,
   buildVictimGraph,
-  computeJobEta,
   isRebuildActive,
-  JOB_PRIORITY,
   normalizeBitcoinAddress,
 } from "@cointrace/core";
 import {
@@ -215,58 +213,6 @@ export function createApp(store: Store, config: AppConfig) {
       ...crawl,
       ...monitor,
       ...monitoring,
-    });
-  });
-
-  app.get("/api/jobs/:id", async (c) => {
-    const id = Number(c.req.param("id"));
-    if (!Number.isFinite(id) || id < 1) return c.json({ error: "invalid job id" }, 400);
-    const job = await store.getJob(id);
-    if (!job) return c.json({ error: "not found" }, 404);
-    const eta = await computeJobEta(store, job, config.rateLimitMs, config.jobsPerTick);
-    return c.json({
-      id: job.id,
-      type: job.type,
-      status: job.status,
-      ...eta,
-    });
-  });
-
-  app.post("/api/expand/:addr", async (c) => {
-    const ip = clientIp(c);
-    const denied = await applyRateLimit(
-      c,
-      store,
-      config,
-      `expand:${ip}`,
-      config.expandRateLimit,
-      config.expandRateWindowSec,
-    );
-    if (denied) return denied;
-
-    const address = normalizeBitcoinAddress(c.req.param("addr"));
-    if (!address) return c.json({ error: "invalid address" }, 400);
-
-    const active = await store.countActiveJobs("expand_downstream");
-    if (active >= config.expandMaxActive) {
-      return c.json({ error: "too many expand jobs active", maxActive: config.expandMaxActive }, 429, {
-        "Retry-After": "60",
-      });
-    }
-
-    const addr = await store.getAddress(address);
-    if (!addr) return c.json({ error: "address not in database" }, 404);
-    if (await store.hasPendingJob("expand_downstream", address)) {
-      return c.json({ error: "expand already queued" }, 409);
-    }
-    await store.setExpandStatus(address, "queued");
-    const jobId = await store.enqueueJob("expand_downstream", { address, user: true }, JOB_PRIORITY.USER_EXPAND);
-    const job = (await store.getJob(jobId))!;
-    const eta = await computeJobEta(store, job, config.rateLimitMs, config.jobsPerTick);
-    return c.json({
-      jobId,
-      status: "queued",
-      ...eta,
     });
   });
 

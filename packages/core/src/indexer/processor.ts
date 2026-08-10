@@ -547,11 +547,10 @@ async function expandDownstream(
   };
 
   if (needsMore) {
-    const priority = rawPayload.user ? JOB_PRIORITY.USER_EXPAND : JOB_PRIORITY.CRON_EXPAND;
     await store.enqueueJob(
       "expand_downstream",
-      { ...nextPayload, user: rawPayload.user === true } as unknown as Record<string, unknown>,
-      priority,
+      nextPayload as unknown as Record<string, unknown>,
+      JOB_PRIORITY.CRON_EXPAND,
     );
     return;
   }

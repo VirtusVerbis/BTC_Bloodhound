@@ -5,7 +5,6 @@ import dotenv from "dotenv";
 export const JOB_PRIORITY = {
   PROCESS_TX_REBUILD: 11,
   BACKFILL_HACKER: 10,
-  USER_EXPAND: 9,
   CRON_EXPAND: 8,
   POLL_HACKER: 6,
   POLL_DOWNSTREAM: 5,
@@ -39,6 +38,7 @@ export interface AppConfig {
   cronIntervalSec: number;
   crawlEnqueuePerCron: number;
   pollHackerEnqueuePerCron: number;
+  hackerMaintenanceEveryNCrons: number;
   downstreamPollIntervalSec: number;
   downstreamPollEnqueuePerCron: number;
   maxCrawlDepth: number;
@@ -71,9 +71,6 @@ export interface AppConfig {
   /** True when CORS_ORIGINS env was explicitly set (required in production). */
   corsOriginsFromEnv: boolean;
   environment: string;
-  expandRateLimit: number;
-  expandRateWindowSec: number;
-  expandMaxActive: number;
   getRateLimit: number;
   getRateWindowSec: number;
   graphRateLimit: number;
@@ -131,6 +128,7 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     cronIntervalSec: Number(env.CRON_INTERVAL_SEC ?? 60),
     crawlEnqueuePerCron: Number(env.CRAWL_ENQUEUE_PER_CRON ?? 3),
     pollHackerEnqueuePerCron: Number(env.POLL_HACKER_ENQUEUE_PER_CRON ?? 1),
+    hackerMaintenanceEveryNCrons: Number(env.HACKER_MAINTENANCE_EVERY_N_CRONS ?? 10),
     downstreamPollIntervalSec: Number(env.DOWNSTREAM_POLL_INTERVAL_SEC ?? 600),
     downstreamPollEnqueuePerCron: Number(env.DOWNSTREAM_POLL_ENQUEUE_PER_CRON ?? 2),
     maxCrawlDepth: Number(env.MAX_CRAWL_DEPTH ?? 5),
@@ -164,9 +162,6 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     corsOrigins,
     corsOriginsFromEnv,
     environment: env.ENVIRONMENT ?? env.NODE_ENV ?? "development",
-    expandRateLimit: Number(env.EXPAND_RATE_LIMIT ?? 5),
-    expandRateWindowSec: Number(env.EXPAND_RATE_WINDOW_SEC ?? 600),
-    expandMaxActive: Number(env.EXPAND_MAX_ACTIVE ?? 20),
     getRateLimit: Number(env.GET_RATE_LIMIT ?? 120),
     getRateWindowSec: Number(env.GET_RATE_WINDOW_SEC ?? 60),
     graphRateLimit: Number(env.GRAPH_RATE_LIMIT ?? 30),

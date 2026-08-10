@@ -2,6 +2,12 @@
 
 Track public Coldcard hack consolidation addresses, victim inputs, and downstream flows.
 
+Build:
+npx pnpm@9.15.0 -r run build
+
+Deploy:
+npx wrangler deploy --env production
+
 ## Quick start (local)
 
 ```bash
@@ -112,9 +118,9 @@ pnpm db:pull-d1:remote
 
 ### Security notes (public deploy)
 
-- Public read APIs power the SPA; `POST /api/expand` is rate-limited. Hacker add/remove is CLI-only (no admin HTTP).
+- Public read APIs power the SPA; downstream crawl is indexer/cron-only (no public expand HTTP). Hacker add/remove is CLI-only (no admin HTTP).
 - **CSRF tokens are N/A** without cookie sessions; CORS allowlist + rate limits are the controls.
-- App-level per-IP rate limits (expand, GET, graph) apply **only when `ENVIRONMENT=production`**. Local Node and `pnpm cf:dev` skip them (global expand active-job cap still applies). See `EXPAND_*`, `GET_*`, `GRAPH_*` env knobs.
+- App-level per-IP rate limits (GET, graph) apply **only when `ENVIRONMENT=production`**. Local Node and `pnpm cf:dev` skip them. See `GET_*`, `GRAPH_*` env knobs.
 - Graph UI poll interval comes from `GET /api/config` (`graphPollMs`: **30s** non-production, **120s** production). The client caches recent `/api/graph` responses by query key (instant revisit via dropdown/Page Down); concurrent misses for the same key share one in-flight request. Only the poll interval revalidates from the network.
 - Production requires explicit `CORS_ORIGINS` (`assertProductionSecrets`).
 - Before deploy: `pnpm audit` (or `npx pnpm@9.15.0 audit`).

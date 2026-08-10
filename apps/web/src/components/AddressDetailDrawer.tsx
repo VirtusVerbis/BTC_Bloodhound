@@ -16,6 +16,8 @@ export interface AddressDetail {
     liveBalanceAt: string | null;
   };
   totalSent: number;
+  outgoingEdgeCount: number;
+  relatedTxsTotal: number;
   hackOccurredAt: string | null;
   hackBlockHeight: number | null;
   relatedTxs: Array<{
@@ -65,7 +67,7 @@ export function AddressDetailDrawer({
             </p>
             <p>
               Outgoing flows indexed:{" "}
-              {detail.relatedTxs.filter((t) => t.direction === "out").length || "none"}
+              {detail.outgoingEdgeCount || "none"}
             </p>
             <p>Total received (hack): {satsToBtc(detail.address.totalReceivedSats)} BTC</p>
             {detail.address.liveBalanceSats != null && (
@@ -93,7 +95,7 @@ export function AddressDetailDrawer({
                 </tr>
               </thead>
               <tbody>
-                {(detail.relatedTxs ?? []).slice(0, 50).map((tx, i) => (
+                {(detail.relatedTxs ?? []).map((tx, i) => (
                   <tr key={`${tx.txid}:${tx.direction}:${i}`}>
                     <td>
                       <a href={txUrl(tx.txid)} target="_blank" rel="noreferrer">
@@ -106,6 +108,12 @@ export function AddressDetailDrawer({
                 ))}
               </tbody>
             </table>
+            {detail.relatedTxsTotal > (detail.relatedTxs?.length ?? 0) && (
+              <p>
+                Showing {detail.relatedTxs.length} of {detail.relatedTxsTotal.toLocaleString()} indexed
+                flows
+              </p>
+            )}
           </>
         )}
       </div>

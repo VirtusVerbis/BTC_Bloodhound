@@ -12,57 +12,55 @@ async function enqueueBackfillResume(store: Store, address: string): Promise<voi
   );
 }
 
-export async function scheduleHackerBackfillHeal(store: Store, config: AppConfig): Promise<void> {
-  const ts = Date.now();
-  const hackers = await store.listHackers();
-  if (hackers.length === 0) return;
+export async function maintainOneHacker(
+  store: Store,
+  config: AppConfig,
+  h: { address: string; liveBalanceAt?: string | null },
+  ts: number,
+): Promise<void> {
+  const address = h.address;
 
-  for (const h of hackers) {
-    if (await store.hasPendingJob("backfill_hacker_address", h.address)) continue;
-    if (await store.hasPendingJob("audit_hacker_backfill", h.address)) continue;
-
-    const addr = await store.getAddress(h.address);
+  if (
+    !(await store.hasPendingJob("backfill_hacker_address", address)) &&
+    !(await store.hasPendingJob("audit_hacker_backfill", address))
+  ) {
+    const addr = await store.getAddress(address);
     const status = addr?.expandStatus ?? "pending";
-    const backfill = await store.getBackfillState(h.address);
+    const backfill = await store.getBackfillState(address);
 
     if (status === "pending" || status === "backfilling") {
-      await enqueueBackfillResume(store, h.address);
-      continue;
-    }
-
-    if (status === "expanded" && !backfill?.backfillComplete) {
-      await enqueueBackfillResume(store, h.address);
+      await enqueueBackfillResume(store, address);
+    } else if (status === "expanded" && !backfill?.backfillComplete) {
+      await enqueueBackfillResume(store, address);
+    } else if (status === "expanded" && backfill?.backfillComplete) {
+      const lastAudit = backfill.lastBackfillAuditAt
+        ? new Date(backfill.lastBackfillAuditAt).getTime()
+        : 0;
+      if (ts - lastAudit >= config.backfillHealAuditIntervalSec * 1000) {
+        await store.enqueueJob("audit_hacker_backfill", { address }, JOB_PRIORITY.BACKFILL_HACKER);
+      }
     }
   }
 
-  let auditsEnqueued = 0;
-  let idx = (await store.getBackfillHealAuditIndex()) % hackers.length;
-  let scanned = 0;
-
-  while (auditsEnqueued < config.backfillHealAuditPerCron && scanned < hackers.length) {
-    const h = hackers[idx]!;
-    idx = (idx + 1) % hackers.length;
-    scanned++;
-
-    if (await store.hasPendingJob("backfill_hacker_address", h.address)) continue;
-    if (await store.hasPendingJob("audit_hacker_backfill", h.address)) continue;
-
-    const addr = await store.getAddress(h.address);
-    if (addr?.expandStatus !== "expanded") continue;
-
-    const backfill = await store.getBackfillState(h.address);
-    if (!backfill?.backfillComplete) continue;
-
-    const lastAudit = backfill.lastBackfillAuditAt
-      ? new Date(backfill.lastBackfillAuditAt).getTime()
-      : 0;
-    if (ts - lastAudit < config.backfillHealAuditIntervalSec * 1000) continue;
-
-    await store.enqueueJob("audit_hacker_backfill", { address: h.address }, JOB_PRIORITY.BACKFILL_HACKER);
-    auditsEnqueued++;
+  const balanceAt = h.liveBalanceAt ? new Date(h.liveBalanceAt).getTime() : 0;
+  if (
+    ts - balanceAt >= config.balanceRefreshIntervalSec * 1000 &&
+    !(await store.hasPendingJob("refresh_live_balance", address))
+  ) {
+    await store.enqueueJob("refresh_live_balance", { address }, JOB_PRIORITY.REFRESH_BALANCE);
   }
 
-  await store.setBackfillHealAuditIndex(idx);
+  const backfill = await store.getBackfillState(address);
+  if (backfill?.backfillComplete) {
+    const sync = await store.getSyncState(address);
+    const lastPoll = sync?.lastPolledAt ? new Date(sync.lastPolledAt).getTime() : 0;
+    if (
+      ts - lastPoll >= config.cronIntervalSec * 1000 &&
+      !(await store.hasPendingJob("poll_hacker_address", address))
+    ) {
+      await store.enqueueJob("poll_hacker_address", { address }, JOB_PRIORITY.POLL_HACKER);
+    }
+  }
 }
 
 export async function scheduleBtcUsdPriceRefresh(store: Store, config: AppConfig): Promise<void> {
@@ -98,44 +96,15 @@ export async function scheduleDownstreamCrawl(store: Store, config: AppConfig): 
     }
   }
 
-  const hackers = await store.listHackers();
-
-  let pollsEnqueued = 0;
-  let pollIdx = hackers.length > 0 ? (await store.getHackerPollIndex()) % hackers.length : 0;
-  let pollScanned = 0;
-
-  while (pollsEnqueued < config.pollHackerEnqueuePerCron && pollScanned < hackers.length) {
-    const h = hackers[pollIdx]!;
-    pollIdx = (pollIdx + 1) % hackers.length;
-    pollScanned++;
-
-    const backfill = await store.getBackfillState(h.address);
-    if (!backfill?.backfillComplete) continue;
-
-    const sync = await store.getSyncState(h.address);
-    const lastPoll = sync?.lastPolledAt ? new Date(sync.lastPolledAt).getTime() : 0;
-    if (ts - lastPoll < config.cronIntervalSec * 1000) continue;
-    if (await store.hasPendingJob("poll_hacker_address", h.address)) continue;
-
-    await store.enqueueJob("poll_hacker_address", { address: h.address }, JOB_PRIORITY.POLL_HACKER);
-    pollsEnqueued++;
-  }
-
-  if (hackers.length > 0) {
-    await store.setHackerPollIndex(pollIdx);
-  }
-
-  for (const h of hackers) {
-    const balanceAt = h.liveBalanceAt ? new Date(h.liveBalanceAt).getTime() : 0;
-    if (
-      ts - balanceAt >= config.balanceRefreshIntervalSec * 1000 &&
-      !(await store.hasPendingJob("refresh_live_balance", h.address))
-    ) {
-      await store.enqueueJob("refresh_live_balance", { address: h.address }, JOB_PRIORITY.REFRESH_BALANCE);
+  const tick = await store.incrementMaintenanceCronCounter();
+  if (tick % config.hackerMaintenanceEveryNCrons === 0) {
+    const hackers = await store.listHackers();
+    if (hackers.length > 0) {
+      const idx = (await store.getHackerPollIndex()) % hackers.length;
+      await maintainOneHacker(store, config, hackers[idx]!, ts);
+      await store.setHackerPollIndex((idx + 1) % hackers.length);
     }
   }
-
-  await scheduleHackerBackfillHeal(store, config);
 
   const frontier = await store.getDownstreamFrontier(config.crawlEnqueuePerCron, config.maxCrawlDepth);
   for (const row of frontier) {

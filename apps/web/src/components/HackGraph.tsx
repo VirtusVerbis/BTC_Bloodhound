@@ -14,11 +14,9 @@ import {
 } from "@xyflow/react";
 import { api, satsToBtc, txUrl } from "../lib/api";
 import {
-  clearInflightGraph,
   fetchGraphDeduped,
   getCachedGraph,
   graphCacheKey,
-  invalidateCachedGraph,
   setCachedGraph,
 } from "../lib/graphCache";
 import { layoutGraph, type VictimSortOption } from "../lib/layoutGraph";
@@ -59,24 +57,10 @@ interface ApiGraphResponse {
   matchedHackers?: string[];
 }
 
-interface QueuedJob {
-  jobId: number;
-  parentAddress: string;
-  parentId: string;
-  estimatedRunAt: string;
-  outgoingAtStart: number;
-}
-
 const edgeDefaults = {
   type: "smoothstep" as const,
   markerEnd: { type: MarkerType.ArrowClosed, color: "#f7931a" },
   style: { stroke: "#f7931a" },
-};
-
-const queuedEdgeDefaults = {
-  type: "smoothstep" as const,
-  markerEnd: { type: MarkerType.ArrowClosed, color: "#888" },
-  style: { stroke: "#888", strokeDasharray: "4 4" },
 };
 
 function formatEdgeLabel(e: { txid?: string; amount: number }, show: boolean): string | undefined {
@@ -100,11 +84,6 @@ function mapApiEdges(apiEdges: ApiGraphEdge[], showEdgeLabels: boolean): Edge[] 
 function filterEdgesToNodes(nodes: ApiGraphNode[], edges: ApiGraphEdge[]): ApiGraphEdge[] {
   const nodeIds = new Set(nodes.map((n) => n.id));
   return edges.filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target));
-}
-
-function filterEdgesToVisibleNodes(allNodes: Node[], allEdges: Edge[]): Edge[] {
-  const ids = new Set(allNodes.map((n) => n.id));
-  return allEdges.filter((e) => ids.has(e.source) && ids.has(e.target));
 }
 
 function useMediaQuery(query: string) {
@@ -207,8 +186,6 @@ export function HackGraph({
   const [victimSort, setVictimSort] = useState<VictimSortOption>("btc-desc");
   const [showEdgeLabels, setShowEdgeLabels] = useState(false);
   const [nodesInteractive, setNodesInteractive] = useState(false);
-  const [queued, setQueued] = useState<QueuedJob[]>([]);
-  const [countdownTick, setCountdownTick] = useState(0);
 
   const flowKey = useMemo(
     () =>
@@ -235,7 +212,6 @@ export function HackGraph({
   useEffect(() => {
     positionsRef.current = {};
     graphDataRef.current = null;
-    setQueued([]);
     setVictimSort("btc-desc");
     victimSortRef.current = "btc-desc";
     pendingFitRef.current = true;
@@ -247,53 +223,6 @@ export function HackGraph({
     }
     prevExpandRef.current = expandVictims;
   }, [expandVictims]);
-
-  const expandAddress = useCallback(
-    async (address: string, parentId: string) => {
-      let outgoingAtStart = 0;
-      try {
-        const detail = await api<{ relatedTxs: Array<{ direction: string }> }>(
-          `/api/addresses/${encodeURIComponent(address)}`,
-        );
-        outgoingAtStart = detail.relatedTxs.filter((t) => t.direction === "out").length;
-      } catch {
-        /* address detail optional before expand */
-      }
-
-      try {
-        const res = await api<{
-          jobId: number;
-          estimatedRunAt: string;
-        }>(`/api/expand/${encodeURIComponent(address)}`, { method: "POST" });
-        setQueued((q) => [
-          ...q,
-          {
-            jobId: res.jobId,
-            parentAddress: address,
-            parentId,
-            estimatedRunAt: res.estimatedRunAt,
-            outgoingAtStart,
-          },
-        ]);
-      } catch (e) {
-        const status = e && typeof e === "object" && "status" in e ? Number((e as { status: number }).status) : 0;
-        const raw = e instanceof Error ? e.message : String(e);
-        let message = "Expand failed";
-        if (status === 429 || raw.toLowerCase().includes("rate limit") || raw.toLowerCase().includes("too many expand")) {
-          message = "Expand rate limited — try again later";
-        } else if (status === 400 || raw.toLowerCase().includes("invalid address")) {
-          message = "Invalid Bitcoin address";
-        } else if (status === 409 || raw.toLowerCase().includes("already queued")) {
-          message = "Expand already queued for this address";
-        } else if (status === 404 || raw.toLowerCase().includes("not in database")) {
-          message = "Address not found in indexed data";
-        }
-        window.dispatchEvent(new CustomEvent("cointrace-toast", { detail: message }));
-        console.error(e);
-      }
-    },
-    [],
-  );
 
   const applyLayout = useCallback(
     (rfNodes: Node[], rfEdges: Edge[], mode: GraphMode, sort: VictimSortOption) => {
@@ -338,12 +267,10 @@ export function HackGraph({
           incomingSats: n.incomingSats,
           latestTxTime: n.latestTxTime,
           earliestTxTime: n.earliestTxTime,
-          onExpand:
+          onExpandVictims:
             n.type === "victimCluster"
               ? () => window.dispatchEvent(new CustomEvent("cointrace-expand-victims"))
-              : n.address
-                ? () => expandAddress(n.address!, n.id)
-                : undefined,
+              : undefined,
         } satisfies GraphNodeData,
         position: positionsRef.current[n.id] ?? { x: 0, y: 0 },
       }));
@@ -359,7 +286,7 @@ export function HackGraph({
         setFitViewTrigger((t) => t + 1);
       }
     },
-    [victimSearch, onHackerChange, expandAddress, showEdgeLabels, applyLayout],
+    [victimSearch, onHackerChange, showEdgeLabels, applyLayout],
   );
 
   const loadGraph = useCallback(
@@ -468,96 +395,6 @@ export function HackGraph({
     return () => clearInterval(iv);
   }, [loadGraph, graphPollMs]);
 
-  useEffect(() => {
-    const iv = setInterval(() => setCountdownTick((t) => t + 1), 1000);
-    return () => clearInterval(iv);
-  }, []);
-
-  const checkQueuedJobs = useCallback(async () => {
-    if (queued.length === 0) return;
-    const done: Array<{ jobId: number; parentAddress: string; outgoingAtStart: number }> = [];
-    for (const q of queued) {
-      try {
-        const job = await api<{ status: string }>(`/api/jobs/${q.jobId}`);
-        if (job.status === "done" || job.status === "failed") {
-          done.push({
-            jobId: q.jobId,
-            parentAddress: q.parentAddress,
-            outgoingAtStart: q.outgoingAtStart,
-          });
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    }
-    if (done.length === 0) return;
-
-    setQueued((prev) => prev.filter((q) => !done.some((d) => d.jobId === q.jobId)));
-
-    for (const item of done) {
-      try {
-        const detail = await api<{ relatedTxs: Array<{ direction: string }> }>(
-          `/api/addresses/${encodeURIComponent(item.parentAddress)}`,
-        );
-        const outgoingNow = detail.relatedTxs.filter((t) => t.direction === "out").length;
-        const message =
-          outgoingNow > item.outgoingAtStart
-            ? "Expand complete — new downstream flows found"
-            : "Expand complete — no downstream flows found";
-        window.dispatchEvent(new CustomEvent("cointrace-toast", { detail: message }));
-      } catch {
-        window.dispatchEvent(new CustomEvent("cointrace-toast", { detail: "Expand complete" }));
-      }
-    }
-
-    const cacheKey = graphCacheKey({
-      hacker,
-      victimSearch,
-      minEdgeSats,
-      maxVictimNodes,
-      maxDownstreamNodes,
-      expandVictims,
-    });
-    invalidateCachedGraph(cacheKey);
-    clearInflightGraph(cacheKey);
-    loadGraph({ skipCache: true }).catch(console.error);
-  }, [queued, loadGraph, hacker, victimSearch, minEdgeSats, maxVictimNodes, maxDownstreamNodes, expandVictims]);
-
-  useEffect(() => {
-    if (queued.length === 0) return;
-    void checkQueuedJobs();
-    const iv = setInterval(() => void checkQueuedJobs(), 3000);
-    return () => clearInterval(iv);
-  }, [queued, checkQueuedJobs]);
-
-  const queuedNodes: Node[] = useMemo(() => {
-    void countdownTick;
-    return queued.map((q) => {
-      const remaining = Math.max(0, Math.ceil((new Date(q.estimatedRunAt).getTime() - Date.now()) / 1000));
-      return {
-        id: `queued:${q.jobId}`,
-        type: "queued",
-        data: {
-          countdown: remaining > 0 ? `~${remaining}s` : "Processing…",
-        } satisfies GraphNodeData,
-        position: positionsRef.current[`queued:${q.jobId}`] ?? { x: 400, y: 200 },
-      };
-    });
-  }, [queued, countdownTick]);
-
-  const queuedEdges: Edge[] = queued.map((q) => ({
-    id: `qe-${q.jobId}`,
-    source: q.parentId,
-    target: `queued:${q.jobId}`,
-    ...queuedEdgeDefaults,
-  }));
-
-  const flowNodes = useMemo(() => [...nodes, ...queuedNodes], [nodes, queuedNodes]);
-  const flowEdges = useMemo(
-    () => filterEdgesToVisibleNodes(flowNodes, [...edges, ...queuedEdges]),
-    [flowNodes, edges, queuedEdges],
-  );
-
   const onNodeDragStop = useCallback((_: unknown, node: Node) => {
     positionsRef.current[node.id] = node.position;
   }, []);
@@ -565,7 +402,7 @@ export function HackGraph({
   const onNodeClickHandler = useCallback(
     (_: unknown, node: Node) => {
       const data = node.data as GraphNodeData;
-      if (data.address && node.type !== "queued" && node.type !== "victimCluster") {
+      if (data.address && node.type !== "victimCluster") {
         onNodeClick(data.address);
       }
     },
@@ -591,8 +428,8 @@ export function HackGraph({
     <div className="graph-canvas">
       <div style={{ width: "100%", height: "100%" }}>
         <ReactFlow
-          nodes={flowNodes}
-          edges={flowEdges}
+          nodes={nodes}
+          edges={edges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           nodeTypes={nodeTypes}
