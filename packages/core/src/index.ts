@@ -18,3 +18,4 @@ export * from "./util/address.js";
 export * from "./util/timingSafe.js";
 export * from "./ops/hackers.js";
 export * from "./ops/queue.js";
+export * from "./ops/addresses.js";

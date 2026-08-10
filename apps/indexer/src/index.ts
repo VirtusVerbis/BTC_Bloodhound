@@ -9,6 +9,7 @@ import {
   listQueue,
   loadConfig,
   normalizeBitcoinAddress,
+  pruneInvalidAddresses,
   removeHacker,
   runIndexerTick,
   runLoadLocalWatchlist,
@@ -26,6 +27,7 @@ import {
   clearQueueRemote,
   D1WranglerClient,
   listQueueRemote,
+  pruneInvalidAddressesRemote,
   removeHackerRemote,
 } from "./d1Wrangler.js";
 
@@ -146,6 +148,16 @@ async function main() {
       console.error(message);
       process.exit(1);
     }
+    return;
+  }
+  if (cmd === "prune-invalid-addresses") {
+    const dryRun = argv.includes("--dry-run");
+    const result = remote
+      ? await pruneInvalidAddressesRemote(remoteClient(), { dryRun })
+      : await pruneInvalidAddresses(openLocalStore(), { dryRun });
+    console.log(
+      JSON.stringify({ ok: true, ...result, target: remote ? "remote-d1" : "local-sqlite" }, null, 2),
+    );
     return;
   }
   if (cmd === "re-backfill-hackers") {

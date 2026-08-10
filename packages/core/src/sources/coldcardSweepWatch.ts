@@ -1,12 +1,25 @@
 import type { Store } from "@cointrace/db";
 import { JOB_PRIORITY } from "../config.js";
 import { sha256Hex } from "../util/hash.js";
+import { normalizeBitcoinAddress } from "../util/address.js";
 import { insertAddressIfMissing } from "./insertIfMissing.js";
 
 export interface ColdcardSweepWatchData {
   collectors: string[];
   vaults: string[];
   contentHash: string;
+}
+
+function dedupeNormalized(raw: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of raw) {
+    const normalized = normalizeBitcoinAddress(item);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
 }
 
 export async function fetchColdcardSweepWatch(base: string): Promise<ColdcardSweepWatchData> {
@@ -17,7 +30,7 @@ export async function fetchColdcardSweepWatch(base: string): Promise<ColdcardSwe
   const waveBody = await waveRes.text();
   const waveJson = waveBody.replace(/^\s*window\.WAVE3\s*=\s*/, "").trim().replace(/;$/, "");
   const wave = JSON.parse(waveJson) as { vaults?: Array<[string, number]> };
-  const vaults = [...new Set((wave.vaults ?? []).map(([addr]) => addr.toLowerCase()))];
+  const vaults = dedupeNormalized((wave.vaults ?? []).map(([addr]) => addr));
 
   const homeRes = await fetch(`${base}/`, { headers: { ...headers, Accept: "text/html" } });
   if (!homeRes.ok) throw new Error(`ColdcardSweepWatch homepage fetch failed: ${homeRes.status}`);
@@ -25,9 +38,7 @@ export async function fetchColdcardSweepWatch(base: string): Promise<ColdcardSwe
 
   const bc1Regex = /bc1[a-z0-9]{25,87}/gi;
   const collectorSection = html.match(/Where the money is[\s\S]{0,8000}/i)?.[0] ?? html.slice(0, 12000);
-  const collectors = [
-    ...new Set((collectorSection.match(bc1Regex) ?? []).map((a) => a.toLowerCase())),
-  ];
+  const collectors = dedupeNormalized(collectorSection.match(bc1Regex) ?? []);
 
   const contentHash = await sha256Hex([...collectors, ...vaults].sort().join("\n"));
 

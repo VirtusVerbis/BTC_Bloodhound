@@ -137,6 +137,17 @@ export class Store {
     return await this.db.select().from(addresses).where(eq(addresses.address, address)).get();
   }
 
+  async listAllAddresses() {
+    return await this.db
+      .select({
+        address: addresses.address,
+        role: addresses.role,
+        isFlaggedHacker: addresses.isFlaggedHacker,
+      })
+      .from(addresses)
+      .all();
+  }
+
   async listHackers(q?: string, activeOnly?: boolean) {
     const conditions = [eq(addresses.isFlaggedHacker, true)];
     if (activeOnly) conditions.push(gt(addresses.totalReceivedSats, 0));

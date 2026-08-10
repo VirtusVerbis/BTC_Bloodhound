@@ -1,12 +1,25 @@
 import type { Store } from "@cointrace/db";
 import { JOB_PRIORITY } from "../config.js";
 import { sha256Hex } from "../util/hash.js";
+import { normalizeBitcoinAddress } from "../util/address.js";
 
 export interface ColdcardWatchData {
   collectors: string[];
   victims: string[];
   downstream: string[];
   contentHash: string;
+}
+
+function dedupeNormalized(raw: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of raw) {
+    const normalized = normalizeBitcoinAddress(item);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
 }
 
 export async function fetchColdcardWatch(base: string): Promise<ColdcardWatchData> {
@@ -16,42 +29,38 @@ export async function fetchColdcardWatch(base: string): Promise<ColdcardWatchDat
   if (!res.ok) throw new Error(`ColdcardWatch fetch failed: ${res.status}`);
   const html = await res.text();
 
-  const collectors: string[] = [];
-  const victims: string[] = [];
   const downstream: string[] = [];
 
   const bc1Regex = /bc1[a-z0-9]{25,87}/gi;
   const allMatches = html.match(bc1Regex) ?? [];
-  const unique = [...new Set(allMatches.map((a) => a.toLowerCase()))];
+  const unique = dedupeNormalized(allMatches);
 
   const collectorSection = html.match(/Where the money is[\s\S]{0,8000}/i)?.[0] ?? html.slice(0, 12000);
-  const collectorMatches = collectorSection.match(bc1Regex) ?? [];
-  for (const a of collectorMatches) collectors.push(a.toLowerCase());
+  const collectors = dedupeNormalized(collectorSection.match(bc1Regex) ?? []);
 
+  let victims: string[] = [];
   try {
     const listRes = await fetch(`${base}/addresses`, {
       headers: { "User-Agent": "cointrace-indexer/1.0", Accept: "text/html" },
     });
     if (listRes.ok) {
       const listHtml = await listRes.text();
-      for (const m of listHtml.match(bc1Regex) ?? []) victims.push(m.toLowerCase());
+      victims = dedupeNormalized(listHtml.match(bc1Regex) ?? []);
     }
   } catch {
     // fallback: use unique from main page minus collectors
   }
 
   if (victims.length === 0) {
-    for (const a of unique) {
-      if (!collectors.includes(a)) victims.push(a);
-    }
+    victims = unique.filter((v) => !collectors.includes(v));
   }
 
   const contentHash = await sha256Hex([...collectors, ...victims].sort().join("\n"));
 
   return {
-    collectors: [...new Set(collectors)],
-    victims: [...new Set(victims)].filter((v) => !collectors.includes(v)),
-    downstream: [...new Set(downstream)],
+    collectors,
+    victims: victims.filter((v) => !collectors.includes(v)),
+    downstream: dedupeNormalized(downstream),
     contentHash,
   };
 }

@@ -1,10 +1,18 @@
+import { initEccLib, address, networks } from "bitcoinjs-lib";
+import * as ecc from "@bitcoinerlab/secp256k1";
+
+initEccLib(ecc);
+
 /** Normalize/validate Bitcoin mainnet addresses used by the API. Returns null if invalid. */
 export function normalizeBitcoinAddress(raw: string): string | null {
   const a = raw.trim();
   if (!a || a.length > 90) return null;
-  if (/^bc1[a-z0-9]{25,87}$/i.test(a)) return a.toLowerCase();
-  if (/^[13][a-km-zA-HJ-NP-Z1-9]{25,34}$/.test(a)) return a;
-  return null;
+  try {
+    address.toOutputScript(a, networks.bitcoin);
+    return a.startsWith("bc1") || a.startsWith("BC1") ? a.toLowerCase() : a;
+  } catch {
+    return null;
+  }
 }
 
 /** Escape LIKE wildcards so user search cannot broaden matches unintentionally. */

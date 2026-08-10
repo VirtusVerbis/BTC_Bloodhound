@@ -16,7 +16,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@bitcoinerlab/secp256k1": "^1.2.0",
     "@cointrace/db": "workspace:*",
+    "bitcoinjs-lib": "^6.1.7",
     "dotenv": "^16.4.7"
   },
   "devDependencies": {

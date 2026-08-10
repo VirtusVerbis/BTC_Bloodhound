@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { JOB_PRIORITY, normalizeBitcoinAddress } from "@cointrace/core";
-import type { AddHackerResult, ClearQueueResult, RemoveHackerResult } from "@cointrace/core";
+import type { AddHackerResult, ClearQueueResult, PruneInvalidAddressesResult, RemoveHackerResult } from "@cointrace/core";
 import type { AppConfig, ListQueueOptions, ListQueueResult } from "@cointrace/core";
 import { listQueue } from "@cointrace/core";
 import { asReadOnlyStore } from "./remoteReadStore.js";
@@ -407,4 +407,80 @@ function hasOutFromOutsideRemote(
     const from = String(r.frm);
     return from !== excludeHacker && !candidateSet.has(from);
   });
+}
+
+export async function pruneInvalidAddressesRemote(
+  client: D1WranglerClient,
+  opts: { dryRun?: boolean } = {},
+): Promise<PruneInvalidAddressesResult> {
+  const dryRun = opts.dryRun === true;
+  const all = client.query("SELECT address, role, is_flagged_hacker FROM addresses;");
+  const invalidRows = all
+    .map((row) => ({
+      address: String(row.address),
+      role: String(row.role),
+      isFlaggedHacker: asBool(row.is_flagged_hacker),
+    }))
+    .filter((row) => normalizeBitcoinAddress(row.address) === null);
+
+  if (dryRun) {
+    return {
+      scanned: all.length,
+      invalid: invalidRows.length,
+      dryRun: true,
+      invalidAddresses: invalidRows,
+    };
+  }
+
+  const statements: string[] = ["PRAGMA foreign_keys = OFF;"];
+  let jobsCancelled = 0;
+  let edgesRemoved = 0;
+  let hackersUnflagged = 0;
+
+  for (const row of invalidRows) {
+    if (row.isFlaggedHacker) hackersUnflagged++;
+    const a = sqlString(row.address);
+    const jobRows = client.query(`
+SELECT id FROM jobs
+WHERE status IN ('pending', 'running')
+  AND payload_json LIKE ${sqlString(`%"address":"${row.address}"%`)};
+`);
+    jobsCancelled += jobRows.length;
+    for (const j of jobRows) {
+      statements.push(`DELETE FROM jobs WHERE id = ${Number(j.id)};`);
+    }
+
+    const edgeCount = client.query(
+      `SELECT COUNT(*) AS c FROM edges WHERE from_address = ${a} OR to_address = ${a};`,
+    );
+    edgesRemoved += Number(edgeCount[0]?.c ?? 0);
+    statements.push(`DELETE FROM edges WHERE from_address = ${a} OR to_address = ${a};`);
+    statements.push(`DELETE FROM sync_state WHERE address = ${a};`);
+    statements.push(`DELETE FROM addresses WHERE address = ${a};`);
+  }
+
+  statements.push("PRAGMA foreign_keys = ON;");
+
+  if (statements.length > 2) {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cointrace-ops-"));
+    try {
+      const filePath = path.join(tmpDir, "prune-invalid.sql");
+      fs.writeFileSync(filePath, statements.join("\n") + "\n", "utf8");
+      client.executeFile(filePath);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }
+
+  return {
+    scanned: all.length,
+    invalid: invalidRows.length,
+    dryRun: false,
+    invalidAddresses: invalidRows,
+    removed: invalidRows.length,
+    hackersUnflagged,
+    rowsDeleted: invalidRows.length,
+    jobsCancelled,
+    edgesRemoved,
+  };
 }

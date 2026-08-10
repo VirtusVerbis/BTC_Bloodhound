@@ -13,6 +13,7 @@ import {
 } from "../sources/coldcardHackTracker.js";
 import { applyColdcardSweepWatchSync, fetchColdcardSweepWatch } from "../sources/coldcardSweepWatch.js";
 import { fetchMempoolBtcUsd } from "../price/mempoolPrices.js";
+import { normalizeBitcoinAddress } from "../util/address.js";
 import { processTxPriority } from "./rebuildMode.js";
 
 async function readJsonText(filePath: string, inlineJson: string | null | undefined): Promise<string> {
@@ -58,8 +59,13 @@ export async function runSeedPublicHackers(
   const data = JSON.parse(raw) as { hackers: Array<{ address: string; label?: string; source_url?: string }> };
   let delay = 0;
   for (const h of data.hackers) {
+    const address = normalizeBitcoinAddress(h.address);
+    if (!address) {
+      console.warn(`Skipping invalid seed hacker address: ${h.address}`);
+      continue;
+    }
     await store.upsertAddress({
-      address: h.address,
+      address,
       role: "hacker",
       label: h.label ?? null,
       source: "public_seed",
@@ -69,7 +75,7 @@ export async function runSeedPublicHackers(
     });
     await store.enqueueJob(
       "backfill_hacker_address",
-      { address: h.address },
+      { address },
       JOB_PRIORITY.BACKFILL_HACKER,
       new Date(Date.now() + delay * 1000).toISOString(),
     );
@@ -86,9 +92,14 @@ export async function runLoadLocalWatchlist(
     const raw = await readJsonText(localPath, localWatchlistDataJson);
     const data = JSON.parse(raw) as { hackers: Array<{ address: string; label?: string }> };
     for (const h of data.hackers) {
-      const existing = await store.getAddress(h.address);
+      const address = normalizeBitcoinAddress(h.address);
+      if (!address) {
+        console.warn(`Skipping invalid local watchlist hacker address: ${h.address}`);
+        continue;
+      }
+      const existing = await store.getAddress(address);
       await store.upsertAddress({
-        address: h.address,
+        address,
         role: "hacker",
         label: h.label ?? null,
         source: "local_config",
@@ -96,7 +107,7 @@ export async function runLoadLocalWatchlist(
         hopFromHacker: 0,
       });
       if (!existing) {
-        await store.enqueueJob("backfill_hacker_address", { address: h.address }, JOB_PRIORITY.BACKFILL_HACKER);
+        await store.enqueueJob("backfill_hacker_address", { address }, JOB_PRIORITY.BACKFILL_HACKER);
       }
     }
   } catch {

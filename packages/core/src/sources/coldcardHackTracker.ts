@@ -1,6 +1,7 @@
 import type { Store } from "@cointrace/db";
 import { JOB_PRIORITY } from "../config.js";
 import { sha256Hex } from "../util/hash.js";
+import { normalizeBitcoinAddress } from "../util/address.js";
 import { insertAddressIfMissing } from "./insertIfMissing.js";
 
 export interface ColdcardHackTrackerData {
@@ -18,7 +19,15 @@ export async function fetchColdcardHackTracker(base: string): Promise<ColdcardHa
     addresses: Array<{ address: string }>;
   };
 
-  const addresses = [...new Set(body.addresses.map((a) => a.address.toLowerCase()))].sort();
+  const seen = new Set<string>();
+  const addresses: string[] = [];
+  for (const entry of body.addresses) {
+    const normalized = normalizeBitcoinAddress(entry.address);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    addresses.push(normalized);
+  }
+  addresses.sort();
   const contentHash = await sha256Hex(`${body.updatedAt ?? ""}\n${addresses.join("\n")}`);
 
   return { addresses, contentHash };
