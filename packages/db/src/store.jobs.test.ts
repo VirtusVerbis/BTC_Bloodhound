@@ -108,3 +108,23 @@ describe("hasPendingJob address match", () => {
     expect(await store.hasPendingJob("poll_hacker_address", ADDR_A)).toBe(false);
   });
 });
+
+describe("listActiveJobs", () => {
+  it("orders by priority desc then run_after asc and filters by status", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const lowId = await store.enqueueJob("refresh_btc_usd_price", {}, 1);
+    const highId = await store.enqueueJob("backfill_hacker_address", { address: "bc1q" }, 10);
+    await store.completeJob(lowId);
+    sqlite.prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(lowId);
+
+    const summary = await store.getActiveJobSummary();
+    expect(summary.some((r) => r.type === "backfill_hacker_address" && Number(r.count) === 1)).toBe(true);
+
+    const jobs = await store.listActiveJobs({ statuses: ["pending"] });
+    expect(jobs[0]!.id).toBe(highId);
+    expect(await store.countActiveJobsMatching({ statuses: ["pending"] })).toBe(1);
+  });
+});

@@ -6,6 +6,7 @@ import {
   ChainRouter,
   clearQueue,
   JOB_PRIORITY,
+  listQueue,
   loadConfig,
   normalizeBitcoinAddress,
   removeHacker,
@@ -18,11 +19,13 @@ import {
   runRebuildHackEdges,
   runRebuildHackEdgesWait,
   runSeedPublicHackers,
+  type QueueStatusFilter,
 } from "@cointrace/core";
 import {
   addHackerRemote,
   clearQueueRemote,
   D1WranglerClient,
+  listQueueRemote,
   removeHackerRemote,
 } from "./d1Wrangler.js";
 
@@ -109,6 +112,40 @@ async function main() {
     console.log(
       JSON.stringify({ ok: true, ...result, target: remote ? "remote-d1" : "local-sqlite" }, null, 2),
     );
+    return;
+  }
+  if (cmd === "list-queue") {
+    const statusRaw = flagValue("--status") ?? "active";
+    const validStatuses: QueueStatusFilter[] = ["active", "pending", "running", "all"];
+    if (!validStatuses.includes(statusRaw as QueueStatusFilter)) {
+      console.error("Usage: list-queue [--remote] [--status active|pending|running|all] [--type <jobType>] [--limit N] [--next-cron]");
+      process.exit(1);
+    }
+    const type = flagValue("--type");
+    const limitRaw = flagValue("--limit");
+    const limit = limitRaw != null ? Number(limitRaw) : undefined;
+    if (limitRaw != null && (!Number.isFinite(limit) || limit! < 1)) {
+      console.error("Invalid --limit (must be a positive number)");
+      process.exit(1);
+    }
+    const opts = {
+      status: statusRaw as QueueStatusFilter,
+      type,
+      limit,
+      nextCron: argv.includes("--next-cron"),
+    };
+    try {
+      const result = remote
+        ? await listQueueRemote(remoteClient(), config, opts)
+        : await listQueue(openLocalStore(), config, opts);
+      console.log(
+        JSON.stringify({ ...result, target: remote ? "remote-d1" : "local-sqlite" }, null, 2),
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(message);
+      process.exit(1);
+    }
     return;
   }
   if (cmd === "re-backfill-hackers") {

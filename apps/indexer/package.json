@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
+    "test": "vitest run",
     "start": "node dist/index.js",
     "seed": "node dist/index.js seed",
     "load-local": "node dist/index.js load-local",
@@ -15,6 +16,7 @@
     "@cointrace/db": "workspace:*"
   },
   "devDependencies": {
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.5"
   }
 }

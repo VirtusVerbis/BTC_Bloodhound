@@ -737,6 +737,55 @@ export class Store {
     return row?.count ?? 0;
   }
 
+  async getActiveJobSummary(filters?: { statuses?: string[]; type?: string }) {
+    const statuses = filters?.statuses ?? ["pending", "running"];
+    const conditions = [inArray(jobs.status, statuses)];
+    if (filters?.type) conditions.push(eq(jobs.type, filters.type));
+    return await this.db
+      .select({
+        status: jobs.status,
+        type: jobs.type,
+        count: sql<number>`count(*)`,
+      })
+      .from(jobs)
+      .where(and(...conditions))
+      .groupBy(jobs.status, jobs.type)
+      .all();
+  }
+
+  async countActiveJobsMatching(filters?: { statuses?: string[]; type?: string }) {
+    const statuses = filters?.statuses ?? ["pending", "running"];
+    const conditions = [inArray(jobs.status, statuses)];
+    if (filters?.type) conditions.push(eq(jobs.type, filters.type));
+    const row = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(jobs)
+      .where(and(...conditions))
+      .get();
+    return row?.count ?? 0;
+  }
+
+  async listActiveJobs(opts?: { statuses?: string[]; type?: string; limit?: number; offset?: number }) {
+    const statuses = opts?.statuses ?? ["pending", "running"];
+    const conditions = [inArray(jobs.status, statuses)];
+    if (opts?.type) conditions.push(eq(jobs.type, opts.type));
+    const base = this.db
+      .select()
+      .from(jobs)
+      .where(and(...conditions))
+      .orderBy(desc(jobs.priority), asc(jobs.runAfter));
+    if (opts?.limit != null && opts?.offset != null) {
+      return await base.limit(opts.limit).offset(opts.offset).all();
+    }
+    if (opts?.limit != null) {
+      return await base.limit(opts.limit).all();
+    }
+    if (opts?.offset != null) {
+      return await base.offset(opts.offset).all();
+    }
+    return await base.all();
+  }
+
   async getSchedulerState() {
     return await this.db.select().from(schedulerState).where(eq(schedulerState.id, 1)).get();
   }

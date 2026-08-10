@@ -1,9 +1,12 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { JOB_PRIORITY, normalizeBitcoinAddress } from "@cointrace/core";
 import type { AddHackerResult, ClearQueueResult, RemoveHackerResult } from "@cointrace/core";
+import type { AppConfig, ListQueueOptions, ListQueueResult } from "@cointrace/core";
+import { listQueue } from "@cointrace/core";
+import { asReadOnlyStore } from "./remoteReadStore.js";
 
 export interface D1WranglerClientOptions {
   remote: boolean;
@@ -17,6 +20,66 @@ export function sqlString(value: string): string {
 }
 
 type Row = Record<string, unknown>;
+
+export function npxExecutable(): string {
+  return process.platform === "win32" ? "npx.cmd" : "npx";
+}
+
+/** Quote one argv token for a Windows shell command line. */
+export function quoteWindowsArg(arg: string): string {
+  if (!/[\s"]/g.test(arg)) return arg;
+  return `"${arg.replace(/"/g, '""')}"`;
+}
+
+function spawnWrangler(args: string[]) {
+  if (process.platform === "win32") {
+    const command = ["npx", ...args].map(quoteWindowsArg).join(" ");
+    return spawnSync(command, {
+      encoding: "utf8",
+      shell: true,
+      windowsHide: true,
+      maxBuffer: 64 * 1024 * 1024,
+    });
+  }
+  return spawnSync(npxExecutable(), args, {
+    encoding: "utf8",
+    shell: false,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+}
+
+/** Strip trailing semicolons so Windows cmd does not treat them as command separators. */
+export function normalizeWindowsCommandSql(sql: string): string {
+  return sql.trim().replace(/;+\s*$/g, "");
+}
+
+function parseWranglerStdout(out: string): unknown {
+  const trimmed = out.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const start = trimmed.indexOf("[");
+    const end = trimmed.lastIndexOf("]");
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(trimmed.slice(start, end + 1));
+      } catch {
+        // fall through
+      }
+    }
+    return trimmed;
+  }
+}
+
+function parseWranglerJsonOutput(result: SpawnSyncReturns<string>, failureLabel: string): unknown {
+  if (result.status !== 0) {
+    throw new Error(
+      `wrangler d1 execute ${failureLabel} failed (exit ${result.status}): ${result.stderr || result.stdout}`,
+    );
+  }
+  return parseWranglerStdout(result.stdout || "");
+}
 
 /**
  * Thin Wrangler D1 client. SQL is always generated in-process from validated inputs.
@@ -43,45 +106,17 @@ export class D1WranglerClient {
   }
 
   execute(sql: string): unknown {
+    if (process.platform === "win32") {
+      const args = [...this.baseArgs(), "--command", normalizeWindowsCommandSql(sql)];
+      return parseWranglerJsonOutput(spawnWrangler(args), "command");
+    }
     const args = [...this.baseArgs(), "--command", sql];
-    const result = spawnSync("npx", args, {
-      encoding: "utf8",
-      shell: true,
-      maxBuffer: 64 * 1024 * 1024,
-    });
-    if (result.status !== 0) {
-      throw new Error(
-        `wrangler d1 execute failed (exit ${result.status}): ${result.stderr || result.stdout}`,
-      );
-    }
-    const out = (result.stdout || "").trim();
-    if (!out) return null;
-    try {
-      return JSON.parse(out);
-    } catch {
-      return out;
-    }
+    return parseWranglerJsonOutput(spawnWrangler(args), "command");
   }
 
   executeFile(filePath: string): unknown {
     const args = [...this.baseArgs(), "--file", filePath];
-    const result = spawnSync("npx", args, {
-      encoding: "utf8",
-      shell: true,
-      maxBuffer: 64 * 1024 * 1024,
-    });
-    if (result.status !== 0) {
-      throw new Error(
-        `wrangler d1 execute --file failed (exit ${result.status}): ${result.stderr || result.stdout}`,
-      );
-    }
-    const out = (result.stdout || "").trim();
-    if (!out) return null;
-    try {
-      return JSON.parse(out);
-    } catch {
-      return out;
-    }
+    return parseWranglerJsonOutput(spawnWrangler(args), "file");
   }
 
   query(sql: string): Row[] {
@@ -178,6 +213,14 @@ export async function clearQueueRemote(client: D1WranglerClient): Promise<ClearQ
   }
   client.execute("DELETE FROM jobs WHERE status IN ('pending', 'running');");
   return { deleted: pending + running, pending, running };
+}
+
+export async function listQueueRemote(
+  client: D1WranglerClient,
+  config: AppConfig,
+  opts: ListQueueOptions = {},
+): Promise<ListQueueResult> {
+  return listQueue(asReadOnlyStore(client), config, opts);
 }
 
 export async function removeHackerRemote(
