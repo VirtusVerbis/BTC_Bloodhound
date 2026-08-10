@@ -20,6 +20,7 @@ import {
   runRebuildHackEdges,
   runRebuildHackEdgesWait,
   runSeedPublicHackers,
+  type ListQueueResult,
   type QueueStatusFilter,
 } from "@cointrace/core";
 import {
@@ -44,6 +45,36 @@ function flagValue(flag: string): string | undefined {
 
 function positionalArgs(): string[] {
   return argv.slice(1).filter((a) => !a.startsWith("--"));
+}
+
+function printQueueSummary(
+  result: ListQueueResult,
+  meta: { target: string; status: string },
+): void {
+  const { summary } = result;
+  const statusParts = Object.entries(summary.byStatus)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([status, count]) => `${status}=${count}`);
+  console.log(`target=${meta.target}  status=${meta.status}  total=${summary.total}`);
+  if (statusParts.length > 0) {
+    console.log(statusParts.join("  "));
+  }
+  console.log("");
+
+  const rows = Object.entries(summary.byType).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const typeWidth = Math.max(4, ...rows.map(([type]) => type.length), "TOTAL".length);
+  const countWidth = Math.max(5, ...rows.map(([, count]) => String(count).length), String(summary.total).length);
+  console.log(`${"type".padEnd(typeWidth)}  ${"count".padStart(countWidth)}`);
+  console.log(`${"-".repeat(typeWidth)}  ${"-".repeat(countWidth)}`);
+  for (const [type, count] of rows) {
+    console.log(`${type.padEnd(typeWidth)}  ${String(count).padStart(countWidth)}`);
+  }
+  console.log(`${"TOTAL".padEnd(typeWidth)}  ${String(summary.total).padStart(countWidth)}`);
+
+  if (result.nextCron) {
+    console.log("");
+    console.log(JSON.stringify(result.nextCron, null, 2));
+  }
 }
 
 function openLocalStore(): Store {
@@ -119,14 +150,17 @@ async function main() {
   if (cmd === "list-queue") {
     const statusRaw = flagValue("--status") ?? "active";
     const validStatuses: QueueStatusFilter[] = ["active", "pending", "running", "all"];
+    const summaryOnly = argv.includes("--summary");
     if (!validStatuses.includes(statusRaw as QueueStatusFilter)) {
-      console.error("Usage: list-queue [--remote] [--status active|pending|running|all] [--type <jobType>] [--limit N] [--next-cron]");
+      console.error(
+        "Usage: list-queue [--remote] [--status active|pending|running|all] [--type <jobType>] [--limit N] [--summary] [--next-cron]",
+      );
       process.exit(1);
     }
     const type = flagValue("--type");
     const limitRaw = flagValue("--limit");
-    const limit = limitRaw != null ? Number(limitRaw) : undefined;
-    if (limitRaw != null && (!Number.isFinite(limit) || limit! < 1)) {
+    const limit = summaryOnly ? 0 : limitRaw != null ? Number(limitRaw) : undefined;
+    if (!summaryOnly && limitRaw != null && (!Number.isFinite(limit) || limit! < 1)) {
       console.error("Invalid --limit (must be a positive number)");
       process.exit(1);
     }
@@ -136,13 +170,16 @@ async function main() {
       limit,
       nextCron: argv.includes("--next-cron"),
     };
+    const target = remote ? "remote-d1" : "local-sqlite";
     try {
       const result = remote
         ? await listQueueRemote(remoteClient(), config, opts)
         : await listQueue(openLocalStore(), config, opts);
-      console.log(
-        JSON.stringify({ ...result, target: remote ? "remote-d1" : "local-sqlite" }, null, 2),
-      );
+      if (summaryOnly) {
+        printQueueSummary(result, { target, status: statusRaw });
+      } else {
+        console.log(JSON.stringify({ ...result, target }, null, 2));
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(message);

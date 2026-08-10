@@ -93,6 +93,19 @@ describe("listQueue", () => {
     expect(result.truncated).toBe(true);
   });
 
+  it("skips job rows when limit is 0 but still returns summary", async () => {
+    const { store } = await setupStore();
+    await store.enqueueJob("process_tx", { txid: "tx1" }, JOB_PRIORITY.PROCESS_TX);
+    await store.enqueueJob("expand_downstream", { address: "bc1qx" }, JOB_PRIORITY.CRON_EXPAND);
+
+    const result = await listQueue(store, config, { limit: 0 });
+    expect(result.jobs).toEqual([]);
+    expect(result.truncated).toBe(false);
+    expect(result.summary.total).toBe(2);
+    expect(result.summary.byType.process_tx).toBe(1);
+    expect(result.summary.byType.expand_downstream).toBe(1);
+  });
+
   it("rejects unknown job type filter", async () => {
     const { store } = await setupStore();
     await expect(listQueue(store, config, { type: "not_a_real_job" })).rejects.toThrow(/Unknown job type/);

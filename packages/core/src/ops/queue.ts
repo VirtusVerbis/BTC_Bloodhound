@@ -312,9 +312,14 @@ export async function listQueue(store: Store, config: AppConfig, opts: ListQueue
     })),
   );
 
-  const totalMatching = await store.countActiveJobsMatching({ statuses, type });
-  const jobRows = await store.listActiveJobs({ statuses, type, limit });
-  const truncated = totalMatching > jobRows.length;
+  let jobs: EnrichedQueueJob[] = [];
+  let truncated = false;
+  if (limit > 0) {
+    const totalMatching = await store.countActiveJobsMatching({ statuses, type });
+    const jobRows = await store.listActiveJobs({ statuses, type, limit });
+    truncated = totalMatching > jobRows.length;
+    jobs = jobRows.map((job) => enrichQueueJob(job));
+  }
 
   const rebuildActive = await isRebuildActive(store, config);
   const crawl = await store.getCrawlStats();
@@ -335,7 +340,7 @@ export async function listQueue(store: Store, config: AppConfig, opts: ListQueue
         nextProviderCallAt: scheduler?.nextProviderCallAt ?? null,
       },
     },
-    jobs: jobRows.map((job) => enrichQueueJob(job)),
+    jobs,
     truncated,
   };
 
