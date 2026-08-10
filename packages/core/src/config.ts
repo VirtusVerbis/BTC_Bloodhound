@@ -17,7 +17,6 @@ export const JOB_PRIORITY = {
 } as const;
 
 export type JobType =
-  | "seed_public_hackers"
   | "backfill_hacker_address"
   | "audit_hacker_backfill"
   | "process_tx"
@@ -44,7 +43,6 @@ export interface AppConfig {
   downstreamPollEnqueuePerCron: number;
   maxCrawlDepth: number;
   maxGraphDepth: number;
-  maxGraphOutputs: number;
   minEdgeSats: number;
   balanceRefreshIntervalSec: number;
   btcUsdPriceRefreshIntervalSec: number;
@@ -60,7 +58,6 @@ export interface AppConfig {
   backfillHealAuditIntervalSec: number;
   backfillHealAuditPerCron: number;
   backfillHealTxSlack: number;
-  adminToken: string;
   seedFilePath: string;
   localWatchlistPath: string;
   /** Inline seed JSON for Workers (avoids filesystem). */
@@ -81,8 +78,6 @@ export interface AppConfig {
   getRateWindowSec: number;
   graphRateLimit: number;
   graphRateWindowSec: number;
-  adminRateLimit: number;
-  adminRateWindowSec: number;
   maxGraphVictims: number;
   maxGraphDownstream: number;
 }
@@ -140,7 +135,6 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     downstreamPollEnqueuePerCron: Number(env.DOWNSTREAM_POLL_ENQUEUE_PER_CRON ?? 2),
     maxCrawlDepth: Number(env.MAX_CRAWL_DEPTH ?? 5),
     maxGraphDepth: Number(env.MAX_GRAPH_DEPTH ?? 2),
-    maxGraphOutputs: Number(env.MAX_GRAPH_OUTPUTS ?? 20),
     minEdgeSats: Number(env.MIN_EDGE_SATS ?? 1000),
     balanceRefreshIntervalSec: Number(env.BALANCE_REFRESH_INTERVAL_SEC ?? 300),
     btcUsdPriceRefreshIntervalSec: Number(env.BTC_USD_PRICE_REFRESH_INTERVAL_SEC ?? 60),
@@ -161,7 +155,6 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     backfillHealAuditIntervalSec: Number(env.BACKFILL_HEAL_AUDIT_INTERVAL_SEC ?? 86400),
     backfillHealAuditPerCron: Number(env.BACKFILL_HEAL_AUDIT_PER_CRON ?? 1),
     backfillHealTxSlack: Number(env.BACKFILL_HEAL_TX_SLACK ?? 5),
-    adminToken: env.ADMIN_TOKEN ?? "change-me",
     seedFilePath: env.SEED_FILE ?? "./config/watchlist.seed.json",
     localWatchlistPath: env.LOCAL_WATCHLIST ?? "./config/watchlist.local.json",
     seedDataJson: env.SEED_DATA_JSON ?? null,
@@ -178,8 +171,6 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     getRateWindowSec: Number(env.GET_RATE_WINDOW_SEC ?? 60),
     graphRateLimit: Number(env.GRAPH_RATE_LIMIT ?? 30),
     graphRateWindowSec: Number(env.GRAPH_RATE_WINDOW_SEC ?? 60),
-    adminRateLimit: Number(env.ADMIN_RATE_LIMIT ?? 10),
-    adminRateWindowSec: Number(env.ADMIN_RATE_WINDOW_SEC ?? 3600),
     maxGraphVictims: Number(env.MAX_GRAPH_VICTIMS ?? 10000),
     maxGraphDownstream: Number(env.MAX_GRAPH_DOWNSTREAM ?? 10000),
   };
@@ -188,9 +179,6 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
 /** Refuse insecure defaults when running as production. */
 export function assertProductionSecrets(config: AppConfig): void {
   if (config.environment !== "production") return;
-  if (!config.adminToken || config.adminToken === "change-me") {
-    throw new Error("ADMIN_TOKEN must be set to a non-default value in production");
-  }
   if (!config.corsOriginsFromEnv || config.corsOrigins.length === 0) {
     throw new Error("CORS_ORIGINS must be set explicitly in production");
   }

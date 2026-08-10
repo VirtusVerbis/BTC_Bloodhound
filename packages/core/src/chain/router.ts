@@ -1,4 +1,4 @@
-import { EsploraProvider, getAddressTxsAll, isRateLimitError, MempoolProvider } from "./esplora.js";
+import { EsploraProvider, isRateLimitError, MempoolProvider } from "./esplora.js";
 import type { ChainProvider, ChainTxSummary } from "./types.js";
 import type { Store } from "@cointrace/db";
 
@@ -82,17 +82,5 @@ export class ChainRouter {
       ? await this.withProvider((p) => p.getAddressTxsChainPage(address, chainCursor))
       : await this.withProvider((p) => p.getAddressTxs(address));
     return { txs };
-  }
-
-  async fetchAddressTxsAll(address: string, maxTxs?: number): Promise<ChainTxSummary[]> {
-    return getAddressTxsAll(
-      {
-        fetchFirstPage: (addr) => this.withProvider((p) => p.getAddressTxs(addr)),
-        fetchChainPage: (addr, lastTxid) =>
-          this.withProvider((p) => p.getAddressTxsChainPage(addr, lastTxid)),
-      },
-      address,
-      { maxTxs },
-    );
   }
 }

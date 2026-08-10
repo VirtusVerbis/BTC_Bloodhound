@@ -1,8 +1,6 @@
 # Copy to .dev.vars for `pnpm cf:dev` (gitignored)
-# Production: `wrangler secret put ADMIN_TOKEN --env production` (never commit real secrets).
 # RATE_LIMIT_MS is also set in wrangler.toml [vars]; override here if needed.
 RATE_LIMIT_MS=8000
-ADMIN_TOKEN=dev-admin-token-change-me
 ENVIRONMENT=development
 CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:8787
 # CSRF tokens N/A without cookie sessions. Per-IP API rate limits off in development.

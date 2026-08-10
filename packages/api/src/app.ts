@@ -9,14 +9,12 @@ import {
   isRebuildActive,
   JOB_PRIORITY,
   normalizeBitcoinAddress,
-  timingSafeEqualString,
 } from "@cointrace/core";
 import {
   clampInt,
   clientIp,
   enforceRateLimit,
   rateLimitResponse,
-  readJsonBodyLimited,
   securityHeadersMiddleware,
 } from "./security.js";
 
@@ -270,43 +268,6 @@ export function createApp(store: Store, config: AppConfig) {
       status: "queued",
       ...eta,
     });
-  });
-
-  app.post("/api/admin/hackers", async (c) => {
-    const ip = clientIp(c);
-    const denied = await applyRateLimit(
-      c,
-      store,
-      config,
-      `admin:${ip}`,
-      config.adminRateLimit,
-      config.adminRateWindowSec,
-    );
-    if (denied) return denied;
-
-    const auth = c.req.header("Authorization") ?? "";
-    const token = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : "";
-    if (!(await timingSafeEqualString(token, config.adminToken))) {
-      return c.json({ error: "unauthorized" }, 401);
-    }
-
-    const parsed = await readJsonBodyLimited<{ address?: string; label?: string }>(c);
-    if (!parsed.ok) return c.json({ error: parsed.error }, 400);
-
-    const address = normalizeBitcoinAddress(parsed.data.address ?? "");
-    if (!address) return c.json({ error: "valid address required" }, 400);
-    const label = parsed.data.label?.trim() ? parsed.data.label.trim().slice(0, 200) : null;
-
-    await store.upsertAddress({
-      address,
-      role: "hacker",
-      label,
-      source: "admin",
-      isFlaggedHacker: true,
-      hopFromHacker: 0,
-    });
-    await store.enqueueJob("backfill_hacker_address", { address }, JOB_PRIORITY.BACKFILL_HACKER);
-    return c.json({ ok: true });
   });
 
   return app;

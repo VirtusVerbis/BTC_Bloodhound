@@ -16,3 +16,4 @@ export * from "./price/mempoolPrices.js";
 export * from "./util/hash.js";
 export * from "./util/address.js";
 export * from "./util/timingSafe.js";
+export * from "./ops/hackers.js";

@@ -88,3 +88,23 @@ describe("job timing", () => {
     expect(status.lastCompletedJobDurationMs).toBeLessThan(60_000);
   });
 });
+
+describe("hasPendingJob address match", () => {
+  const ADDR_A = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
+  const ADDR_B = "bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3";
+
+  it("matches pending jobs by json_extract address", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.enqueueJob("poll_hacker_address", { address: ADDR_A }, 1);
+
+    expect(await store.hasPendingJob("poll_hacker_address", ADDR_A)).toBe(true);
+    expect(await store.hasPendingJob("poll_hacker_address", ADDR_B)).toBe(false);
+    expect(await store.hasPendingJob("backfill_hacker_address", ADDR_A)).toBe(false);
+
+    expect(await store.deleteActiveJobsForAddress(ADDR_A)).toBe(1);
+    expect(await store.hasPendingJob("poll_hacker_address", ADDR_A)).toBe(false);
+  });
+});

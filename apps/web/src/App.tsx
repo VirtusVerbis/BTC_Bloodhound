@@ -5,7 +5,7 @@ import { HackGraph } from "./components/HackGraph";
 import { AddressDetailDrawer } from "./components/AddressDetailDrawer";
 import { MonitoringIndicator, type MonitoringSyncStatus } from "./components/MonitoringIndicator";
 import { BtcUsdProvider } from "./context/BtcUsdContext";
-import { api, formatUsd, satsToBtc, satsToUsd } from "./lib/api";
+import { api, formatBtcSpotUsd, formatUsd, satsToBtc, satsToUsd } from "./lib/api";
 import {
   clampGraphNodeCount,
   commitGraphNodeDraft,
@@ -201,7 +201,7 @@ export default function App() {
   useEffect(() => {
     if (activeTab !== "tracker" || sortedHackers.length === 0) return;
 
-    const onKey = (e: KeyboardEvent) => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
       if (isTypingTarget(e.target)) return;
       if (e.key !== "PageUp" && e.key !== "PageDown") return;
 
@@ -307,12 +307,18 @@ export default function App() {
               <span>{stats.victimCount} victims indexed</span>
               <span className="stats-hacker-count">{stats.hackerCount} hacker addresses</span>
               <span className="stats-hack-btc">
-                {satsToBtc(stats.totalInSats)} BTC received (hack)
+                {satsToBtc(stats.totalInSats)} BTC stolen =
                 {stats.btcUsdPrice != null && (
-                  <span className="usd-value">
-                    {" "}
-                    {formatUsd(satsToUsd(stats.totalInSats, stats.btcUsdPrice))}
-                  </span>
+                  <>
+                    <span className="usd-value">
+                      {" "}
+                      {formatUsd(satsToUsd(stats.totalInSats, stats.btcUsdPrice))}
+                    </span>
+                    <span className="btc-spot-price">
+                      {" @ "}
+                      {formatBtcSpotUsd(stats.btcUsdPrice)} USD/BTC
+                    </span>
+                  </>
                 )}
               </span>
             </>

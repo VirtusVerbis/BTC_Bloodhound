@@ -234,6 +234,11 @@ body {
   color: var(--color-usd);
 }
 
+.btc-spot-price {
+  color: #ff9800;
+  font-weight: 600;
+}
+
 .controls-row {
   display: flex;
   flex-wrap: wrap;
@@ -374,6 +379,80 @@ button.primary {
 }
 
 @media (max-width: 767px) {
+  .app-header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding-right: 1.5rem;
+  }
+
+  .app-header-title-row {
+    order: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+  }
+
+  .monitoring-indicator {
+    order: 2;
+    position: static;
+    text-align: left;
+    max-width: 100%;
+  }
+
+  .app-tabs {
+    order: 3;
+  }
+
+  .stats-row {
+    order: 4;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.35rem;
+    font-size: 0.8rem;
+  }
+
+  .app-header h1 {
+    font-size: 1.05rem;
+    line-height: 1.3;
+  }
+
+  .hack-elapsed-label {
+    position: static;
+    transform: none;
+    display: block;
+    white-space: normal;
+  }
+
+  .monitoring-updated {
+    display: none;
+  }
+
+  .monitoring-threshold-warning {
+    white-space: normal;
+  }
+
+  .rate-limit-banner {
+    margin-left: 0;
+    max-width: 100%;
+  }
+
+  .sync-stats {
+    position: static;
+    text-align: left;
+    white-space: normal;
+    width: 100%;
+  }
+
+  .controls-panel .controls-row {
+    align-items: stretch;
+  }
+
+  .controls-panel .controls-row label {
+    flex: 1 1 100%;
+  }
+
   .drawer {
     left: 0;
     right: 0;
@@ -521,12 +600,14 @@ button.primary {
   border-radius: 4px;
 }
 
-.sync-stats {
-  position: absolute;
-  right: 1.5rem;
-  bottom: 1rem;
-  text-align: right;
-  white-space: nowrap;
+@media (min-width: 768px) {
+  .sync-stats {
+    position: absolute;
+    right: 1.5rem;
+    bottom: 1rem;
+    text-align: right;
+    white-space: nowrap;
+  }
 }
 
 .sync-stats > span {

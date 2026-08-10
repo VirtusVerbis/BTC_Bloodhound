@@ -20,6 +20,10 @@ const INGEST_JOB_TYPES = [
   "expand_downstream",
 ] as const;
 
+function jobPayloadAddressEq(address: string) {
+  return sql`json_extract(${jobs.payloadJson}, '$.address') = ${address}`;
+}
+
 function isIngestContinuation(payloadJson: string): boolean {
   let payload: Record<string, unknown>;
   try {
@@ -494,7 +498,7 @@ export class Store {
         and(
           eq(jobs.type, type),
           or(eq(jobs.status, "pending"), eq(jobs.status, "running")),
-          sql`${jobs.payloadJson} LIKE ${`%"address":"${address}"%`}`,
+          jobPayloadAddressEq(address),
         ),
       )
       .get();
@@ -1069,5 +1073,127 @@ export class Store {
       btcUsdPrice: scheduler?.btcUsdPrice ?? null,
       btcUsdPriceAt: scheduler?.btcUsdPriceAt ?? null,
     };
+  }
+
+  /** Distinct victims with in_to_hacker edges into this hacker. */
+  async listVictimAddressesForHacker(hacker: string): Promise<string[]> {
+    const rows = await this.db
+      .selectDistinct({ address: edges.fromAddress })
+      .from(edges)
+      .where(and(eq(edges.toAddress, hacker), eq(edges.direction, "in_to_hacker")))
+      .all();
+    return rows.map((r) => r.address);
+  }
+
+  /** Addresses reachable via out_from_hacker BFS starting at hacker (excludes hacker). */
+  async collectDownstreamAddresses(hacker: string): Promise<string[]> {
+    const seen = new Set<string>([hacker]);
+    const queue = [hacker];
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+      const outs = await this.db
+        .select({ to: edges.toAddress })
+        .from(edges)
+        .where(and(eq(edges.fromAddress, cur), eq(edges.direction, "out_from_hacker")))
+        .all();
+      for (const row of outs) {
+        if (!seen.has(row.to)) {
+          seen.add(row.to);
+          queue.push(row.to);
+        }
+      }
+    }
+    seen.delete(hacker);
+    return [...seen];
+  }
+
+  async deleteEdgesTouchingAddress(address: string): Promise<number> {
+    const result = await this.db
+      .delete(edges)
+      .where(or(eq(edges.fromAddress, address), eq(edges.toAddress, address)))
+      .run();
+    return changesCount(result as { changes?: number; meta?: { changes?: number } });
+  }
+
+  async countInToHackerEdgesToOtherFlagged(victim: string, excludeHacker: string): Promise<number> {
+    const row = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(edges)
+      .innerJoin(addresses, eq(edges.toAddress, addresses.address))
+      .where(
+        and(
+          eq(edges.fromAddress, victim),
+          eq(edges.direction, "in_to_hacker"),
+          eq(addresses.isFlaggedHacker, true),
+          ne(edges.toAddress, excludeHacker),
+        ),
+      )
+      .get();
+    return row?.count ?? 0;
+  }
+
+  async hasEdgeWithOtherFlaggedHacker(address: string, excludeHacker: string): Promise<boolean> {
+    const touching = [
+      ...(await this.getEdgesFromAddress(address)),
+      ...(await this.getEdgesToAddress(address)),
+    ];
+    for (const e of touching) {
+      const other = e.fromAddress === address ? e.toAddress : e.fromAddress;
+      if (other === excludeHacker || other === address) continue;
+      const row = await this.getAddress(other);
+      if (row?.isFlaggedHacker) return true;
+    }
+    return false;
+  }
+
+  async hasOutFromHackerInboundOutside(
+    address: string,
+    candidateSet: Set<string>,
+    excludeHacker: string,
+  ): Promise<boolean> {
+    const rows = await this.db
+      .select({ from: edges.fromAddress })
+      .from(edges)
+      .where(and(eq(edges.toAddress, address), eq(edges.direction, "out_from_hacker")))
+      .all();
+    return rows.some((r) => r.from !== excludeHacker && !candidateSet.has(r.from));
+  }
+
+  async deleteAddress(address: string): Promise<void> {
+    await this.db.delete(syncState).where(eq(syncState.address, address)).run();
+    await this.db.delete(addresses).where(eq(addresses.address, address)).run();
+  }
+
+  async deleteActiveJobsForAddress(address: string): Promise<number> {
+    const result = await this.db
+      .delete(jobs)
+      .where(
+        and(
+          or(eq(jobs.status, "pending"), eq(jobs.status, "running")),
+          jobPayloadAddressEq(address),
+        ),
+      )
+      .run();
+    return changesCount(result as { changes?: number; meta?: { changes?: number } });
+  }
+
+  async deleteActiveJobs(): Promise<{ deleted: number; pending: number; running: number }> {
+    const pendingRow = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(jobs)
+      .where(eq(jobs.status, "pending"))
+      .get();
+    const runningRow = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(jobs)
+      .where(eq(jobs.status, "running"))
+      .get();
+    const pending = pendingRow?.count ?? 0;
+    const running = runningRow?.count ?? 0;
+    await this.db
+      .delete(jobs)
+      .where(or(eq(jobs.status, "pending"), eq(jobs.status, "running")))
+      .run();
+    return { deleted: pending + running, pending, running };
   }
 }

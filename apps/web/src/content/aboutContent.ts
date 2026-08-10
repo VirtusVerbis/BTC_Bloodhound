@@ -17,6 +17,25 @@ export interface KeyboardCommand {
 
 export const openSourceRepoUrl = "https://github.com/VirtusVerbis/BTC_Bloodhound";
 
+export const contactLinks: ExternalLink[] = [
+  {
+    label: "YouTube",
+    url: "https://www.youtube.com/@VirtusVerbis",
+  },
+  {
+    label: "Rumble",
+    url: "https://rumble.com/c/c-6719426",
+  },
+  {
+    label: "Fountain",
+    url: "https://fountain.fm/virtusverbis",
+  },
+  {
+    label: "X (@VirtusVerbis)",
+    url: "https://x.com/VirtusVerbis",
+  },
+];
+
 export const disclaimerItems = [
   "This website is for visual reference only and does not guarantee any accuracy whatsoever.",
   "Data is scraped and aggregated from public web sources.",

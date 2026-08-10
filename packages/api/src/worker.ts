@@ -16,7 +16,6 @@ export interface WorkerEnv {
   };
   ASSETS?: { fetch(request: Request): Promise<Response> };
   ENVIRONMENT?: string;
-  ADMIN_TOKEN?: string;
   CORS_ORIGINS?: string;
   ESPLORA_BASE?: string;
   MEMPOOL_BASE?: string;

@@ -32,6 +32,12 @@ export function formatUsd(amount: number) {
   });
 }
 
+export function formatBtcSpotUsd(price: number) {
+  return price.toLocaleString(undefined, {
+    maximumFractionDigits: price >= 100 ? 0 : 2,
+  });
+}
+
 export function isValidIsoDate(iso: string) {
   return !Number.isNaN(new Date(iso).getTime());
 }

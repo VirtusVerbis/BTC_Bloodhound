@@ -497,17 +497,6 @@ export async function processTxForHackTrace(
   }
 }
 
-/** @deprecated Use processTxForHackTrace */
-export async function processTxForHackerContext(
-  store: Store,
-  router: ChainRouter,
-  txid: string,
-  hackerAddresses: Set<string>,
-  parentHop = 0,
-): Promise<void> {
-  await processTxForHackTrace(store, router, txid, hackerAddresses, { spendingHop: parentHop });
-}
-
 export async function getHackerAddressSet(store: Store): Promise<Set<string>> {
   return new Set((await store.listHackers()).map((h) => h.address));
 }

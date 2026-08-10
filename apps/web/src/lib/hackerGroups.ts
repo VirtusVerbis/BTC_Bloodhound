@@ -19,6 +19,7 @@ const SOURCE_LABELS: Record<string, string> = {
   public_seed: "Public seed list",
   local_config: "Local config",
   admin: "Manual",
+  ops: "Ops CLI",
 };
 
 export function formatSourceLabel(source: string): string {

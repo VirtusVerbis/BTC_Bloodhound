@@ -616,9 +616,6 @@ export async function processJob(
 ): Promise<void> {
   const payload = JSON.parse(job.payloadJson) as Record<string, unknown>;
   switch (job.type) {
-    case "seed_public_hackers":
-      await runSeedPublicHackers(store, config.seedFilePath, config.seedDataJson);
-      break;
     case "backfill_hacker_address":
       await backfillHacker(store, router, config, payload);
       break;

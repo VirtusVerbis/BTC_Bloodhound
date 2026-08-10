@@ -12,7 +12,7 @@ not_found_handling = "single-page-application"
 [[d1_databases]]
 binding = "DB"
 database_name = "cointrace"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "72198afb-c475-4b32-a0fc-53fa34614a97"
 migrations_dir = "migrations"
 
 [triggers]
@@ -40,7 +40,7 @@ not_found_handling = "single-page-application"
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "cointrace"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "72198afb-c475-4b32-a0fc-53fa34614a97"
 migrations_dir = "migrations"
 
 [env.production.triggers]
@@ -51,12 +51,11 @@ ENVIRONMENT = "production"
 ESPLORA_BASE = "https://blockstream.info/api"
 MEMPOOL_BASE = "https://mempool.space/api"
 # Set to your Worker URL(s), e.g. https://cointrace-production.<account>.workers.dev
-CORS_ORIGINS = "https://cointrace-production.workers.dev"
+CORS_ORIGINS = "https://www.bitcoinbloodhound.com,https://bitcoinbloodhound.com"
 RATE_LIMIT_MS = "8000"
 JOBS_PER_TICK = "1"
 MAX_GRAPH_VICTIMS = "10000"
 MAX_GRAPH_DOWNSTREAM = "10000"
 
-# Secrets (do NOT put in [vars]):
-#   npx wrangler secret put ADMIN_TOKEN --env production
 # Local wrangler dev: copy .dev.vars.example → .dev.vars
+# Ops (add/remove hacker, clear-queue) use indexer CLI with --remote against D1 — no admin HTTP API.

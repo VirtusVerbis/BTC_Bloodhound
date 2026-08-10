@@ -206,6 +206,7 @@ export function HackGraph({
   const [fitViewTrigger, setFitViewTrigger] = useState(0);
   const [victimSort, setVictimSort] = useState<VictimSortOption>("btc-desc");
   const [showEdgeLabels, setShowEdgeLabels] = useState(false);
+  const [nodesInteractive, setNodesInteractive] = useState(false);
   const [queued, setQueued] = useState<QueuedJob[]>([]);
   const [countdownTick, setCountdownTick] = useState(0);
 
@@ -598,7 +599,9 @@ export function HackGraph({
           onNodeClick={onNodeClickHandler}
           onEdgeClick={onEdgeClick}
           onNodeDragStop={onNodeDragStop}
-          nodesDraggable
+          nodesDraggable={nodesInteractive}
+          nodesConnectable={nodesInteractive}
+          elementsSelectable={nodesInteractive}
           zoomOnScroll
           zoomOnPinch
           panOnScroll={false}
@@ -643,7 +646,7 @@ export function HackGraph({
           </Panel>
           <FitViewAfterLayout trigger={fitViewTrigger} />
           <GraphKeyboardShortcuts />
-          <Controls />
+          <Controls onInteractiveChange={setNodesInteractive} />
           {isDesktop && (
             <MiniMap
               style={{ width: 100, height: 75 }}

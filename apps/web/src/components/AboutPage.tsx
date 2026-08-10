@@ -1,5 +1,6 @@
 import {
   apiReferences,
+  contactLinks,
   dataSourceLinks,
   dataSourceNote,
   disclaimerItems,
@@ -55,6 +56,11 @@ export function AboutPage({ sync }: AboutPageProps) {
             {openSourceRepoUrl}
           </a>
         </p>
+      </section>
+
+      <section className="about-section">
+        <h2>Contact</h2>
+        <ExternalLinkList links={contactLinks} />
       </section>
 
       <section className="about-section">

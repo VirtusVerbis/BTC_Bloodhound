@@ -30,6 +30,9 @@ pnpm dev:web
 | `pnpm --filter @cointrace/indexer seed` | Load `config/watchlist.seed.json` |
 | `pnpm --filter @cointrace/indexer load-local` | Merge `config/watchlist.local.json` |
 | `pnpm --filter @cointrace/indexer run` | Background indexer (cron + job queue) |
+| `node apps/indexer/dist/index.js add-hacker <addr> [--label …] [--remote]` | Upsert flagged hacker (`source=ops`) + enqueue backfill |
+| `node apps/indexer/dist/index.js remove-hacker <addr> [--no-prune] [--remote]` | Soft-unflag; prune exclusive victims/downstream by default |
+| `node apps/indexer/dist/index.js clear-queue [--remote]` | Delete pending/running jobs only (queue depth → 0) |
 
 ### Hacker backfill (stop indexer before `--wait`)
 
@@ -53,8 +56,10 @@ Fair scheduling keeps graph ingest ahead of maintenance work while `JOBS_PER_TIC
 | `pnpm dev:web` | Vite dev server |
 | `pnpm cf:dev` | Cloudflare Workers + D1 + static UI (local) |
 | `pnpm cf:deploy` | Deploy Worker + assets to Cloudflare (`--env production`) |
-| `pnpm db:push-d1` | Copy local SQLite → local D1 |
-| `pnpm db:push-d1:remote` | Copy local SQLite → remote D1 |
+| `pnpm db:pull-d1:remote` | **Preferred sync:** prod D1 → local SQLite snapshot (resumable import) |
+| `pnpm db:pull-d1` | Local wrangler D1 → local SQLite |
+| `pnpm db:push-d1` | Bootstrap only: local SQLite → local D1 (resumable batches) |
+| `pnpm db:push-d1:remote` | **Danger:** local SQLite → prod D1 (bootstrap/DR only; `--clear` wipes prod) |
 
 ## Docker (self-host)
 
@@ -69,30 +74,51 @@ Web: http://localhost:8080
 
 Dual hosting: same codebase runs on Node+SQLite locally and Workers+D1 remotely.
 
+**After go-live, production D1 is the source of truth.** Day-to-day changes use the indexer ops CLI with `--remote`. Refresh a local analysis snapshot with `pnpm db:pull-d1:remote`. Do **not** use `db:push-d1:remote` as normal sync — `--clear` can wipe prod with a stale laptop DB.
+
 1. Create a D1 database: `npx wrangler d1 create cointrace` and set `database_id` in `wrangler.toml`
-2. Copy `.dev.vars.example` → `.dev.vars` and set `ADMIN_TOKEN` (`RATE_LIMIT_MS=8000` is in `wrangler.toml` and the example file)
+2. Copy `.dev.vars.example` → `.dev.vars` (`RATE_LIMIT_MS=8000` is in `wrangler.toml` and the example file)
 3. Apply migrations: `pnpm db:d1:migrate` (local) / `pnpm db:d1:migrate:remote`
-4. Optional — copy existing local data (avoids re-crawl):
+4. Optional bootstrap — copy existing local data once (avoids re-crawl):
    ```bash
    sqlite3 data/cointrace.db "PRAGMA wal_checkpoint(FULL);"
    pnpm db:push-d1          # local D1
-   pnpm db:push-d1:remote   # production D1
+   pnpm db:push-d1:remote   # production D1 (first-time / disaster recovery only)
    ```
-5. Set production secret: `npx wrangler secret put ADMIN_TOKEN --env production` (never put secrets in `[vars]` or git)
-6. Set `CORS_ORIGINS` under `[env.production.vars]` in `wrangler.toml` to your Worker URL(s). `ENVIRONMENT=production` is already pinned there (`pnpm cf:deploy` uses `--env production`).
-7. Set the same `database_id` on both top-level and `[[env.production.d1_databases]]`.
-8. Deploy: `pnpm cf:deploy` (Worker name: `cointrace-production`; `[env.production.vars]` includes `RATE_LIMIT_MS=8000`)
-9. Cloudflare dashboard (defense-in-depth): enable Bot Fight Mode and/or rate-limiting rules for the Worker hostname; optionally WAF managed rules if available on your plan
+   Push is batched and resumable with live `Push N%` progress. Re-run the same command to resume from checkpoint. Prefer avoiding `--clear` on resume.
+5. Set `CORS_ORIGINS` under `[env.production.vars]` in `wrangler.toml` to your Worker URL(s). `ENVIRONMENT=production` is already pinned there (`pnpm cf:deploy` uses `--env production`).
+6. Set the same `database_id` on both top-level and `[[env.production.d1_databases]]`.
+7. Deploy: `pnpm cf:deploy` (Worker name: `cointrace-production`; `[env.production.vars]` includes `RATE_LIMIT_MS=8000`)
+8. Cloudflare dashboard (defense-in-depth): enable Bot Fight Mode and/or rate-limiting rules for the Worker hostname; optionally WAF managed rules if available on your plan
+
+### Ops CLI (no public admin HTTP)
+
+```bash
+# Against production D1 (preferred once live)
+node apps/indexer/dist/index.js add-hacker <addr> --label "…" --remote
+node apps/indexer/dist/index.js remove-hacker <addr> --remote
+node apps/indexer/dist/index.js clear-queue --remote   # before/after JOB_PRIORITY changes; then let cron re-enqueue
+
+# Local SQLite (default)
+node apps/indexer/dist/index.js add-hacker <addr>
+```
+
+Pull prod for local analysis (export is all-or-nothing; SQL→SQLite import is resumable with `Import N%`):
+
+```bash
+pnpm db:pull-d1:remote
+# Interrupted import: node scripts/d1-to-sqlite.mjs --remote --skip-export
+```
 
 ### Security notes (public deploy)
 
-- Public read APIs power the SPA; writes (`POST /api/expand`, admin) are rate-limited / authenticated.
+- Public read APIs power the SPA; `POST /api/expand` is rate-limited. Hacker add/remove is CLI-only (no admin HTTP).
 - **CSRF tokens are N/A** without cookie sessions; CORS allowlist + rate limits are the controls.
-- App-level per-IP rate limits (expand, GET, graph, admin) apply **only when `ENVIRONMENT=production`**. Local Node and `pnpm cf:dev` skip them (global expand active-job cap still applies). See `EXPAND_*`, `GET_*`, `GRAPH_*`, `ADMIN_*` env knobs.
+- App-level per-IP rate limits (expand, GET, graph) apply **only when `ENVIRONMENT=production`**. Local Node and `pnpm cf:dev` skip them (global expand active-job cap still applies). See `EXPAND_*`, `GET_*`, `GRAPH_*` env knobs.
 - Graph UI poll interval comes from `GET /api/config` (`graphPollMs`: **30s** non-production, **120s** production). The client caches recent `/api/graph` responses by query key (instant revisit via dropdown/Page Down); concurrent misses for the same key share one in-flight request. Only the poll interval revalidates from the network.
-- Production refuses `ADMIN_TOKEN=change-me` and requires explicit `CORS_ORIGINS` (`assertProductionSecrets`).
+- Production requires explicit `CORS_ORIGINS` (`assertProductionSecrets`).
 - Before deploy: `pnpm audit` (or `npx pnpm@9.15.0 audit`).
-- SQL: Store uses parameterized Drizzle queries; addresses are validated at the API boundary; no raw SQL from request strings.
+- SQL: Store uses parameterized Drizzle queries; addresses are validated at the API/CLI boundary; remote ops SQL is generated from validated inputs (never hand-typed by the operator).
 
 Cron (`*/1 * * * *`) runs indexer ticks on the Worker.
 

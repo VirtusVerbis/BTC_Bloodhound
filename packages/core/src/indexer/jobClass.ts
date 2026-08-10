@@ -14,7 +14,6 @@ const MAINT_TYPES = new Set<JobType>([
   "sync_coldcardwatch",
   "sync_vercel_trackers",
   "process_tx",
-  "seed_public_hackers",
 ]);
 
 const COSMETIC_TYPES = new Set<JobType>([
