@@ -109,6 +109,93 @@ describe("hasPendingJob address match", () => {
   });
 });
 
+describe("enqueueJobIfAbsent", () => {
+  const ADDR_A = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
+
+  it("returns null on duplicate type+address", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const first = await store.enqueueJobIfAbsent(
+      "poll_hacker_address",
+      { address: ADDR_A },
+      1,
+      undefined,
+      { address: ADDR_A },
+    );
+    const second = await store.enqueueJobIfAbsent(
+      "poll_hacker_address",
+      { address: ADDR_A },
+      1,
+      undefined,
+      { address: ADDR_A },
+    );
+
+    expect(first).toBeGreaterThan(0);
+    expect(second).toBeNull();
+  });
+
+  it("dedupes across dedupeTypes for same address", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.enqueueJobIfAbsent(
+      "audit_hacker_backfill",
+      { address: ADDR_A },
+      5,
+      undefined,
+      { dedupeTypes: ["backfill_hacker_address", "audit_hacker_backfill"], address: ADDR_A },
+    );
+
+    const blocked = await store.enqueueJobIfAbsent(
+      "backfill_hacker_address",
+      { address: ADDR_A },
+      5,
+      undefined,
+      { dedupeTypes: ["backfill_hacker_address", "audit_hacker_backfill"], address: ADDR_A },
+    );
+
+    expect(blocked).toBeNull();
+  });
+
+  it("allows global jobs independently", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const first = await store.enqueueJobIfAbsent("sync_coldcardwatch", {}, 5);
+    const second = await store.enqueueJobIfAbsent("sync_coldcardwatch", {}, 5);
+
+    expect(first).toBeGreaterThan(0);
+    expect(second).toBeNull();
+  });
+});
+
+describe("insertAddressIfMissing", () => {
+  it("returns true once and false on duplicate", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const first = await store.insertAddressIfMissing({
+      address: "bc1qtestaddr",
+      role: "hacker",
+      isFlaggedHacker: true,
+    });
+    const second = await store.insertAddressIfMissing({
+      address: "bc1qtestaddr",
+      role: "victim",
+    });
+
+    expect(first).toBe(true);
+    expect(second).toBe(false);
+    const row = await store.getAddress("bc1qtestaddr");
+    expect(row?.role).toBe("hacker");
+  });
+});
+
 describe("listActiveJobs", () => {
   it("orders by priority desc then run_after asc and filters by status", async () => {
     const { sqlite, db } = openDatabase(":memory:");

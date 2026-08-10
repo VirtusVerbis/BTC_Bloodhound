@@ -67,19 +67,39 @@ export async function fetchColdcardWatch(base: string): Promise<ColdcardWatchDat
 
 export async function applyColdcardWatchSync(store: Store, data: ColdcardWatchData): Promise<void> {
   for (const address of data.collectors) {
-    const existing = await store.getAddress(address);
-    await store.upsertAddress({
+    const inserted = await store.insertAddressIfMissing({
       address,
       role: "hacker",
       isFlaggedHacker: true,
       source: "coldcardwatch",
       hopFromHacker: 0,
-      expandStatus: existing ? existing.expandStatus : "pending",
+      expandStatus: "pending",
     });
-    if (!existing) {
-      await store.enqueueJob("backfill_hacker_address", { address }, JOB_PRIORITY.BACKFILL_HACKER);
-    } else if (!(await store.hasPendingJob("poll_hacker_address", address))) {
-      await store.enqueueJob("poll_hacker_address", { address }, JOB_PRIORITY.POLL_HACKER);
+    if (!inserted) {
+      await store.upsertAddress({
+        address,
+        role: "hacker",
+        isFlaggedHacker: true,
+        source: "coldcardwatch",
+        hopFromHacker: 0,
+      });
+    }
+    if (inserted) {
+      await store.enqueueJobIfAbsent(
+        "backfill_hacker_address",
+        { address },
+        JOB_PRIORITY.BACKFILL_HACKER,
+        undefined,
+        { address },
+      );
+    } else {
+      await store.enqueueJobIfAbsent(
+        "poll_hacker_address",
+        { address },
+        JOB_PRIORITY.POLL_HACKER,
+        undefined,
+        { address },
+      );
     }
   }
 
@@ -88,15 +108,20 @@ export async function applyColdcardWatchSync(store: Store, data: ColdcardWatchDa
   }
 
   for (const address of data.downstream) {
-    const existing = await store.getAddress(address);
-    await store.upsertAddress({
+    const inserted = await store.insertAddressIfMissing({
       address,
       role: "downstream",
       source: "coldcardwatch",
       expandStatus: "pending",
     });
-    if (!existing) {
-      await store.enqueueJob("expand_downstream", { address, cron: true }, JOB_PRIORITY.CRON_EXPAND);
+    if (inserted) {
+      await store.enqueueJobIfAbsent(
+        "expand_downstream",
+        { address, cron: true },
+        JOB_PRIORITY.CRON_EXPAND,
+        undefined,
+        { address },
+      );
     }
   }
 

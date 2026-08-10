@@ -62,7 +62,13 @@ export async function applyColdcardSweepWatchSync(store: Store, data: ColdcardSw
     });
     if (added) {
       inserted++;
-      await store.enqueueJob("backfill_hacker_address", { address }, JOB_PRIORITY.BACKFILL_HACKER);
+      await store.enqueueJobIfAbsent(
+        "backfill_hacker_address",
+        { address },
+        JOB_PRIORITY.BACKFILL_HACKER,
+        undefined,
+        { address },
+      );
     }
   }
 

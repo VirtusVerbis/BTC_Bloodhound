@@ -73,64 +73,105 @@ function changesCount(result: { changes?: number; meta?: { changes?: number } })
   return 0;
 }
 
+export type AddressUpsertData = {
+  address: string;
+  role?: string;
+  label?: string | null;
+  source?: string;
+  isFlaggedHacker?: boolean;
+  hopFromHacker?: number | null;
+  expandStatus?: string;
+  totalReceivedSats?: number;
+  liveBalanceSats?: number | null;
+  liveBalanceAt?: string | null;
+};
+
 export class Store {
   constructor(public db: Db) {}
 
-  async upsertAddress(data: {
-    address: string;
-    role?: string;
-    label?: string | null;
-    source?: string;
-    isFlaggedHacker?: boolean;
-    hopFromHacker?: number | null;
-    expandStatus?: string;
-    totalReceivedSats?: number;
-    liveBalanceSats?: number | null;
-    liveBalanceAt?: string | null;
-  }) {
-    const existing = await this.db.select().from(addresses).where(eq(addresses.address, data.address)).get();
+  async upsertAddress(data: AddressUpsertData) {
     const ts = now();
-    if (existing) {
-      const role =
-        existing.role === "hacker" && data.role === "victim"
-          ? existing.role
-          : data.role ?? existing.role;
-      await this.db
-        .update(addresses)
-        .set({
-          role,
-          label: data.label ?? existing.label,
-          source: data.source ?? existing.source,
-          isFlaggedHacker: data.isFlaggedHacker ?? existing.isFlaggedHacker,
-          hopFromHacker: data.hopFromHacker ?? existing.hopFromHacker,
-          expandStatus: data.expandStatus ?? existing.expandStatus,
-          totalReceivedSats: data.totalReceivedSats ?? existing.totalReceivedSats,
-          liveBalanceSats: data.liveBalanceSats ?? existing.liveBalanceSats,
-          liveBalanceAt: data.liveBalanceAt ?? existing.liveBalanceAt,
-          lastSeenAt: ts,
-        })
-        .where(eq(addresses.address, data.address))
-        .run();
-    } else {
-      await this.db
-        .insert(addresses)
-        .values({
-          address: data.address,
-          role: data.role ?? "unknown",
-          label: data.label ?? null,
-          source: data.source ?? "derived",
-          isFlaggedHacker: data.isFlaggedHacker ?? false,
-          createdAt: ts,
-          firstSeenAt: ts,
-          lastSeenAt: ts,
-          hopFromHacker: data.hopFromHacker ?? null,
-          expandStatus: data.expandStatus ?? "pending",
-          totalReceivedSats: data.totalReceivedSats ?? 0,
-          liveBalanceSats: data.liveBalanceSats ?? null,
-          liveBalanceAt: data.liveBalanceAt ?? null,
-        })
-        .run();
-    }
+    const role = data.role ?? "unknown";
+    const label = data.label !== undefined ? data.label : null;
+    const source = data.source ?? "derived";
+    const isFlaggedHacker = data.isFlaggedHacker ?? false;
+    const hopFromHacker = data.hopFromHacker !== undefined ? data.hopFromHacker : null;
+    const expandStatus = data.expandStatus ?? "pending";
+    const totalReceivedSats = data.totalReceivedSats ?? 0;
+    const liveBalanceSats = data.liveBalanceSats !== undefined ? data.liveBalanceSats : null;
+    const liveBalanceAt = data.liveBalanceAt !== undefined ? data.liveBalanceAt : null;
+
+    const roleProvided = data.role !== undefined ? 1 : 0;
+    const labelProvided = data.label !== undefined ? 1 : 0;
+    const sourceProvided = data.source !== undefined ? 1 : 0;
+    const isFlaggedHackerProvided = data.isFlaggedHacker !== undefined ? 1 : 0;
+    const hopProvided = data.hopFromHacker !== undefined ? 1 : 0;
+    const expandStatusProvided = data.expandStatus !== undefined ? 1 : 0;
+    const totalReceivedProvided = data.totalReceivedSats !== undefined ? 1 : 0;
+    const liveBalanceSatsProvided = data.liveBalanceSats !== undefined ? 1 : 0;
+    const liveBalanceAtProvided = data.liveBalanceAt !== undefined ? 1 : 0;
+
+    await this.db.run(sql`
+      INSERT INTO addresses (
+        address, role, label, source, is_flagged_hacker, created_at, first_seen_at, last_seen_at,
+        hop_from_hacker, expand_status, total_received_sats, live_balance_sats, live_balance_at
+      ) VALUES (
+        ${data.address}, ${role}, ${label}, ${source}, ${isFlaggedHacker ? 1 : 0},
+        ${ts}, ${ts}, ${ts}, ${hopFromHacker}, ${expandStatus}, ${totalReceivedSats},
+        ${liveBalanceSats}, ${liveBalanceAt}
+      )
+      ON CONFLICT(address) DO UPDATE SET
+        role = CASE
+          WHEN addresses.role = 'hacker' AND excluded.role = 'victim' THEN addresses.role
+          WHEN ${roleProvided} = 1 THEN excluded.role
+          ELSE addresses.role END,
+        label = CASE WHEN ${labelProvided} = 1 THEN excluded.label ELSE addresses.label END,
+        source = CASE WHEN ${sourceProvided} = 1 THEN excluded.source ELSE addresses.source END,
+        is_flagged_hacker = CASE
+          WHEN ${isFlaggedHackerProvided} = 1 THEN excluded.is_flagged_hacker
+          ELSE addresses.is_flagged_hacker END,
+        hop_from_hacker = CASE
+          WHEN ${hopProvided} = 1 THEN excluded.hop_from_hacker
+          ELSE addresses.hop_from_hacker END,
+        expand_status = CASE
+          WHEN ${expandStatusProvided} = 1 THEN excluded.expand_status
+          ELSE addresses.expand_status END,
+        total_received_sats = CASE
+          WHEN ${totalReceivedProvided} = 1 THEN excluded.total_received_sats
+          ELSE addresses.total_received_sats END,
+        live_balance_sats = CASE
+          WHEN ${liveBalanceSatsProvided} = 1 THEN excluded.live_balance_sats
+          ELSE addresses.live_balance_sats END,
+        live_balance_at = CASE
+          WHEN ${liveBalanceAtProvided} = 1 THEN excluded.live_balance_at
+          ELSE addresses.live_balance_at END,
+        last_seen_at = ${ts}
+    `);
+  }
+
+  /** Insert address row only when absent; returns true when a new row was created. */
+  async insertAddressIfMissing(data: AddressUpsertData): Promise<boolean> {
+    const ts = now();
+    const result = await this.db.run(sql`
+      INSERT INTO addresses (
+        address, role, label, source, is_flagged_hacker, created_at, first_seen_at, last_seen_at,
+        hop_from_hacker, expand_status, total_received_sats, live_balance_sats, live_balance_at
+      ) VALUES (
+        ${data.address},
+        ${data.role ?? "unknown"},
+        ${data.label !== undefined ? data.label : null},
+        ${data.source ?? "derived"},
+        ${data.isFlaggedHacker ?? false ? 1 : 0},
+        ${ts}, ${ts}, ${ts},
+        ${data.hopFromHacker !== undefined ? data.hopFromHacker : null},
+        ${data.expandStatus ?? "pending"},
+        ${data.totalReceivedSats ?? 0},
+        ${data.liveBalanceSats !== undefined ? data.liveBalanceSats : null},
+        ${data.liveBalanceAt !== undefined ? data.liveBalanceAt : null}
+      )
+      ON CONFLICT(address) DO NOTHING
+    `);
+    return changesCount(result as { changes?: number; meta?: { changes?: number } }) > 0;
   }
 
   async getAddress(address: string) {
@@ -553,6 +594,45 @@ export class Store {
     return lastInsertId(result as { lastInsertRowid?: number | bigint; meta?: { last_row_id?: number } });
   }
 
+  /**
+   * Enqueue only when no matching active job exists (atomic INSERT ... WHERE NOT EXISTS).
+   * Returns job id when inserted, null when skipped.
+   */
+  async enqueueJobIfAbsent(
+    type: string,
+    payload: Record<string, unknown>,
+    priority: number,
+    runAfter?: string,
+    opts?: { dedupeTypes?: string[]; address?: string },
+  ): Promise<number | null> {
+    const dedupeTypes = opts?.dedupeTypes ?? [type];
+    const address =
+      opts?.address ?? (typeof payload.address === "string" ? payload.address : undefined);
+    const payloadJson = JSON.stringify(payload);
+    const runAt = runAfter ?? now();
+    const createdAt = now();
+    const typeList = sql.join(dedupeTypes.map((t) => sql`${t}`), sql`, `);
+
+    const result = await this.db.run(sql`
+      INSERT INTO jobs (type, payload_json, status, priority, run_after, created_at)
+      SELECT ${type}, ${payloadJson}, 'pending', ${priority}, ${runAt}, ${createdAt}
+      WHERE NOT EXISTS (
+        SELECT 1 FROM jobs
+        WHERE type IN (${typeList})
+          AND status IN ('pending', 'running')
+          AND (
+            ${address ?? null} IS NULL
+            OR json_extract(payload_json, '$.address') = ${address ?? null}
+          )
+      )
+    `);
+
+    if (changesCount(result as { changes?: number; meta?: { changes?: number } }) === 0) {
+      return null;
+    }
+    return lastInsertId(result as { lastInsertRowid?: number | bigint; meta?: { last_row_id?: number } });
+  }
+
   async countActiveJobs(type: string) {
     const row = await this.db
       .select({ count: sql<number>`count(*)` })
@@ -601,35 +681,41 @@ export class Store {
   ): Promise<{ allowed: boolean; retryAfterSec: number }> {
     const ts = Date.now();
     const windowMs = Math.max(1, windowSec) * 1000;
-    const row = await this.db.select().from(rateLimits).where(eq(rateLimits.key, key)).get();
-    const windowStartMs = row ? new Date(row.windowStart).getTime() : 0;
-    const inWindow = row != null && ts - windowStartMs < windowMs;
+    const windowStart = new Date(ts).toISOString();
 
-    if (!inWindow) {
-      const start = new Date(ts).toISOString();
-      if (row) {
-        await this.db
-          .update(rateLimits)
-          .set({ windowStart: start, count: 1 })
-          .where(eq(rateLimits.key, key))
-          .run();
-      } else {
-        await this.db.insert(rateLimits).values({ key, windowStart: start, count: 1 }).run();
-      }
+    const reset = await this.db.run(sql`
+      UPDATE rate_limits
+      SET window_start = ${windowStart}, count = 1
+      WHERE key = ${key}
+        AND (unixepoch(${windowStart}) - unixepoch(window_start)) * 1000 >= ${windowMs}
+    `);
+    if (changesCount(reset as { changes?: number; meta?: { changes?: number } }) > 0) {
       return { allowed: true, retryAfterSec: 0 };
     }
 
-    if (row.count >= limit) {
-      const retryAfterSec = Math.max(1, Math.ceil((windowStartMs + windowMs - ts) / 1000));
-      return { allowed: false, retryAfterSec };
+    const inserted = await this.db.run(sql`
+      INSERT OR IGNORE INTO rate_limits (key, window_start, count)
+      VALUES (${key}, ${windowStart}, 1)
+    `);
+    if (changesCount(inserted as { changes?: number; meta?: { changes?: number } }) > 0) {
+      return { allowed: true, retryAfterSec: 0 };
     }
 
-    await this.db
-      .update(rateLimits)
-      .set({ count: row.count + 1 })
-      .where(eq(rateLimits.key, key))
-      .run();
-    return { allowed: true, retryAfterSec: 0 };
+    const incremented = await this.db.run(sql`
+      UPDATE rate_limits
+      SET count = count + 1
+      WHERE key = ${key}
+        AND count < ${limit}
+        AND (unixepoch(${windowStart}) - unixepoch(window_start)) * 1000 < ${windowMs}
+    `);
+    if (changesCount(incremented as { changes?: number; meta?: { changes?: number } }) > 0) {
+      return { allowed: true, retryAfterSec: 0 };
+    }
+
+    const row = await this.db.select().from(rateLimits).where(eq(rateLimits.key, key)).get();
+    const windowStartMs = row ? new Date(row.windowStart).getTime() : ts;
+    const retryAfterSec = Math.max(1, Math.ceil((windowStartMs + windowMs - ts) / 1000));
+    return { allowed: false, retryAfterSec };
   }
 
   async claimNextJob() {
@@ -984,10 +1070,26 @@ export class Store {
   }
 
   async incrementMaintenanceCronCounter(): Promise<number> {
-    const state = await this.getSchedulerState();
-    const next = (state?.maintenanceCronCounter ?? 0) + 1;
-    await this.updateSchedulerState({ maintenanceCronCounter: next });
-    return next;
+    await this.db.run(sql`
+      UPDATE scheduler_state
+      SET maintenance_cron_counter = maintenance_cron_counter + 1
+      WHERE id = 1
+    `);
+    return (await this.getSchedulerState())?.maintenanceCronCounter ?? 0;
+  }
+
+  /** Atomically advance round-robin hacker poll index; returns index to use this tick. */
+  async claimNextHackerPollIndex(hackerCount: number): Promise<number> {
+    if (hackerCount <= 0) return 0;
+    const rows = await this.db.all<{ idx: number }>(sql`
+      UPDATE scheduler_state
+      SET hacker_poll_index = (hacker_poll_index + 1) % ${hackerCount}
+      WHERE id = 1
+      RETURNING ((hacker_poll_index - 1 + ${hackerCount}) % ${hackerCount}) AS idx
+    `);
+    const idx = rows[0]?.idx;
+    if (idx != null) return Number(idx);
+    return (await this.getHackerPollIndex()) % hackerCount;
   }
 
   async getSourceSync(source: string) {
@@ -996,16 +1098,16 @@ export class Store {
 
   async upsertSourceSync(source: string, data: { lastAddressCount?: number; lastContentHash?: string }) {
     const ts = now();
-    const existing = await this.getSourceSync(source);
-    if (existing) {
-      await this.db
-        .update(sourceSyncState)
-        .set({ lastSyncAt: ts, ...data })
-        .where(eq(sourceSyncState.source, source))
-        .run();
-    } else {
-      await this.db.insert(sourceSyncState).values({ source, lastSyncAt: ts, ...data }).run();
-    }
+    const lastAddressCount = data.lastAddressCount ?? null;
+    const lastContentHash = data.lastContentHash ?? null;
+    await this.db.run(sql`
+      INSERT INTO source_sync_state (source, last_sync_at, last_address_count, last_content_hash)
+      VALUES (${source}, ${ts}, ${lastAddressCount}, ${lastContentHash})
+      ON CONFLICT(source) DO UPDATE SET
+        last_sync_at = excluded.last_sync_at,
+        last_address_count = COALESCE(excluded.last_address_count, source_sync_state.last_address_count),
+        last_content_hash = COALESCE(excluded.last_content_hash, source_sync_state.last_content_hash)
+    `);
   }
 
   async getCrawlStats() {

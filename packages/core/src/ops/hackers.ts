@@ -42,12 +42,15 @@ export async function addHacker(
     label: opts.label ?? undefined,
   });
 
-  const alreadyQueued = await store.hasPendingJob("backfill_hacker_address", address);
-  if (!alreadyQueued) {
-    await store.enqueueJob("backfill_hacker_address", { address }, JOB_PRIORITY.BACKFILL_HACKER);
-  }
+  const jobId = await store.enqueueJobIfAbsent(
+    "backfill_hacker_address",
+    { address },
+    JOB_PRIORITY.BACKFILL_HACKER,
+    undefined,
+    { address },
+  );
 
-  return { address, upserted: true, enqueuedBackfill: !alreadyQueued };
+  return { address, upserted: true, enqueuedBackfill: jobId != null };
 }
 
 export async function removeHacker(

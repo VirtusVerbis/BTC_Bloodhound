@@ -147,6 +147,20 @@ function extractQueryRows(parsed: unknown): Row[] {
   return [];
 }
 
+function extractExecuteChanges(parsed: unknown): number {
+  if (!parsed) return 0;
+  const items = Array.isArray(parsed) ? parsed : [parsed];
+  for (const item of items) {
+    if (item && typeof item === "object") {
+      const meta = (item as { meta?: { changes?: number } }).meta;
+      if (meta?.changes != null) return Number(meta.changes);
+      const changes = (item as { changes?: number }).changes;
+      if (changes != null) return Number(changes);
+    }
+  }
+  return 0;
+}
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -181,22 +195,18 @@ ON CONFLICT(address) DO UPDATE SET
   last_seen_at = ${ts};
 `);
 
-  const pending = client.query(`
-SELECT id FROM jobs
-WHERE type = 'backfill_hacker_address'
-  AND status IN ('pending', 'running')
-  AND payload_json LIKE ${sqlString(`%"address":"${address}"%`)}
-LIMIT 1;
-`);
-  let enqueuedBackfill = false;
-  if (pending.length === 0) {
-    const payload = sqlString(JSON.stringify({ address }));
-    client.execute(`
+  const payload = sqlString(JSON.stringify({ address }));
+  const insertResult = client.execute(`
 INSERT INTO jobs (type, payload_json, status, priority, run_after, created_at)
-VALUES ('backfill_hacker_address', ${payload}, 'pending', ${JOB_PRIORITY.BACKFILL_HACKER}, ${ts}, ${ts});
+SELECT 'backfill_hacker_address', ${payload}, 'pending', ${JOB_PRIORITY.BACKFILL_HACKER}, ${ts}, ${ts}
+WHERE NOT EXISTS (
+  SELECT 1 FROM jobs
+  WHERE type = 'backfill_hacker_address'
+    AND status IN ('pending', 'running')
+    AND json_extract(payload_json, '$.address') = ${a}
+);
 `);
-    enqueuedBackfill = true;
-  }
+  const enqueuedBackfill = extractExecuteChanges(insertResult) > 0;
 
   return { address, upserted: true, enqueuedBackfill };
 }
