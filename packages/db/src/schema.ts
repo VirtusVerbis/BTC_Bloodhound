@@ -81,6 +81,7 @@ export const schedulerState = sqliteTable("scheduler_state", {
   rateLimitMs: integer("rate_limit_ms").notNull().default(3000),
   btcUsdPrice: integer("btc_usd_price"),
   btcUsdPriceAt: text("btc_usd_price_at"),
+  tickLeaseUntil: text("tick_lease_until"),
 });
 
 export const rateLimits = sqliteTable("rate_limits", {

@@ -39,7 +39,7 @@ pnpm dev:web
 | `node apps/indexer/dist/index.js add-hacker <addr> [--label …] [--remote]` | Upsert flagged hacker (`source=ops`) + enqueue backfill |
 | `node apps/indexer/dist/index.js remove-hacker <addr> [--no-prune] [--remote]` | Soft-unflag; prune exclusive victims/downstream by default |
 | `node apps/indexer/dist/index.js clear-queue [--remote]` | Delete pending/running jobs only (queue depth → 0) |
-| `node apps/indexer/dist/index.js list-queue [--remote] [--status active\|pending\|running\|all] [--type <jobType>] [--limit N] [--summary] [--next-cron]` | Read-only queue audit (JSON by default; `--summary` prints ASCII type counts) |
+| `node apps/indexer/dist/index.js list-queue [--remote] [--status active\|pending\|running\|all] [--type <jobType>] [--limit N] [--summary] [--next-cron]` | Read-only queue audit (JSON by default; `--summary` prints ASCII type counts sorted by priority high→low) |
 | `node apps/indexer/dist/index.js prune-invalid-addresses [--remote] [--dry-run]` | Scan all address roles; remove rows that fail mainnet checksum validation |
 
 Bitcoin addresses are validated with checksum decoding (`bitcoinjs-lib`) at ingest and via the API. Scrapers use regex only as finders; invalid candidates are dropped before insert/enqueue.
@@ -71,12 +71,13 @@ Queue mode requires the indexer (`run`) to process jobs. `--wait` runs synchrono
 
 ### Indexer job scheduling
 
-Fair scheduling keeps graph ingest ahead of maintenance work while `JOBS_PER_TICK=1` (CF free-tier friendly):
+Fair scheduling keeps graph ingest ahead of maintenance work. Cloudflare cron uses in-tick pacing (`sleepOnRateLimit`) with configurable `JOBS_PER_TICK` (prod default `7`) and `TICK_BUDGET_MS` (default `50000`) so one minute can process multiple paced Esplora/Mempool calls. A D1 tick lease prevents overlapping crons from interrupting in-flight work.
 
 - **Reserved ingest slot:** each tick runs a pending `backfill_hacker_address`, `audit_hacker_backfill`, or `expand_downstream` job before polls/balance/price (continuation jobs preferred).
 - **Enqueue caps (per cron tick):** `POLL_HACKER_ENQUEUE_PER_CRON=1` (round-robin), `CRAWL_ENQUEUE_PER_CRON=3`, `DOWNSTREAM_POLL_ENQUEUE_PER_CRON=2`.
 - **Poll gating:** `poll_hacker_address` only enqueues when `backfill_complete=1`.
 - **Priority tiers:** backfill/expand > polls > sync > balance/USD price.
+- **Overlap safety:** `RUNNING_JOB_STALE_MS` (default `120000`) only reclaims stale running jobs; active tick holds `scheduler_state.tick_lease_until`.
 
 | `pnpm dev:api` | Hono API server (Node + SQLite) |
 | `pnpm dev:web` | Vite dev server |

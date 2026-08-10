@@ -2,12 +2,24 @@ import { describe, expect, it } from "vitest";
 import { openDatabase, runMigrations, Store } from "@cointrace/db";
 import { JOB_PRIORITY, loadConfig } from "../config.js";
 import {
+  defaultPriorityForJobType,
   enrichQueueJob,
   listQueue,
   summarizeJobPayload,
 } from "./queue.js";
 
 const config = loadConfig();
+
+describe("defaultPriorityForJobType", () => {
+  it("returns canonical enqueue priority per job type", () => {
+    expect(defaultPriorityForJobType("backfill_hacker_address")).toBe(JOB_PRIORITY.BACKFILL_HACKER);
+    expect(defaultPriorityForJobType("expand_downstream")).toBe(JOB_PRIORITY.CRON_EXPAND);
+    expect(defaultPriorityForJobType("poll_hacker_address")).toBe(JOB_PRIORITY.POLL_HACKER);
+    expect(defaultPriorityForJobType("refresh_live_balance")).toBe(JOB_PRIORITY.REFRESH_BALANCE);
+    expect(defaultPriorityForJobType("refresh_btc_usd_price")).toBe(JOB_PRIORITY.REFRESH_BTC_USD);
+    expect(defaultPriorityForJobType("not_a_real_job")).toBe(0);
+  });
+});
 
 describe("summarizeJobPayload", () => {
   it("surfaces backfill continuation details", () => {

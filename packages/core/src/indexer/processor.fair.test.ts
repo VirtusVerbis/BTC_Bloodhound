@@ -12,6 +12,8 @@ function baseConfig(): AppConfig {
     mempoolBase: "https://mempool.space/api",
     rateLimitMs: 3000,
     jobsPerTick: 1,
+    tickBudgetMs: 50_000,
+    runningJobStaleMs: 120_000,
     cronIntervalSec: 60,
     crawlEnqueuePerCron: 3,
     pollHackerEnqueuePerCron: 1,
@@ -147,5 +149,21 @@ describe("processJobs fair scheduling", () => {
     expect(claimNextJob).toHaveBeenCalled();
     expect(completeJob).toHaveBeenCalledWith(pollJob.id);
     expect(store.touchSyncPoll).toHaveBeenCalledWith("bc1qhack");
+  });
+
+  it("stops claiming when deadlineMs has passed", async () => {
+    const claimNextIngestJob = vi.fn().mockResolvedValue(null);
+    const claimNextJob = vi.fn();
+    const store = {
+      claimNextIngestJob,
+      claimNextJob,
+    } as unknown as Store;
+    const router = {} as unknown as ChainRouter;
+
+    const n = await processJobs(store, router, { ...baseConfig(), jobsPerTick: 5 }, { deadlineMs: Date.now() - 1 });
+
+    expect(n).toBe(0);
+    expect(claimNextIngestJob).not.toHaveBeenCalled();
+    expect(claimNextJob).not.toHaveBeenCalled();
   });
 });

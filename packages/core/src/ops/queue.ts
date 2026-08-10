@@ -21,6 +21,24 @@ const PRIORITY_NAME_BY_VALUE = Object.fromEntries(
   Object.entries(JOB_PRIORITY).map(([name, value]) => [value, name]),
 ) as Record<number, string>;
 
+const DEFAULT_PRIORITY_BY_JOB_TYPE: Record<JobType, number> = {
+  backfill_hacker_address: JOB_PRIORITY.BACKFILL_HACKER,
+  audit_hacker_backfill: JOB_PRIORITY.BACKFILL_HACKER,
+  expand_downstream: JOB_PRIORITY.CRON_EXPAND,
+  poll_hacker_address: JOB_PRIORITY.POLL_HACKER,
+  poll_downstream_address: JOB_PRIORITY.POLL_DOWNSTREAM,
+  process_tx: JOB_PRIORITY.PROCESS_TX,
+  sync_coldcardwatch: JOB_PRIORITY.SYNC_COLDCARDWATCH,
+  sync_vercel_trackers: JOB_PRIORITY.SYNC_VERCEL_TRACKERS,
+  refresh_live_balance: JOB_PRIORITY.REFRESH_BALANCE,
+  refresh_btc_usd_price: JOB_PRIORITY.REFRESH_BTC_USD,
+};
+
+export function defaultPriorityForJobType(type: string): number {
+  if (!isKnownJobType(type)) return 0;
+  return DEFAULT_PRIORITY_BY_JOB_TYPE[type];
+}
+
 export type QueueStatusFilter = "active" | "pending" | "running" | "all";
 
 export interface ListQueueOptions {

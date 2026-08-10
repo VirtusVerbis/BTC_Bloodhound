@@ -126,12 +126,14 @@ function main() {
 
   const raw = fs.readFileSync(sqlPath, "utf8");
   const statements = splitSqlStatements(raw).map((s) => s.trim()).filter(Boolean);
-  // Skip schema DDL when we already migrated; still apply INSERT/UPDATE/DELETE/CREATE IF needed.
+  // Skip schema DDL when we already migrated; still apply INSERT/UPDATE/DELETE.
+  // Wrangler D1 exports include d1_migrations (CF bookkeeping) — not part of app schema.
   const actionable = statements.filter((s) => {
     const u = s.toUpperCase();
     if (u.startsWith("CREATE TABLE")) return false;
     if (u.startsWith("CREATE INDEX")) return false;
     if (u.startsWith("CREATE UNIQUE")) return false;
+    if (/\bd1_migrations\b/i.test(s)) return false;
     return true;
   });
 

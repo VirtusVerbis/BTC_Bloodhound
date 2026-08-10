@@ -4,6 +4,7 @@ import {
   ChainRouter,
   loadConfig,
   runIndexerTick,
+  TICK_LEASE_SKEW_MS,
   type EnvMap,
 } from "@cointrace/core";
 import { createApp } from "./app.js";
@@ -21,6 +22,8 @@ export interface WorkerEnv {
   MEMPOOL_BASE?: string;
   RATE_LIMIT_MS?: string;
   JOBS_PER_TICK?: string;
+  TICK_BUDGET_MS?: string;
+  RUNNING_JOB_STALE_MS?: string;
   SEED_DATA_JSON?: string;
   LOCAL_WATCHLIST_DATA_JSON?: string;
   [key: string]: unknown;
@@ -40,7 +43,7 @@ function build(env: WorkerEnv) {
   assertProductionSecrets(config);
   const store = createD1Store(env.DB);
   const router = new ChainRouter(config.esploraBase, config.mempoolBase, store, config.rateLimitMs, {
-    sleepOnRateLimit: false,
+    sleepOnRateLimit: true,
   });
   const app = createApp(store, config);
   return { config, store, router, app };
@@ -84,8 +87,15 @@ const worker = {
 
   async scheduled(_event: unknown, env: WorkerEnv): Promise<void> {
     const { store, router, config } = build(env);
-    await store.resetRunningJobs();
-    await runIndexerTick(store, router, config, { schedule: true });
+    const leaseMs = config.tickBudgetMs + TICK_LEASE_SKEW_MS;
+    const acquired = await store.tryAcquireTickLease(leaseMs);
+    if (!acquired) return;
+    try {
+      await store.resetRunningJobs(config.runningJobStaleMs);
+      await runIndexerTick(store, router, config, { schedule: true });
+    } finally {
+      await store.clearTickLease();
+    }
   },
 };
 

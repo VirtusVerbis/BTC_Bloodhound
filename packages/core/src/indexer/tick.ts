@@ -9,8 +9,12 @@ export interface IndexerTickResult {
   jobsProcessed: number;
 }
 
+/** Extra lease time beyond tickBudgetMs so clearTickLease can run after the budget. */
+export const TICK_LEASE_SKEW_MS = 10_000;
+
 /**
- * One indexer cron tick: optional schedule enqueue + process up to jobsPerTick jobs.
+ * One indexer cron tick: optional schedule enqueue + process up to jobsPerTick jobs
+ * (or until tickBudgetMs wall deadline).
  * Used by the local infinite loop and the Cloudflare Cron Worker.
  */
 export async function runIndexerTick(
@@ -24,6 +28,7 @@ export async function runIndexerTick(
     await scheduleBtcUsdPriceRefresh(store, config);
     await scheduleDownstreamCrawl(store, config);
   }
-  const jobsProcessed = await processJobs(store, router, config);
+  const deadlineMs = Date.now() + config.tickBudgetMs;
+  const jobsProcessed = await processJobs(store, router, config, { deadlineMs });
   return { scheduled: schedule, jobsProcessed };
 }

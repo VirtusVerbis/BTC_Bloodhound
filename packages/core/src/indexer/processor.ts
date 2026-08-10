@@ -663,9 +663,15 @@ export async function processJob(
   }
 }
 
-export async function processJobs(store: Store, router: ChainRouter, config: AppConfig): Promise<number> {
+export async function processJobs(
+  store: Store,
+  router: ChainRouter,
+  config: AppConfig,
+  opts?: { deadlineMs?: number },
+): Promise<number> {
   let processed = 0;
   for (let i = 0; i < config.jobsPerTick; i++) {
+    if (opts?.deadlineMs != null && Date.now() >= opts.deadlineMs) break;
     const job =
       (await store.claimNextIngestJob({ preferContinuation: true })) ?? (await store.claimNextJob());
     if (!job) break;

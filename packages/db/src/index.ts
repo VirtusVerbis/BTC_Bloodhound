@@ -130,6 +130,9 @@ export function runMigrations(sqlite: Database.Database): void {
   if (!schedulerCols.some((c) => c.name === "maintenance_cron_counter")) {
     sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN maintenance_cron_counter INTEGER NOT NULL DEFAULT 0`);
   }
+  if (!schedulerCols.some((c) => c.name === "tick_lease_until")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN tick_lease_until TEXT`);
+  }
 
   const syncCols = sqlite.prepare("PRAGMA table_info(sync_state)").all() as Array<{ name: string }>;
   if (!syncCols.some((c) => c.name === "backfill_state_json")) {

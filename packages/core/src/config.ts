@@ -35,6 +35,10 @@ export interface AppConfig {
   mempoolBase: string;
   rateLimitMs: number;
   jobsPerTick: number;
+  /** Wall-clock budget for one indexer tick (stop claiming jobs after this). */
+  tickBudgetMs: number;
+  /** Only reclaim running jobs whose started_at is older than this (0 = all). */
+  runningJobStaleMs: number;
   cronIntervalSec: number;
   crawlEnqueuePerCron: number;
   pollHackerEnqueuePerCron: number;
@@ -125,6 +129,8 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     mempoolBase: (env.MEMPOOL_BASE ?? "https://mempool.space/api").replace(/\/$/, ""),
     rateLimitMs: Number(env.RATE_LIMIT_MS ?? 8000),
     jobsPerTick: Number(env.JOBS_PER_TICK ?? 1),
+    tickBudgetMs: Number(env.TICK_BUDGET_MS ?? 50_000),
+    runningJobStaleMs: Number(env.RUNNING_JOB_STALE_MS ?? 120_000),
     cronIntervalSec: Number(env.CRON_INTERVAL_SEC ?? 60),
     crawlEnqueuePerCron: Number(env.CRAWL_ENQUEUE_PER_CRON ?? 3),
     pollHackerEnqueuePerCron: Number(env.POLL_HACKER_ENQUEUE_PER_CRON ?? 1),

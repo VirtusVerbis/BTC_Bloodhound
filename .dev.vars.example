@@ -1,6 +1,9 @@
 # Copy to .dev.vars for `pnpm cf:dev` (gitignored)
-# RATE_LIMIT_MS is also set in wrangler.toml [vars]; override here if needed.
+# RATE_LIMIT_MS / JOBS_PER_TICK / tick budget are also in wrangler.toml [vars]; override here if needed.
 RATE_LIMIT_MS=8000
+JOBS_PER_TICK=7
+TICK_BUDGET_MS=50000
+RUNNING_JOB_STALE_MS=120000
 ENVIRONMENT=development
 CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:8787
 # CSRF tokens N/A without cookie sessions. Per-IP API rate limits off in development.

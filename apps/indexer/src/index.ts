@@ -5,6 +5,7 @@ import {
   addHacker,
   ChainRouter,
   clearQueue,
+  defaultPriorityForJobType,
   JOB_PRIORITY,
   listQueue,
   loadConfig,
@@ -20,6 +21,7 @@ import {
   runRebuildHackEdges,
   runRebuildHackEdgesWait,
   runSeedPublicHackers,
+  TICK_LEASE_SKEW_MS,
   type ListQueueResult,
   type QueueStatusFilter,
 } from "@cointrace/core";
@@ -61,15 +63,20 @@ function printQueueSummary(
   }
   console.log("");
 
-  const rows = Object.entries(summary.byType).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  const typeWidth = Math.max(4, ...rows.map(([type]) => type.length), "TOTAL".length);
-  const countWidth = Math.max(5, ...rows.map(([, count]) => String(count).length), String(summary.total).length);
-  console.log(`${"type".padEnd(typeWidth)}  ${"count".padStart(countWidth)}`);
-  console.log(`${"-".repeat(typeWidth)}  ${"-".repeat(countWidth)}`);
-  for (const [type, count] of rows) {
-    console.log(`${type.padEnd(typeWidth)}  ${String(count).padStart(countWidth)}`);
+  const rows = Object.entries(summary.byType)
+    .map(([type, count]) => ({ type, count, priority: defaultPriorityForJobType(type) }))
+    .sort((a, b) => b.priority - a.priority || a.type.localeCompare(b.type));
+  const typeWidth = Math.max(4, ...rows.map((r) => r.type.length), "TOTAL".length);
+  const priWidth = Math.max(3, ...rows.map((r) => String(r.priority).length));
+  const countWidth = Math.max(5, ...rows.map((r) => String(r.count).length), String(summary.total).length);
+  console.log(`${"type".padEnd(typeWidth)}  ${"pri".padStart(priWidth)}  ${"count".padStart(countWidth)}`);
+  console.log(`${"-".repeat(typeWidth)}  ${"-".repeat(priWidth)}  ${"-".repeat(countWidth)}`);
+  for (const row of rows) {
+    console.log(
+      `${row.type.padEnd(typeWidth)}  ${String(row.priority).padStart(priWidth)}  ${String(row.count).padStart(countWidth)}`,
+    );
   }
-  console.log(`${"TOTAL".padEnd(typeWidth)}  ${String(summary.total).padStart(countWidth)}`);
+  console.log(`${"TOTAL".padEnd(typeWidth)}  ${"".padStart(priWidth)}  ${String(summary.total).padStart(countWidth)}`);
 
   if (result.nextCron) {
     console.log("");
@@ -258,18 +265,28 @@ async function main() {
   if (cmd === "run") {
     const store = openLocalStore();
     const router = new ChainRouter(config.esploraBase, config.mempoolBase, store, config.rateLimitMs);
-    const reclaimed = await store.resetRunningJobs();
+    const reclaimed = await store.resetRunningJobs(config.runningJobStaleMs);
     if (reclaimed > 0) {
       console.log(`Reclaimed ${reclaimed} orphaned running job(s) to pending`);
     }
     console.log("Indexer running...");
     let lastCron = 0;
     while (true) {
-      const now = Date.now();
-      const due = now - lastCron >= config.cronIntervalSec * 1000;
-      const { jobsProcessed } = await runIndexerTick(store, router, config, { schedule: due });
-      if (due) lastCron = now;
-      if (jobsProcessed === 0) await new Promise((r) => setTimeout(r, 1000));
+      const leaseMs = config.tickBudgetMs + TICK_LEASE_SKEW_MS;
+      const acquired = await store.tryAcquireTickLease(leaseMs);
+      if (!acquired) {
+        await new Promise((r) => setTimeout(r, 1000));
+        continue;
+      }
+      try {
+        const now = Date.now();
+        const due = now - lastCron >= config.cronIntervalSec * 1000;
+        const { jobsProcessed } = await runIndexerTick(store, router, config, { schedule: due });
+        if (due) lastCron = now;
+        if (jobsProcessed === 0) await new Promise((r) => setTimeout(r, 1000));
+      } finally {
+        await store.clearTickLease();
+      }
     }
   }
   console.error("Unknown command:", cmd);

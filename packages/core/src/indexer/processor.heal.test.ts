@@ -12,6 +12,8 @@ function baseConfig(): AppConfig {
     mempoolBase: "https://mempool.space/api",
     rateLimitMs: 3000,
     jobsPerTick: 1,
+    tickBudgetMs: 50_000,
+    runningJobStaleMs: 120_000,
     cronIntervalSec: 60,
     crawlEnqueuePerCron: 5,
     pollHackerEnqueuePerCron: 1,

@@ -26,7 +26,9 @@ MEMPOOL_BASE = "https://mempool.space/api"
 # Set CORS_ORIGINS to your Worker URL(s), comma-separated (required for browser CORS).
 CORS_ORIGINS = "http://localhost:8787,http://127.0.0.1:8787"
 RATE_LIMIT_MS = "8000"
-JOBS_PER_TICK = "1"
+JOBS_PER_TICK = "7"
+TICK_BUDGET_MS = "50000"
+RUNNING_JOB_STALE_MS = "120000"
 MAX_GRAPH_VICTIMS = "10000"
 MAX_GRAPH_DOWNSTREAM = "10000"
 
@@ -53,7 +55,9 @@ MEMPOOL_BASE = "https://mempool.space/api"
 # Set to your Worker URL(s), e.g. https://cointrace-production.<account>.workers.dev
 CORS_ORIGINS = "https://www.bitcoinbloodhound.com,https://bitcoinbloodhound.com"
 RATE_LIMIT_MS = "8000"
-JOBS_PER_TICK = "1"
+JOBS_PER_TICK = "7"
+TICK_BUDGET_MS = "50000"
+RUNNING_JOB_STALE_MS = "120000"
 MAX_GRAPH_VICTIMS = "10000"
 MAX_GRAPH_DOWNSTREAM = "10000"
 

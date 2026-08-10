@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, gte, inArray, isNotNull, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import * as schema from "./schema.js";
 import {
@@ -798,13 +798,44 @@ export class Store {
       .run();
   }
 
-  async resetRunningJobs(): Promise<number> {
+  /**
+   * Reclaim running jobs to pending. When staleMs > 0, only jobs with null started_at
+   * or started_at older than staleMs are reset (avoids interrupting an in-flight tick).
+   * When staleMs is 0/omitted, all running jobs are reclaimed.
+   */
+  async resetRunningJobs(staleMs = 0): Promise<number> {
+    const cutoff = new Date(Date.now() - Math.max(0, staleMs)).toISOString();
+    const stale =
+      staleMs <= 0
+        ? eq(jobs.status, "running")
+        : and(eq(jobs.status, "running"), or(isNull(jobs.startedAt), lte(jobs.startedAt, cutoff)));
     const result = await this.db
       .update(jobs)
       .set({ status: "pending", startedAt: null })
-      .where(eq(jobs.status, "running"))
+      .where(stale)
       .run();
     return changesCount(result as { changes?: number; meta?: { changes?: number } });
+  }
+
+  /** Acquire exclusive tick lease if none held or lease expired. */
+  async tryAcquireTickLease(leaseMs: number): Promise<boolean> {
+    const nowIso = new Date().toISOString();
+    const untilIso = new Date(Date.now() + Math.max(1, leaseMs)).toISOString();
+    const result = await this.db.run(sql`
+      UPDATE scheduler_state
+      SET tick_lease_until = ${untilIso}
+      WHERE id = 1
+        AND (tick_lease_until IS NULL OR tick_lease_until < ${nowIso})
+    `);
+    return changesCount(result as { changes?: number; meta?: { changes?: number } }) > 0;
+  }
+
+  async clearTickLease(): Promise<void> {
+    await this.db.run(sql`
+      UPDATE scheduler_state
+      SET tick_lease_until = NULL
+      WHERE id = 1
+    `);
   }
 
   async getJob(id: number) {

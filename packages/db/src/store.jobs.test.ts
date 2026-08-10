@@ -39,6 +39,48 @@ describe("resetRunningJobs", () => {
     expect((await store.getJob(claimed!.id))?.startedAt).toBeNull();
     expect((await store.getJob(claimed!.id))?.status).toBe("pending");
   });
+
+  it("with staleMs leaves recently started running jobs alone", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.enqueueJob("process_tx", { txid: "fresh" }, 1);
+    const fresh = await store.claimNextJob();
+    expect(fresh).toBeTruthy();
+
+    const staleId = await store.enqueueJob("process_tx", { txid: "stale" }, 1);
+    const old = new Date(Date.now() - 60_000).toISOString();
+    sqlite.prepare("UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?").run(old, staleId);
+
+    expect(await store.resetRunningJobs(30_000)).toBe(1);
+    expect((await store.getJob(fresh!.id))?.status).toBe("running");
+    expect((await store.getJob(staleId))?.status).toBe("pending");
+  });
+});
+
+describe("tick lease", () => {
+  it("acquires once then rejects until cleared", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    expect(await store.tryAcquireTickLease(60_000)).toBe(true);
+    expect(await store.tryAcquireTickLease(60_000)).toBe(false);
+    await store.clearTickLease();
+    expect(await store.tryAcquireTickLease(60_000)).toBe(true);
+  });
+
+  it("allows acquire after lease expiry", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    expect(await store.tryAcquireTickLease(60_000)).toBe(true);
+    const past = new Date(Date.now() - 1000).toISOString();
+    sqlite.prepare("UPDATE scheduler_state SET tick_lease_until = ? WHERE id = 1").run(past);
+    expect(await store.tryAcquireTickLease(60_000)).toBe(true);
+  });
 });
 
 describe("job timing", () => {
