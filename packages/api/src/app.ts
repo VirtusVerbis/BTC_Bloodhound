@@ -110,7 +110,7 @@ export function createApp(store: Store, config: AppConfig) {
   app.get("/api/config", (c) =>
     c.json({
       minEdgeSats: config.minEdgeSats,
-      graphPollMs: config.environment === "production" ? 120_000 : 30_000,
+      statsPollMs: config.btcUsdPriceRefreshIntervalSec * 1000,
       maxGraphVictims: config.maxGraphVictims,
       maxGraphDownstream: config.maxGraphDownstream,
     }),

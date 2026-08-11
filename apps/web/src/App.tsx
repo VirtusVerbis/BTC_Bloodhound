@@ -42,10 +42,13 @@ interface SyncStatus extends MonitoringSyncStatus {
 
 interface AppConfig {
   minEdgeSats: number;
-  graphPollMs?: number;
+  statsPollMs?: number;
   maxGraphVictims?: number;
   maxGraphDownstream?: number;
 }
+
+const DEFAULT_STATS_POLL_MS = 3_600_000;
+const SYNC_POLL_MS = 15_000;
 
 function isTypingTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
@@ -72,7 +75,7 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [rateLimitSecondsLeft, setRateLimitSecondsLeft] = useState<number | null>(null);
   const [minEdgeSats, setMinEdgeSats] = useState(DEFAULT_MIN_EDGE_SATS);
-  const [graphPollMs, setGraphPollMs] = useState(30_000);
+  const [statsPollMs, setStatsPollMs] = useState(DEFAULT_STATS_POLL_MS);
   const [minAmountUnit, setMinAmountUnit] = useState<"sats" | "btc">("sats");
   const [maxVictimNodes, setMaxVictimNodes] = useState(DEFAULT_MAX_VICTIM_NODES);
   const [maxDownstreamNodes, setMaxDownstreamNodes] = useState(DEFAULT_MAX_DOWNSTREAM_NODES);
@@ -116,8 +119,8 @@ export default function App() {
         if (!minAmountFocusedRef.current) {
           setMinAmountDraft(String(cfg.minEdgeSats));
         }
-        if (cfg.graphPollMs != null && Number.isFinite(cfg.graphPollMs) && cfg.graphPollMs >= 1000) {
-          setGraphPollMs(Math.floor(cfg.graphPollMs));
+        if (cfg.statsPollMs != null && Number.isFinite(cfg.statsPollMs) && cfg.statsPollMs >= 1000) {
+          setStatsPollMs(Math.floor(cfg.statsPollMs));
         }
         const victimsCap =
           cfg.maxGraphVictims != null && Number.isFinite(cfg.maxGraphVictims) && cfg.maxGraphVictims >= 1
@@ -142,8 +145,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const load = () => {
-      api<Stats>("/api/stats").then(setStats).catch(console.error);
+    const loadStats = () => api<Stats>("/api/stats").then(setStats).catch(console.error);
+    loadStats();
+    const iv = setInterval(loadStats, statsPollMs);
+    return () => clearInterval(iv);
+  }, [statsPollMs]);
+
+  useEffect(() => {
+    const loadSync = () => {
       api<SyncStatus>("/api/sync/status")
         .then((status) => {
           if (status.apiThresholdExceeded && !prevApiThresholdRef.current) {
@@ -158,8 +167,8 @@ export default function App() {
         })
         .catch(console.error);
     };
-    load();
-    const iv = setInterval(load, 15000);
+    loadSync();
+    const iv = setInterval(loadSync, SYNC_POLL_MS);
     return () => clearInterval(iv);
   }, []);
 
@@ -457,7 +466,6 @@ export default function App() {
             maxVictimNodes={maxVictimNodes}
             maxDownstreamNodes={maxDownstreamNodes}
             victimSearch={activeVictimSearch}
-            graphPollMs={graphPollMs}
             onNodeClick={setDrawerAddr}
             onCollapseVictims={() => setExpandVictims(false)}
             onHackerChange={setSelected}

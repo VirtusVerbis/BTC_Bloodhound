@@ -169,6 +169,13 @@ function asBool(v: unknown): boolean {
   return v === true || v === 1 || v === "1";
 }
 
+function hasActiveBackfillJob(client: D1WranglerClient, addressSql: string): boolean {
+  const rows = client.query(
+    `SELECT 1 AS ok FROM jobs WHERE type = 'backfill_hacker_address' AND status IN ('pending', 'running') AND json_extract(payload_json, '$.address') = ${addressSql} LIMIT 1;`,
+  );
+  return rows.length > 0;
+}
+
 export async function addHackerRemote(
   client: D1WranglerClient,
   opts: { address: string; label?: string | null },
@@ -178,9 +185,12 @@ export async function addHackerRemote(
   const a = sqlString(address);
   const ts = sqlString(nowIso());
   const labelSql = opts.label != null && opts.label !== "" ? sqlString(opts.label) : "NULL";
+  const payload = sqlString(JSON.stringify({ address }));
 
-  client.execute(`
-INSERT INTO addresses (
+  const hadBackfillJob = hasActiveBackfillJob(client, a);
+
+  const statements = [
+    `INSERT INTO addresses (
   address, role, label, source, is_flagged_hacker, created_at, first_seen_at, last_seen_at,
   hop_from_hacker, expand_status, total_received_sats
 ) VALUES (
@@ -192,21 +202,27 @@ ON CONFLICT(address) DO UPDATE SET
   hop_from_hacker = 0,
   source = 'ops',
   label = COALESCE(${labelSql}, addresses.label),
-  last_seen_at = ${ts};
-`);
-
-  const payload = sqlString(JSON.stringify({ address }));
-  const insertResult = client.execute(`
-INSERT INTO jobs (type, payload_json, status, priority, run_after, created_at)
+  last_seen_at = ${ts};`,
+    `INSERT INTO jobs (type, payload_json, status, priority, run_after, created_at)
 SELECT 'backfill_hacker_address', ${payload}, 'pending', ${JOB_PRIORITY.BACKFILL_HACKER}, ${ts}, ${ts}
 WHERE NOT EXISTS (
   SELECT 1 FROM jobs
   WHERE type = 'backfill_hacker_address'
     AND status IN ('pending', 'running')
     AND json_extract(payload_json, '$.address') = ${a}
-);
-`);
-  const enqueuedBackfill = extractExecuteChanges(insertResult) > 0;
+);`,
+  ];
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cointrace-ops-"));
+  try {
+    const filePath = path.join(tmpDir, "add-hacker.sql");
+    fs.writeFileSync(filePath, statements.join("\n") + "\n", "utf8");
+    client.executeFile(filePath);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+
+  const enqueuedBackfill = !hadBackfillJob && hasActiveBackfillJob(client, a);
 
   return { address, upserted: true, enqueuedBackfill };
 }

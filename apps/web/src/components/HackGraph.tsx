@@ -151,7 +151,6 @@ export function HackGraph({
   maxVictimNodes,
   maxDownstreamNodes,
   victimSearch,
-  graphPollMs = 30_000,
   onNodeClick,
   onCollapseVictims,
   onHackerChange,
@@ -162,7 +161,6 @@ export function HackGraph({
   maxVictimNodes: number;
   maxDownstreamNodes: number;
   victimSearch: string | null;
-  graphPollMs?: number;
   onNodeClick: (address: string) => void;
   onCollapseVictims?: () => void;
   onHackerChange?: (address: string) => void;
@@ -290,7 +288,7 @@ export function HackGraph({
   );
 
   const loadGraph = useCallback(
-    async (opts?: { expandVictims?: boolean; skipCache?: boolean; revalidate?: boolean }) => {
+    async (opts?: { expandVictims?: boolean; skipCache?: boolean }) => {
       const expanded = opts?.expandVictims ?? expandVictims;
       const key = graphCacheKey({
         hacker,
@@ -322,13 +320,11 @@ export function HackGraph({
       if (!opts?.skipCache) {
         const cached = getCachedGraph<ApiGraphResponse>(key);
         if (cached && generation === loadGenerationRef.current) {
-          if (!opts?.revalidate) {
-            if (needsClear || graphDataRef.current === null) {
-              applyApiGraph(cached);
-              lastGraphKeyRef.current = key;
-            }
-            return;
+          if (needsClear || graphDataRef.current === null) {
+            applyApiGraph(cached);
+            lastGraphKeyRef.current = key;
           }
+          return;
         }
       }
 
@@ -386,14 +382,6 @@ export function HackGraph({
   useEffect(() => {
     loadGraph().catch(console.error);
   }, [loadGraph]);
-
-  useEffect(() => {
-    const iv = setInterval(
-      () => loadGraph({ revalidate: true }).catch(console.error),
-      graphPollMs,
-    );
-    return () => clearInterval(iv);
-  }, [loadGraph, graphPollMs]);
 
   const onNodeDragStop = useCallback((_: unknown, node: Node) => {
     positionsRef.current[node.id] = node.position;
