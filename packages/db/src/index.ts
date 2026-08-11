@@ -124,6 +124,9 @@ export function runMigrations(sqlite: Database.Database): void {
   if (!schedulerCols.some((c) => c.name === "btc_usd_price_at")) {
     sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN btc_usd_price_at TEXT`);
   }
+  if (!schedulerCols.some((c) => c.name === "btc_usd_refresh_attempt_at")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN btc_usd_refresh_attempt_at TEXT`);
+  }
   if (!schedulerCols.some((c) => c.name === "hacker_poll_index")) {
     sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN hacker_poll_index INTEGER NOT NULL DEFAULT 0`);
   }

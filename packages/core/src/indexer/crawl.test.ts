@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
   maintainOneHacker,
   scheduleBtcUsdPriceRefresh,
@@ -7,6 +7,11 @@ import {
 import { JOB_PRIORITY } from "../config.js";
 import type { AppConfig } from "../config.js";
 import type { Store } from "@cointrace/db";
+import { fetchMempoolBtcUsd } from "../price/mempoolPrices.js";
+
+vi.mock("../price/mempoolPrices.js", () => ({
+  fetchMempoolBtcUsd: vi.fn(),
+}));
 
 const BACKFILL_DEDUPE = {
   dedupeTypes: ["backfill_hacker_address", "audit_hacker_backfill"],
@@ -75,6 +80,9 @@ function mockStore(overrides: Partial<Store> = {}): Store {
     claimNextHackerPollIndex: vi.fn().mockResolvedValue(0),
     incrementMaintenanceCronCounter: vi.fn().mockResolvedValue(10),
     getBtcUsdPrice: vi.fn().mockResolvedValue(null),
+    getSchedulerState: vi.fn().mockResolvedValue(null),
+    setBtcUsdRefreshAttemptAt: vi.fn().mockResolvedValue(undefined),
+    setBtcUsdPrice: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   } as unknown as Store;
 }
@@ -312,33 +320,38 @@ describe("scheduleDownstreamCrawl", () => {
 });
 
 describe("scheduleBtcUsdPriceRefresh", () => {
-  it("enqueues refresh when no price is stored", async () => {
+  beforeEach(() => {
+    vi.mocked(fetchMempoolBtcUsd).mockReset();
+    vi.mocked(fetchMempoolBtcUsd).mockResolvedValue({
+      usd: 65000,
+      at: new Date().toISOString(),
+    });
+  });
+
+  it("fetches and stores when no price is stored", async () => {
     const store = mockStore({
       getBtcUsdPrice: vi.fn().mockResolvedValue(null),
     });
 
     await scheduleBtcUsdPriceRefresh(store, baseConfig());
 
-    expect(store.enqueueJobIfAbsent).toHaveBeenCalledWith(
-      "refresh_btc_usd_price",
-      {},
-      JOB_PRIORITY.REFRESH_BTC_USD,
-    );
+    expect(store.setBtcUsdRefreshAttemptAt).toHaveBeenCalledOnce();
+    expect(fetchMempoolBtcUsd).toHaveBeenCalledWith("https://mempool.space/api");
+    expect(store.setBtcUsdPrice).toHaveBeenCalledWith(65000, expect.any(String));
+    expect(store.enqueueJobIfAbsent).not.toHaveBeenCalled();
   });
 
-  it("enqueues refresh when price is stale", async () => {
+  it("fetches when price is stale and no recent attempt", async () => {
     const staleAt = new Date(Date.now() - 120_000).toISOString();
     const store = mockStore({
       getBtcUsdPrice: vi.fn().mockResolvedValue({ usd: 64000, at: staleAt }),
+      getSchedulerState: vi.fn().mockResolvedValue(null),
     });
 
     await scheduleBtcUsdPriceRefresh(store, baseConfig());
 
-    expect(store.enqueueJobIfAbsent).toHaveBeenCalledWith(
-      "refresh_btc_usd_price",
-      {},
-      JOB_PRIORITY.REFRESH_BTC_USD,
-    );
+    expect(fetchMempoolBtcUsd).toHaveBeenCalledOnce();
+    expect(store.setBtcUsdPrice).toHaveBeenCalled();
   });
 
   it("skips when price is fresh", async () => {
@@ -349,21 +362,56 @@ describe("scheduleBtcUsdPriceRefresh", () => {
 
     await scheduleBtcUsdPriceRefresh(store, baseConfig());
 
-    expect(store.enqueueJobIfAbsent).not.toHaveBeenCalled();
+    expect(fetchMempoolBtcUsd).not.toHaveBeenCalled();
+    expect(store.setBtcUsdPrice).not.toHaveBeenCalled();
+    expect(store.setBtcUsdRefreshAttemptAt).not.toHaveBeenCalled();
   });
 
-  it("still calls enqueueJobIfAbsent when refresh may already be pending", async () => {
+  it("skips fetch when attempt is within interval (hourly gate)", async () => {
+    const staleAt = new Date(Date.now() - 120_000).toISOString();
+    const recentAttempt = new Date(Date.now() - 30_000).toISOString();
     const store = mockStore({
-      getBtcUsdPrice: vi.fn().mockResolvedValue(null),
-      enqueueJobIfAbsent: vi.fn().mockResolvedValue(null),
+      getBtcUsdPrice: vi.fn().mockResolvedValue({ usd: 64000, at: staleAt }),
+      getSchedulerState: vi.fn().mockResolvedValue({ btcUsdRefreshAttemptAt: recentAttempt }),
     });
 
     await scheduleBtcUsdPriceRefresh(store, baseConfig());
 
-    expect(store.enqueueJobIfAbsent).toHaveBeenCalledWith(
-      "refresh_btc_usd_price",
-      {},
-      JOB_PRIORITY.REFRESH_BTC_USD,
-    );
+    expect(fetchMempoolBtcUsd).not.toHaveBeenCalled();
+    expect(store.setBtcUsdPrice).not.toHaveBeenCalled();
+    expect(store.setBtcUsdRefreshAttemptAt).not.toHaveBeenCalled();
+  });
+
+  it("keeps last price when fetch throws", async () => {
+    vi.mocked(fetchMempoolBtcUsd).mockRejectedValue(new Error("network error"));
+    const store = mockStore({
+      getBtcUsdPrice: vi.fn().mockResolvedValue(null),
+    });
+
+    await scheduleBtcUsdPriceRefresh(store, baseConfig());
+
+    expect(store.setBtcUsdRefreshAttemptAt).toHaveBeenCalledOnce();
+    expect(store.setBtcUsdPrice).not.toHaveBeenCalled();
+  });
+
+  it("does not retry fetch within interval after failure", async () => {
+    vi.mocked(fetchMempoolBtcUsd).mockRejectedValue(new Error("network error"));
+    const staleAt = new Date(Date.now() - 120_000).toISOString();
+    let attemptAt: string | null = null;
+    const store = mockStore({
+      getBtcUsdPrice: vi.fn().mockResolvedValue({ usd: 64000, at: staleAt }),
+      getSchedulerState: vi.fn().mockImplementation(async () =>
+        attemptAt ? { btcUsdRefreshAttemptAt: attemptAt } : null,
+      ),
+      setBtcUsdRefreshAttemptAt: vi.fn().mockImplementation(async (at: string) => {
+        attemptAt = at;
+      }),
+    });
+
+    await scheduleBtcUsdPriceRefresh(store, baseConfig());
+    await scheduleBtcUsdPriceRefresh(store, baseConfig());
+
+    expect(fetchMempoolBtcUsd).toHaveBeenCalledOnce();
+    expect(store.setBtcUsdPrice).not.toHaveBeenCalled();
   });
 });

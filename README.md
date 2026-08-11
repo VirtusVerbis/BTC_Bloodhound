@@ -145,7 +145,7 @@ pnpm db:pull-d1:remote
 - Public read APIs power the SPA; downstream crawl is indexer/cron-only (no public expand HTTP). Hacker add/remove is CLI-only (no admin HTTP).
 - **CSRF tokens are N/A** without cookie sessions; CORS allowlist + rate limits are the controls.
 - App-level per-IP rate limits (GET, graph) apply **only when `ENVIRONMENT=production`**. Local Node and `pnpm cf:dev` skip them. See `GET_*`, `GRAPH_*` env knobs.
-- Graph loads on demand (hacker change, filters, victim search, Reset layout). The client caches recent `/api/graph` responses by query key (instant revisit via dropdown/Page Down); concurrent misses for the same key share one in-flight request. Header stats poll every **60 min** (`statsPollMs` from `/api/config`, tied to `BTC_USD_PRICE_REFRESH_INTERVAL_SEC`); sync status polls every **15s**.
+- Graph loads on demand (hacker change, filters, victim search, Reset layout). The client caches recent `/api/graph` responses by query key (instant revisit via dropdown/Page Down); concurrent misses for the same key share one in-flight request. Header stats poll every **15 min** (`statsPollMs` from `/api/config`, tied to `BTC_USD_PRICE_REFRESH_INTERVAL_SEC`); sync status polls every **15s**. BTC/USD spot is refreshed inline on cron (one mempool fetch per interval while stale; failures keep last stored price).
 - Production requires explicit `CORS_ORIGINS` (`assertProductionSecrets`).
 - Before deploy: `pnpm audit` (or `npx pnpm@9.15.0 audit`).
 - SQL: Store uses parameterized Drizzle queries; addresses are validated at the API/CLI boundary; remote ops SQL is generated from validated inputs (never hand-typed by the operator).

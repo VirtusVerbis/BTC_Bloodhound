@@ -1,6 +1,7 @@
 import type { Store } from "@cointrace/db";
 import type { AppConfig } from "../config.js";
 import { JOB_PRIORITY } from "../config.js";
+import { fetchMempoolBtcUsd } from "../price/mempoolPrices.js";
 import { buildBackfillJobPayload } from "./processor.js";
 import { isRebuildActive } from "./rebuildMode.js";
 
@@ -76,10 +77,28 @@ export async function maintainOneHacker(
 
 export async function scheduleBtcUsdPriceRefresh(store: Store, config: AppConfig): Promise<void> {
   const ts = Date.now();
+  const intervalMs = config.btcUsdPriceRefreshIntervalSec * 1000;
   const price = await store.getBtcUsdPrice();
-  const lastAt = price?.at ? new Date(price.at).getTime() : 0;
-  if (ts - lastAt < config.btcUsdPriceRefreshIntervalSec * 1000) return;
-  await store.enqueueJobIfAbsent("refresh_btc_usd_price", {}, JOB_PRIORITY.REFRESH_BTC_USD);
+  const lastSuccessAt = price?.at ? new Date(price.at).getTime() : 0;
+  if (price && ts - lastSuccessAt < intervalMs) return;
+
+  const scheduler = await store.getSchedulerState();
+  const lastAttemptAt = scheduler?.btcUsdRefreshAttemptAt
+    ? new Date(scheduler.btcUsdRefreshAttemptAt).getTime()
+    : 0;
+  if (lastAttemptAt > 0 && ts - lastAttemptAt < intervalMs) return;
+
+  await store.setBtcUsdRefreshAttemptAt(new Date(ts).toISOString());
+
+  try {
+    const { usd, at } = await fetchMempoolBtcUsd(config.mempoolBase);
+    await store.setBtcUsdPrice(usd, at);
+  } catch (err) {
+    console.warn(
+      "BTC/USD inline refresh failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
 }
 
 export async function scheduleDownstreamCrawl(store: Store, config: AppConfig): Promise<void> {

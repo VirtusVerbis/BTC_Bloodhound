@@ -930,6 +930,7 @@ export class Store {
     rateLimitMs?: number;
     btcUsdPrice?: number;
     btcUsdPriceAt?: string;
+    btcUsdRefreshAttemptAt?: string;
   }) {
     await this.db
       .update(schedulerState)
@@ -940,6 +941,10 @@ export class Store {
 
   async setBtcUsdPrice(usd: number, at: string) {
     await this.updateSchedulerState({ btcUsdPrice: usd, btcUsdPriceAt: at });
+  }
+
+  async setBtcUsdRefreshAttemptAt(at: string) {
+    await this.updateSchedulerState({ btcUsdRefreshAttemptAt: at });
   }
 
   async getBtcUsdPrice(): Promise<{ usd: number; at: string } | null> {

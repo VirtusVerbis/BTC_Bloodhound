@@ -47,7 +47,7 @@ interface AppConfig {
   maxGraphDownstream?: number;
 }
 
-const DEFAULT_STATS_POLL_MS = 3_600_000;
+const DEFAULT_STATS_POLL_MS = 900_000;
 const SYNC_POLL_MS = 15_000;
 
 function isTypingTarget(target: EventTarget | null) {
