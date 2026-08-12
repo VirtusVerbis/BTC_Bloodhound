@@ -2,10 +2,26 @@ import type { ChainAddressStats, ChainProvider, ChainTxDetail, ChainTxSummary } 
 
 type TxPage = Array<{ txid: string; status?: { block_height?: number; block_time?: number }; fee?: number }>;
 
+export class RateLimitHttpError extends Error {
+  readonly retryAfterSec: number | null;
+
+  constructor(message: string, retryAfterSec: number | null) {
+    super(message);
+    this.name = "RateLimitHttpError";
+    this.retryAfterSec = retryAfterSec;
+  }
+}
+
 export function isRateLimitError(err: unknown): boolean {
+  if (err instanceof RateLimitHttpError) return true;
   if (!(err instanceof Error)) return false;
   const msg = err.message.toLowerCase();
   return msg.includes("429") || msg.includes("too many requests");
+}
+
+export function rateLimitRetryAfterSec(err: unknown): number | null {
+  if (err instanceof RateLimitHttpError) return err.retryAfterSec;
+  return null;
 }
 
 export function isTransientFetchError(err: unknown): boolean {
@@ -23,6 +39,17 @@ export function isTransientFetchError(err: unknown): boolean {
   return false;
 }
 
+function parseRetryAfterHeader(value: string | null): number | null {
+  if (!value?.trim()) return null;
+  const n = Number(value);
+  if (Number.isFinite(n) && n >= 0) return Math.ceil(n);
+  const dateMs = Date.parse(value);
+  if (Number.isFinite(dateMs)) {
+    return Math.max(0, Math.ceil((dateMs - Date.now()) / 1000));
+  }
+  return null;
+}
+
 async function fetchJsonWithRetry<T>(
   base: string,
   providerName: string,
@@ -36,21 +63,15 @@ async function fetchJsonWithRetry<T>(
         headers: { Accept: "application/json", "User-Agent": "cointrace-indexer/1.0" },
       });
       if (res.status === 429) {
-        const retryAfter = res.headers.get("Retry-After");
-        const waitMs = retryAfter
-          ? Math.max(1000, Number(retryAfter) * 1000)
-          : Math.min(30000, 1000 * 2 ** attempt);
-        if (attempt < maxRetries) {
-          await new Promise((r) => setTimeout(r, waitMs));
-          continue;
-        }
-        throw new Error(`${providerName} ${path}: 429 Too Many Requests`);
+        const retryAfterSec = parseRetryAfterHeader(res.headers.get("Retry-After"));
+        throw new RateLimitHttpError(`${providerName} ${path}: 429 Too Many Requests`, retryAfterSec);
       }
       if (!res.ok) throw new Error(`${providerName} ${path}: ${res.status}`);
       return res.json() as Promise<T>;
     } catch (err) {
       lastErr = err instanceof Error ? err : new Error(String(err));
-      if (attempt < maxRetries && isRateLimitError(lastErr)) {
+      if (isRateLimitError(lastErr)) throw lastErr;
+      if (attempt < maxRetries) {
         await new Promise((r) => setTimeout(r, Math.min(30000, 1000 * 2 ** attempt)));
         continue;
       }

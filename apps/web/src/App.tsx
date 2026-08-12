@@ -74,6 +74,7 @@ export default function App() {
   const [expandVictims, setExpandVictims] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [rateLimitSecondsLeft, setRateLimitSecondsLeft] = useState<number | null>(null);
+  const [apiThresholdSecondsLeft, setApiThresholdSecondsLeft] = useState<number | null>(null);
   const [minEdgeSats, setMinEdgeSats] = useState(DEFAULT_MIN_EDGE_SATS);
   const [statsPollMs, setStatsPollMs] = useState(DEFAULT_STATS_POLL_MS);
   const [minAmountUnit, setMinAmountUnit] = useState<"sats" | "btc">("sats");
@@ -163,6 +164,10 @@ export default function App() {
             );
           }
           prevApiThresholdRef.current = status.apiThresholdExceeded === true;
+          const thresholdLeft = status.apiThresholdSecondsLeft;
+          setApiThresholdSecondsLeft(
+            thresholdLeft != null && thresholdLeft > 0 ? Math.ceil(thresholdLeft) : null,
+          );
           setSync(status);
         })
         .catch(console.error);
@@ -196,6 +201,7 @@ export default function App() {
   }, [toast]);
 
   const rateLimitActive = rateLimitSecondsLeft != null && rateLimitSecondsLeft > 0;
+  const thresholdCountdownActive = apiThresholdSecondsLeft != null && apiThresholdSecondsLeft > 0;
   useEffect(() => {
     if (!rateLimitActive) return;
     const t = setInterval(() => {
@@ -206,6 +212,17 @@ export default function App() {
     }, 1000);
     return () => clearInterval(t);
   }, [rateLimitActive]);
+
+  useEffect(() => {
+    if (!thresholdCountdownActive) return;
+    const t = setInterval(() => {
+      setApiThresholdSecondsLeft((prev) => {
+        if (prev == null || prev <= 1) return null;
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(t);
+  }, [thresholdCountdownActive]);
 
   useEffect(() => {
     if (activeTab !== "tracker" || sortedHackers.length === 0) return;
@@ -285,6 +302,7 @@ export default function App() {
           sync={sync}
           onNavigateMonitoring={navigateToMonitoring}
           rateLimitSecondsLeft={rateLimitSecondsLeft}
+          apiThresholdSecondsLeft={apiThresholdSecondsLeft}
         />
         <div className="app-header-title-row">
           <h1>Bitcoin Bloodhound — Coldcard Hack Tracker</h1>

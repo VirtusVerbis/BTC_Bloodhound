@@ -89,7 +89,17 @@ function openLocalStore(): Store {
   mkdirSync(path.dirname(dbPath), { recursive: true });
   const { sqlite, db } = openDatabase(dbPath);
   runMigrations(sqlite);
-  return new Store(db);
+  return new Store(db, { maxQueueDepth: config.maxQueueDepth });
+}
+
+function openChainRouter(store: Store): ChainRouter {
+  return new ChainRouter(config.esploraBase, config.mempoolBase, store, config.rateLimitMs, {
+    backoff: {
+      rateLimitMs: config.rateLimitMs,
+      apiThresholdBaseSec: config.apiThresholdBaseSec,
+      apiThresholdMaxSec: config.apiThresholdMaxSec,
+    },
+  });
 }
 
 function remoteClient(): D1WranglerClient {
@@ -206,7 +216,7 @@ async function main() {
   }
   if (cmd === "re-backfill-hackers") {
     const store = openLocalStore();
-    const router = new ChainRouter(config.esploraBase, config.mempoolBase, store, config.rateLimitMs);
+    const router = openChainRouter(store);
     const wait = argv.includes("--wait");
     const fresh = argv.includes("--fresh");
     if (wait) {
@@ -224,7 +234,7 @@ async function main() {
   }
   if (cmd === "re-backfill-hacker") {
     const store = openLocalStore();
-    const router = new ChainRouter(config.esploraBase, config.mempoolBase, store, config.rateLimitMs);
+    const router = openChainRouter(store);
     const address = normalizeBitcoinAddress(positionalArgs()[0] ?? "");
     if (!address) {
       console.error("Usage: re-backfill-hacker <address> [--wait] [--fresh]");
@@ -247,7 +257,7 @@ async function main() {
   }
   if (cmd === "rebuild-hack-edges") {
     const store = openLocalStore();
-    const router = new ChainRouter(config.esploraBase, config.mempoolBase, store, config.rateLimitMs);
+    const router = openChainRouter(store);
     const wait = argv.includes("--wait");
     if (wait) {
       const reclaimed = await store.resetRunningJobs();
@@ -264,7 +274,7 @@ async function main() {
   }
   if (cmd === "run") {
     const store = openLocalStore();
-    const router = new ChainRouter(config.esploraBase, config.mempoolBase, store, config.rateLimitMs);
+    const router = openChainRouter(store);
     const reclaimed = await store.resetRunningJobs(config.runningJobStaleMs);
     if (reclaimed > 0) {
       console.log(`Reclaimed ${reclaimed} orphaned running job(s) to pending`);

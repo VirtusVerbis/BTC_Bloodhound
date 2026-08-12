@@ -32,6 +32,8 @@ function baseConfig(): AppConfig {
     coldcardHackTrackerBase: "https://coldcard-hack-tracker.vercel.app",
     monitoringStaleSec: 600,
     apiThresholdCooldownSec: 300,
+    apiThresholdBaseSec: 300,
+    apiThresholdMaxSec: 3600,
     backfillTxsPerJob: 5,
     backfillMaxTxs: 10000,
     backfillHealAuditIntervalSec: 86400,
@@ -52,6 +54,7 @@ function baseConfig(): AppConfig {
     graphRateWindowSec: 60,
     maxGraphVictims: 1000,
     maxGraphDownstream: 1000,
+    maxQueueDepth: 360,
   };
 }
 

@@ -40,6 +40,7 @@ async function processAddressTxs(
   hop: number,
 ): Promise<void> {
   for (const t of txs) {
+    if (await store.getTransaction(t.txid)) continue;
     const tx = await router.withProvider((p) => p.getTx(t.txid));
     if (!txInvolvesSpend(tx, address)) continue;
     await processTxForHackTrace(store, router, t.txid, hackers, {
@@ -663,6 +664,22 @@ export async function processJob(
   }
 }
 
+function formatJobDurationMs(ms: number | null): string {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return "—";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const totalSec = ms / 1000;
+  if (totalSec >= 10) return `${Math.round(totalSec)}s`;
+  return `${Math.round(totalSec * 10) / 10}s`;
+}
+
+function jobDurationMs(job: Job): number | null {
+  if (!job.startedAt) return null;
+  const startMs = new Date(job.startedAt).getTime();
+  if (!Number.isFinite(startMs)) return null;
+  const durationMs = Date.now() - startMs;
+  return durationMs >= 0 ? durationMs : null;
+}
+
 export async function processJobs(
   store: Store,
   router: ChainRouter,
@@ -684,13 +701,25 @@ export async function processJobs(
         await processJob(store, router, config, job);
       }
       await store.completeJob(job.id);
+      await store.maybeClearQueueSchedulingPause();
       processed++;
+      const queueDepth = await store.getQueueDepth();
+      console.log(
+        `[job] done id=${job.id} type=${job.type} duration=${formatJobDurationMs(jobDurationMs(job))} queue=${queueDepth}`,
+      );
     } catch (err) {
       if (err instanceof RateLimitNotReadyError) {
         await store.failJob(job.id, err.message, err.retryAt);
         break;
       }
       const message = err instanceof Error ? err.message : String(err);
+      if (isRateLimitError(err)) {
+        const retryAt =
+          (await store.earliestProviderRetryAt()) ??
+          new Date(Date.now() + config.apiThresholdBaseSec * 1000).toISOString();
+        await store.failJob(job.id, message, retryAt);
+        break;
+      }
       const backoff = Math.min(300, 30 * (job.attempts + 1));
       await store.failJob(job.id, message, new Date(Date.now() + backoff * 1000).toISOString());
     }

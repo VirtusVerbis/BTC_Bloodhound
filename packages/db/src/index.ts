@@ -136,6 +136,33 @@ export function runMigrations(sqlite: Database.Database): void {
   if (!schedulerCols.some((c) => c.name === "tick_lease_until")) {
     sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN tick_lease_until TEXT`);
   }
+  if (!schedulerCols.some((c) => c.name === "last_esplora_threshold_at")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN last_esplora_threshold_at TEXT`);
+  }
+  if (!schedulerCols.some((c) => c.name === "last_mempool_threshold_at")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN last_mempool_threshold_at TEXT`);
+  }
+  if (!schedulerCols.some((c) => c.name === "esplora_threshold_count")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN esplora_threshold_count INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!schedulerCols.some((c) => c.name === "mempool_threshold_count")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN mempool_threshold_count INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!schedulerCols.some((c) => c.name === "queue_scheduling_paused")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN queue_scheduling_paused INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!schedulerCols.some((c) => c.name === "esplora_strike_count")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN esplora_strike_count INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!schedulerCols.some((c) => c.name === "mempool_strike_count")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN mempool_strike_count INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!schedulerCols.some((c) => c.name === "esplora_retry_after_at")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN esplora_retry_after_at TEXT`);
+  }
+  if (!schedulerCols.some((c) => c.name === "mempool_retry_after_at")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN mempool_retry_after_at TEXT`);
+  }
 
   const syncCols = sqlite.prepare("PRAGMA table_info(sync_state)").all() as Array<{ name: string }>;
   if (!syncCols.some((c) => c.name === "backfill_state_json")) {

@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, afterEach } from "vitest";
+import { EsploraProvider } from "./esplora.js";
 import { getAddressTxsAll } from "./esplora.js";
 import type { ChainProvider, ChainTxSummary } from "./types.js";
 
@@ -76,5 +77,22 @@ describe("getAddressTxsAll", () => {
     const all = await getAddressTxsAll(provider, "addr1");
     expect(all).toEqual([]);
     expect(provider.getAddressTxsChainPage).not.toHaveBeenCalled();
+  });
+});
+
+describe("EsploraProvider 429 handling", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("does not retry on HTTP 429", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("Too Many Requests", { status: 429, statusText: "Too Many Requests" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = new EsploraProvider("https://blockstream.info/api");
+    await expect(provider.getTx("abc123")).rejects.toThrow(/429/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

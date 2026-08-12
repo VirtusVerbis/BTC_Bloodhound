@@ -3,8 +3,8 @@ import type { AppConfig } from "../config.js";
 import { JOB_PRIORITY } from "../config.js";
 import type { Job, Store } from "@cointrace/db";
 import type { ChainRouter } from "../chain/router.js";
+import { RateLimitHttpError } from "../chain/esplora.js";
 import { processJobs } from "./processor.js";
-
 function baseConfig(): AppConfig {
   return {
     databaseUrl: "file:./test.db",
@@ -32,6 +32,8 @@ function baseConfig(): AppConfig {
     coldcardHackTrackerBase: "https://coldcard-hack-tracker.vercel.app",
     monitoringStaleSec: 600,
     apiThresholdCooldownSec: 300,
+    apiThresholdBaseSec: 300,
+    apiThresholdMaxSec: 3600,
     backfillTxsPerJob: 5,
     backfillMaxTxs: 10000,
     backfillHealAuditIntervalSec: 86400,
@@ -52,6 +54,7 @@ function baseConfig(): AppConfig {
     graphRateWindowSec: 60,
     maxGraphVictims: 1000,
     maxGraphDownstream: 1000,
+    maxQueueDepth: 360,
   };
 }
 
@@ -92,6 +95,8 @@ describe("processJobs fair scheduling", () => {
       claimNextIngestJob,
       claimNextJob,
       completeJob,
+      maybeClearQueueSchedulingPause: vi.fn(),
+      getQueueDepth: vi.fn().mockResolvedValue(0),
       countIndexedTxsForHacker: vi.fn().mockResolvedValue(100),
       updateBackfillAudit: vi.fn(),
       upsertBackfillState: vi.fn(),
@@ -132,6 +137,8 @@ describe("processJobs fair scheduling", () => {
       claimNextIngestJob,
       claimNextJob,
       completeJob,
+      maybeClearQueueSchedulingPause: vi.fn(),
+      getQueueDepth: vi.fn().mockResolvedValue(0),
       getSyncState: vi.fn().mockResolvedValue(null),
       listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack" }]),
       touchSyncPoll: vi.fn(),
@@ -165,5 +172,40 @@ describe("processJobs fair scheduling", () => {
     expect(n).toBe(0);
     expect(claimNextIngestJob).not.toHaveBeenCalled();
     expect(claimNextJob).not.toHaveBeenCalled();
+  });
+
+  it("fails job with provider retryAt on HTTP 429", async () => {
+    const pollJob = makeJob({
+      id: 20,
+      type: "poll_hacker_address",
+      payloadJson: JSON.stringify({ address: "bc1qhack" }),
+      priority: JOB_PRIORITY.POLL_HACKER,
+    });
+    const providerRetryAt = new Date(Date.now() + 300_000).toISOString();
+
+    const completeJob = vi.fn();
+    const failJob = vi.fn();
+    const store = {
+      claimNextIngestJob: vi.fn().mockResolvedValue(null),
+      claimNextJob: vi.fn().mockResolvedValue(pollJob),
+      completeJob,
+      failJob,
+      maybeClearQueueSchedulingPause: vi.fn(),
+      getQueueDepth: vi.fn().mockResolvedValue(1),
+      earliestProviderRetryAt: vi.fn().mockResolvedValue(providerRetryAt),
+      getSyncState: vi.fn().mockResolvedValue(null),
+      listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack" }]),
+      touchSyncPoll: vi.fn(),
+    } as unknown as Store;
+
+    const router = {
+      withProvider: vi.fn().mockRejectedValue(new RateLimitHttpError("429 Too Many Requests", 300)),
+    } as unknown as ChainRouter;
+
+    const n = await processJobs(store, router, baseConfig());
+
+    expect(n).toBe(0);
+    expect(failJob).toHaveBeenCalledWith(pollJob.id, "429 Too Many Requests", providerRetryAt);
+    expect(completeJob).not.toHaveBeenCalled();
   });
 });

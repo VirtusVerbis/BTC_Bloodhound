@@ -140,6 +140,25 @@ body {
   white-space: nowrap;
 }
 
+.monitoring-queue-draining {
+  color: #ffb74d;
+  font-size: 0.85rem;
+  margin-top: 0.25rem;
+}
+
+.chain-api-active {
+  color: #81c784;
+}
+
+.chain-api-threshold {
+  color: #f44336;
+}
+
+.about-queue-draining {
+  color: #ffb74d;
+  margin-top: 0.5rem;
+}
+
 .monitoring-dot {
   width: 0.55rem;
   height: 0.55rem;

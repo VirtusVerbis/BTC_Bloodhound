@@ -6,6 +6,16 @@ export interface MonitoringSyncSource {
   lastAddressCount: number | null;
 }
 
+export interface ChainApiStatus {
+  id: "esplora" | "mempool";
+  label: string;
+  thresholdExceeded: boolean;
+  thresholdSecondsLeft: number;
+  lastThresholdAt: string | null;
+  thresholdCount: number;
+  strikeCount?: number;
+}
+
 export interface MonitoringSyncStatus {
   monitoringActive?: boolean;
   lastActivityAt?: string | null;
@@ -19,12 +29,26 @@ export interface MonitoringSyncStatus {
   apiThresholdExceeded?: boolean;
   lastApiThresholdAt?: string | null;
   apiThresholdCount?: number;
+  apiThresholdCooldownSec?: number;
+  apiThresholdSecondsLeft?: number;
+  chainApis?: ChainApiStatus[];
+  queueSchedulingPaused?: boolean;
+  maxQueueDepth?: number;
 }
 
 function formatLocal(iso: string | null | undefined) {
   if (!iso) return "—";
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
+}
+
+/** Format seconds as M:SS for countdown displays. */
+export function formatCountdown(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return "0:00";
+  const total = Math.ceil(seconds);
+  const minutes = Math.floor(total / 60);
+  const secs = total % 60;
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
 }
 
 /** Format job execution duration for monitoring display. */
@@ -58,6 +82,14 @@ function monitoringTooltip(sync: MonitoringSyncStatus) {
     lines.push(
       `API threshold hit: ${formatLocal(sync.lastApiThresholdAt)} (${sync.apiThresholdCount ?? 0} total)`,
     );
+    for (const api of sync.chainApis ?? []) {
+      if (api.thresholdExceeded) {
+        lines.push(`${api.label}: rate limited (${formatCountdown(api.thresholdSecondsLeft)} remaining)`);
+      }
+    }
+  }
+  if (sync.queueSchedulingPaused) {
+    lines.push("Queue scheduling paused — draining backlog before new work is enqueued");
   }
   return lines.join("\n");
 }
@@ -66,17 +98,25 @@ interface MonitoringIndicatorProps {
   sync: MonitoringSyncStatus | null;
   onNavigateMonitoring: () => void;
   rateLimitSecondsLeft?: number | null;
+  apiThresholdSecondsLeft?: number | null;
 }
 
 export function MonitoringIndicator({
   sync,
   onNavigateMonitoring,
   rateLimitSecondsLeft = null,
+  apiThresholdSecondsLeft = null,
 }: MonitoringIndicatorProps) {
   const active = sync?.monitoringActive !== false;
   const lastActivity = sync?.lastActivityAt;
   const thresholdExceeded = sync?.apiThresholdExceeded === true;
+  const thresholdCountdown =
+    apiThresholdSecondsLeft != null && apiThresholdSecondsLeft > 0
+      ? apiThresholdSecondsLeft
+      : sync?.apiThresholdSecondsLeft ?? 0;
+  const showThresholdCountdown = thresholdExceeded && thresholdCountdown > 0;
   const showRateLimit = rateLimitSecondsLeft != null && rateLimitSecondsLeft > 0;
+  const queueDraining = sync?.queueSchedulingPaused === true;
 
   return (
     <div className="monitoring-indicator">
@@ -95,6 +135,7 @@ export function MonitoringIndicator({
             title={`Last hit: ${formatLocal(sync?.lastApiThresholdAt)} · ${sync?.apiThresholdCount ?? 0} total`}
           >
             API Thresholds Exceeded!
+            {showThresholdCountdown && ` (clears in ${formatCountdown(thresholdCountdown)})`}
           </span>
         )}
         <span
@@ -103,6 +144,11 @@ export function MonitoringIndicator({
         />
         <span className="monitoring-label">{active ? "Monitoring" : "Monitoring paused"}</span>
       </a>
+      {queueDraining && (
+        <div className="monitoring-queue-draining" role="status">
+          Queue draining — new work paused until backlog clears
+        </div>
+      )}
       <div className="monitoring-updated">
         Last updated: {lastActivity ? formatLocal(lastActivity) : "—"}
       </div>

@@ -86,8 +86,111 @@ export type AddressUpsertData = {
   liveBalanceAt?: string | null;
 };
 
+export type ChainApiProviderId = "esplora" | "mempool";
+
+export interface ChainApiStatus {
+  id: ChainApiProviderId;
+  label: string;
+  thresholdExceeded: boolean;
+  thresholdSecondsLeft: number;
+  lastThresholdAt: string | null;
+  thresholdCount: number;
+  strikeCount: number;
+}
+
+export interface StoreOptions {
+  maxQueueDepth?: number;
+}
+
+export type EnqueueJobOptions = {
+  bypassQueueCap?: boolean;
+};
+
+function retryAfterSecondsLeft(retryAfterAt: string | null | undefined): number {
+  if (!retryAfterAt) return 0;
+  const remaining = (new Date(retryAfterAt).getTime() - Date.now()) / 1000;
+  return Math.max(0, Math.ceil(remaining));
+}
+
+function providerRetryAfterAt(
+  state: { esploraRetryAfterAt?: string | null; mempoolRetryAfterAt?: string | null } | undefined,
+  provider: ChainApiProviderId,
+): string | null {
+  if (!state) return null;
+  return provider === "esplora" ? (state.esploraRetryAfterAt ?? null) : (state.mempoolRetryAfterAt ?? null);
+}
+
+function providerStrikeCount(
+  state:
+    | {
+        esploraStrikeCount?: number | null;
+        mempoolStrikeCount?: number | null;
+      }
+    | undefined,
+  provider: ChainApiProviderId,
+): number {
+  if (!state) return 0;
+  return provider === "esplora" ? (state.esploraStrikeCount ?? 0) : (state.mempoolStrikeCount ?? 0);
+}
+
+function ingestContinuationExempt(type: string, payloadJson: string): boolean {
+  if (type !== "backfill_hacker_address" && type !== "expand_downstream") return false;
+  return isIngestContinuation(payloadJson);
+}
+
 export class Store {
-  constructor(public db: Db) {}
+  private maxQueueDepth: number;
+
+  constructor(
+    public db: Db,
+    options?: StoreOptions,
+  ) {
+    this.maxQueueDepth = options?.maxQueueDepth ?? 360;
+  }
+
+  private async shouldAllowEnqueue(
+    type: string,
+    payload: Record<string, unknown>,
+    opts?: EnqueueJobOptions,
+  ): Promise<boolean> {
+    if (opts?.bypassQueueCap) return true;
+    const payloadJson = JSON.stringify(payload);
+    if (ingestContinuationExempt(type, payloadJson)) return true;
+
+    const state = await this.getSchedulerState();
+    if ((state?.queueSchedulingPaused ?? 0) !== 0) return false;
+
+    const depth = await this.getQueueDepth();
+    if (depth >= this.maxQueueDepth) {
+      await this.setQueueSchedulingPaused(true);
+      return false;
+    }
+    return true;
+  }
+
+  async setQueueSchedulingPaused(paused: boolean): Promise<void> {
+    await this.db
+      .update(schedulerState)
+      .set({ queueSchedulingPaused: paused ? 1 : 0 })
+      .where(eq(schedulerState.id, 1))
+      .run();
+  }
+
+  async isQueueSchedulingPaused(): Promise<boolean> {
+    const state = await this.getSchedulerState();
+    return (state?.queueSchedulingPaused ?? 0) !== 0;
+  }
+
+  async maybeClearQueueSchedulingPause(): Promise<void> {
+    const depth = await this.getQueueDepth();
+    if (depth === 0) {
+      await this.setQueueSchedulingPaused(false);
+    }
+  }
+
+  getMaxQueueDepth(): number {
+    return this.maxQueueDepth;
+  }
 
   async upsertAddress(data: AddressUpsertData) {
     const ts = now();
@@ -579,7 +682,14 @@ export class Store {
     return [...byHacker.values()].sort((a, b) => b.totalSats - a.totalSats);
   }
 
-  async enqueueJob(type: string, payload: Record<string, unknown>, priority: number, runAfter?: string) {
+  async enqueueJob(
+    type: string,
+    payload: Record<string, unknown>,
+    priority: number,
+    runAfter?: string,
+    opts?: EnqueueJobOptions,
+  ): Promise<number | null> {
+    if (!(await this.shouldAllowEnqueue(type, payload, opts))) return null;
     const result = await this.db
       .insert(jobs)
       .values({
@@ -603,8 +713,9 @@ export class Store {
     payload: Record<string, unknown>,
     priority: number,
     runAfter?: string,
-    opts?: { dedupeTypes?: string[]; address?: string },
+    opts?: { dedupeTypes?: string[]; address?: string; bypassQueueCap?: boolean },
   ): Promise<number | null> {
+    if (!(await this.shouldAllowEnqueue(type, payload, opts))) return null;
     const dedupeTypes = opts?.dedupeTypes ?? [type];
     const address =
       opts?.address ?? (typeof payload.address === "string" ? payload.address : undefined);
@@ -924,6 +1035,15 @@ export class Store {
     lastProviderSuccessAt?: string;
     lastApiThresholdAt?: string;
     apiThresholdCount?: number;
+    lastEsploraThresholdAt?: string;
+    lastMempoolThresholdAt?: string;
+    esploraThresholdCount?: number;
+    mempoolThresholdCount?: number;
+    esploraStrikeCount?: number;
+    mempoolStrikeCount?: number;
+    esploraRetryAfterAt?: string | null;
+    mempoolRetryAfterAt?: string | null;
+    queueSchedulingPaused?: number;
     backfillHealAuditIndex?: number;
     hackerPollIndex?: number;
     maintenanceCronCounter?: number;
@@ -953,16 +1073,76 @@ export class Store {
     return { usd: state.btcUsdPrice, at: state.btcUsdPriceAt };
   }
 
-  async recordApiThreshold() {
+  async recordApiThreshold(
+    provider: ChainApiProviderId,
+    opts: { retryAfterAt: string; strikeCount: number },
+  ): Promise<void> {
     const state = await this.getSchedulerState();
-    await this.db
-      .update(schedulerState)
-      .set({
-        lastApiThresholdAt: now(),
-        apiThresholdCount: (state?.apiThresholdCount ?? 0) + 1,
-      })
-      .where(eq(schedulerState.id, 1))
-      .run();
+    const ts = now();
+    const esploraCount = state?.esploraThresholdCount ?? 0;
+    const mempoolCount = state?.mempoolThresholdCount ?? 0;
+    const updates: Parameters<Store["updateSchedulerState"]>[0] = {
+      lastApiThresholdAt: ts,
+      apiThresholdCount: (state?.apiThresholdCount ?? 0) + 1,
+    };
+    if (provider === "esplora") {
+      updates.lastEsploraThresholdAt = ts;
+      updates.esploraThresholdCount = esploraCount + 1;
+      updates.esploraStrikeCount = opts.strikeCount;
+      updates.esploraRetryAfterAt = opts.retryAfterAt;
+    } else {
+      updates.lastMempoolThresholdAt = ts;
+      updates.mempoolThresholdCount = mempoolCount + 1;
+      updates.mempoolStrikeCount = opts.strikeCount;
+      updates.mempoolRetryAfterAt = opts.retryAfterAt;
+    }
+    await this.updateSchedulerState(updates);
+  }
+
+  async clearProviderStrike(provider: ChainApiProviderId): Promise<void> {
+    if (provider === "esplora") {
+      await this.updateSchedulerState({
+        esploraStrikeCount: 0,
+        esploraRetryAfterAt: null,
+      });
+    } else {
+      await this.updateSchedulerState({
+        mempoolStrikeCount: 0,
+        mempoolRetryAfterAt: null,
+      });
+    }
+  }
+
+  providerRetrySecondsLeft(
+    state: Awaited<ReturnType<Store["getSchedulerState"]>>,
+    provider: ChainApiProviderId,
+  ): number {
+    return retryAfterSecondsLeft(providerRetryAfterAt(state, provider));
+  }
+
+  isProviderInBackoff(
+    state: Awaited<ReturnType<Store["getSchedulerState"]>>,
+    provider: ChainApiProviderId,
+  ): boolean {
+    return this.providerRetrySecondsLeft(state, provider) > 0;
+  }
+
+  async earliestProviderRetryAt(): Promise<string | null> {
+    const state = await this.getSchedulerState();
+    const candidates = [
+      providerRetryAfterAt(state, "esplora"),
+      providerRetryAfterAt(state, "mempool"),
+    ].filter(Boolean) as string[];
+    const future = candidates.filter((iso) => new Date(iso).getTime() > Date.now());
+    if (future.length === 0) return null;
+    return future.reduce((a, b) => (a < b ? a : b));
+  }
+
+  getProviderStrikeCount(
+    state: Awaited<ReturnType<Store["getSchedulerState"]>>,
+    provider: ChainApiProviderId,
+  ): number {
+    return providerStrikeCount(state, provider);
   }
 
   async getSyncState(address: string) {
@@ -1251,9 +1431,33 @@ export class Store {
     const lastChainApiAt = scheduler?.lastProviderSuccessAt ?? null;
     const lastApiThresholdAt = scheduler?.lastApiThresholdAt ?? null;
     const apiThresholdCount = scheduler?.apiThresholdCount ?? 0;
-    const apiThresholdExceeded =
-      lastApiThresholdAt != null &&
-      Date.now() - new Date(lastApiThresholdAt).getTime() <= thresholdCooldownSec * 1000;
+
+    const esploraSecondsLeft = this.providerRetrySecondsLeft(scheduler, "esplora");
+    const mempoolSecondsLeft = this.providerRetrySecondsLeft(scheduler, "mempool");
+    const apiThresholdSecondsLeft = Math.max(esploraSecondsLeft, mempoolSecondsLeft);
+
+    const chainApis: ChainApiStatus[] = [
+      {
+        id: "esplora",
+        label: "Blockstream Esplora",
+        thresholdExceeded: esploraSecondsLeft > 0,
+        thresholdSecondsLeft: esploraSecondsLeft,
+        lastThresholdAt: scheduler?.lastEsploraThresholdAt ?? null,
+        thresholdCount: scheduler?.esploraThresholdCount ?? 0,
+        strikeCount: providerStrikeCount(scheduler, "esplora"),
+      },
+      {
+        id: "mempool",
+        label: "Mempool Space",
+        thresholdExceeded: mempoolSecondsLeft > 0,
+        thresholdSecondsLeft: mempoolSecondsLeft,
+        lastThresholdAt: scheduler?.lastMempoolThresholdAt ?? null,
+        thresholdCount: scheduler?.mempoolThresholdCount ?? 0,
+        strikeCount: providerStrikeCount(scheduler, "mempool"),
+      },
+    ];
+
+    const apiThresholdExceeded = apiThresholdSecondsLeft > 0;
 
     const sources = await this.db.select().from(sourceSyncState).all();
     const externalSources = sources.map((s) => ({
@@ -1311,6 +1515,11 @@ export class Store {
       apiThresholdExceeded,
       lastApiThresholdAt,
       apiThresholdCount,
+      apiThresholdCooldownSec: thresholdCooldownSec,
+      apiThresholdSecondsLeft,
+      chainApis,
+      queueSchedulingPaused: (scheduler?.queueSchedulingPaused ?? 0) !== 0,
+      maxQueueDepth: this.maxQueueDepth,
       externalSources,
     };
   }

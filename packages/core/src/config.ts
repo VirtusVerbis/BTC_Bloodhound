@@ -57,6 +57,8 @@ export interface AppConfig {
   coldcardHackTrackerBase: string;
   monitoringStaleSec: number;
   apiThresholdCooldownSec: number;
+  apiThresholdBaseSec: number;
+  apiThresholdMaxSec: number;
   backfillTxsPerJob: number;
   backfillMaxTxs: number;
   backfillHealAuditIntervalSec: number;
@@ -81,6 +83,8 @@ export interface AppConfig {
   graphRateWindowSec: number;
   maxGraphVictims: number;
   maxGraphDownstream: number;
+  /** Pause cron/discovery enqueue when pending queue reaches this depth; resume when depth hits 0. */
+  maxQueueDepth: number;
 }
 
 let envFileLoaded = false;
@@ -154,6 +158,10 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     ).replace(/\/$/, ""),
     monitoringStaleSec: Number(env.MONITORING_STALE_SEC ?? 600),
     apiThresholdCooldownSec: Number(env.API_THRESHOLD_COOLDOWN_SEC ?? 300),
+    apiThresholdBaseSec: Number(
+      env.API_THRESHOLD_BASE_SEC ?? env.API_THRESHOLD_COOLDOWN_SEC ?? 300,
+    ),
+    apiThresholdMaxSec: Number(env.API_THRESHOLD_MAX_SEC ?? 3600),
     backfillTxsPerJob: Number(env.BACKFILL_TXS_PER_JOB ?? 5),
     backfillMaxTxs: Number(env.BACKFILL_MAX_TXS ?? 10000),
     backfillHealAuditIntervalSec: Number(env.BACKFILL_HEAL_AUDIT_INTERVAL_SEC ?? 86400),
@@ -174,6 +182,7 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     graphRateWindowSec: Number(env.GRAPH_RATE_WINDOW_SEC ?? 60),
     maxGraphVictims: Number(env.MAX_GRAPH_VICTIMS ?? 10000),
     maxGraphDownstream: Number(env.MAX_GRAPH_DOWNSTREAM ?? 10000),
+    maxQueueDepth: Number(env.MAX_QUEUE_DEPTH ?? 360),
   };
 }
 

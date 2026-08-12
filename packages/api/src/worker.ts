@@ -41,9 +41,14 @@ function envMap(env: WorkerEnv): EnvMap {
 function build(env: WorkerEnv) {
   const config = loadConfig(envMap(env));
   assertProductionSecrets(config);
-  const store = createD1Store(env.DB);
+  const store = createD1Store(env.DB, { maxQueueDepth: config.maxQueueDepth });
   const router = new ChainRouter(config.esploraBase, config.mempoolBase, store, config.rateLimitMs, {
     sleepOnRateLimit: false,
+    backoff: {
+      rateLimitMs: config.rateLimitMs,
+      apiThresholdBaseSec: config.apiThresholdBaseSec,
+      apiThresholdMaxSec: config.apiThresholdMaxSec,
+    },
   });
   const app = createApp(store, config);
   return { config, store, router, app };

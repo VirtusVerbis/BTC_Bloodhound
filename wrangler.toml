@@ -67,6 +67,8 @@ BTC_USD_PRICE_REFRESH_INTERVAL_SEC = "900"
 DOWNSTREAM_POLL_INTERVAL_SEC = "1200"
 MAX_GRAPH_VICTIMS = "10000"
 MAX_GRAPH_DOWNSTREAM = "10000"
+BACKFILL_TXS_PER_JOB = "1"
+MAX_QUEUE_DEPTH = "360"
 
 # Local wrangler dev: copy .dev.vars.example → .dev.vars
 # Ops (add/remove hacker, clear-queue) use indexer CLI with --remote against D1 — no admin HTTP API.

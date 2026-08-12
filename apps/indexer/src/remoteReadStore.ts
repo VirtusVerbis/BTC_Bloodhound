@@ -120,6 +120,17 @@ export class RemoteReadStore {
         row.last_provider_success_at != null ? str(row.last_provider_success_at) : null,
       lastApiThresholdAt: row.last_api_threshold_at != null ? str(row.last_api_threshold_at) : null,
       apiThresholdCount: num(row.api_threshold_count),
+      lastEsploraThresholdAt:
+        row.last_esplora_threshold_at != null ? str(row.last_esplora_threshold_at) : null,
+      lastMempoolThresholdAt:
+        row.last_mempool_threshold_at != null ? str(row.last_mempool_threshold_at) : null,
+      esploraThresholdCount: num(row.esplora_threshold_count),
+      mempoolThresholdCount: num(row.mempool_threshold_count),
+      esploraStrikeCount: num(row.esplora_strike_count),
+      mempoolStrikeCount: num(row.mempool_strike_count),
+      esploraRetryAfterAt: row.esplora_retry_after_at != null ? str(row.esplora_retry_after_at) : null,
+      mempoolRetryAfterAt: row.mempool_retry_after_at != null ? str(row.mempool_retry_after_at) : null,
+      queueSchedulingPaused: num(row.queue_scheduling_paused),
       backfillHealAuditIndex: num(row.backfill_heal_audit_index),
       hackerPollIndex: num(row.hacker_poll_index),
       maintenanceCronCounter: num(row.maintenance_cron_counter),

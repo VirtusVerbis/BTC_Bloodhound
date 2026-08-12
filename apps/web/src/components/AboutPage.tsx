@@ -12,9 +12,11 @@ import {
   purposeText,
 } from "../content/aboutContent";
 import {
+  formatCountdown,
   formatJobDuration,
   formatMonitoringTime,
   formatSourceLabel,
+  type ChainApiStatus,
   type MonitoringSyncStatus,
 } from "./MonitoringIndicator";
 
@@ -128,6 +130,40 @@ export function AboutPage({ sync }: AboutPageProps) {
                   ))}
                 </ul>
               </>
+            )}
+            {sync.chainApis && sync.chainApis.length > 0 && (
+              <>
+                <p>Chain API status:</p>
+                <ul className="about-link-list about-monitoring-breakdown about-chain-api-status">
+                  {sync.chainApis.map((api: ChainApiStatus) => (
+                    <li key={api.id}>
+                      <strong>{api.label}:</strong>{" "}
+                      {api.thresholdExceeded ? (
+                        <span className="chain-api-threshold">
+                          Rate limited — retry in {formatCountdown(api.thresholdSecondsLeft)}
+                          {api.strikeCount != null && api.strikeCount > 0
+                            ? ` (strike ${api.strikeCount})`
+                            : ""}
+                        </span>
+                      ) : (
+                        <span className="chain-api-active">Active</span>
+                      )}
+                      {api.thresholdCount > 0 && (
+                        <span className="about-link-desc">
+                          {" "}
+                          ({api.thresholdCount} threshold hit{api.thresholdCount === 1 ? "" : "s"} total)
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            {sync.queueSchedulingPaused && (
+              <p className="about-queue-draining">
+                Queue scheduling is paused (cap {sync.maxQueueDepth ?? "—"}) until the pending job
+                backlog drains to zero.
+              </p>
             )}
           </div>
         )}

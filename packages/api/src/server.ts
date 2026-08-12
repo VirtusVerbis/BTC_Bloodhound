@@ -12,7 +12,7 @@ mkdirSync(path.dirname(dbPath), { recursive: true });
 const { sqlite, db } = openDatabase(dbPath);
 runMigrations(sqlite);
 
-const store = new Store(db);
+const store = new Store(db, { maxQueueDepth: config.maxQueueDepth });
 const app = createApp(store, config);
 
 const port = Number(process.env.PORT ?? 8787);

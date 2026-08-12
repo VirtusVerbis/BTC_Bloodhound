@@ -1,4 +1,5 @@
 export * from "./config.js";
+export * from "./chain/backoff.js";
 export * from "./chain/router.js";
 export * from "./chain/esplora.js";
 export * from "./chain/types.js";
