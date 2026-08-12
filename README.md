@@ -1,12 +1,36 @@
-# Cointrace — Coldcard Hack Tracker POC
+# Bitcoin Bloodhound - Coldcard Hack Visual Tracker
 
 Track public Coldcard hack consolidation addresses, victim inputs, and downstream flows.
 
-Build:
-npx pnpm@9.15.0 -r run build
+**Local build:** `pnpm install && pnpm -r run build`
 
-Deploy:
-npx wrangler deploy --env production
+**Remote deploy:** `pnpm cf:deploy` (`npx wrangler deploy --env production`)
+
+## Hosting modes
+
+Same codebase, two deployments:
+
+| Mode | Stack | When to use |
+|------|-------|-------------|
+| **Local** | Node API + SQLite + local indexer process + Vite dev server (or Docker) | Development, analysis snapshots, self-host |
+| **Remote** | Cloudflare Worker + D1 + static UI; indexer runs on Worker cron | Production ([bitcoinbloodhound.com](https://www.bitcoinbloodhound.com)) |
+
+### Local
+
+- **API:** Node + SQLite (`pnpm dev:api`)
+- **Indexer:** background CLI (`pnpm --filter @cointrace/indexer run`)
+- **Web:** Vite dev server (`pnpm dev:web`) or Docker (`docker compose`)
+- **Ops CLI:** omit `--remote` (targets local SQLite via `DATABASE_URL`)
+- **DB sync:** pull prod snapshot for analysis with `pnpm db:pull-d1:remote`
+
+### Remote
+
+- **Deploy:** `pnpm cf:deploy` → Worker + D1 + bundled web UI
+- **Indexer:** Cloudflare cron (`*/1 * * * *`) on the Worker — no separate indexer process
+- **Ops CLI:** add `--remote` for live prod changes (add/remove hacker, clear-queue, etc.)
+- **Source of truth:** production D1; use `pnpm db:pull-d1:remote` (not `db:push-d1:remote`) for normal local refresh
+
+**Security (remote):** public read APIs only — hacker add/remove is CLI-only (no admin HTTP). Production requires explicit `CORS_ORIGINS`; per-IP rate limits apply when `ENVIRONMENT=production`. Run `pnpm audit` before deploy.
 
 ## Quick start (local)
 
@@ -44,6 +68,19 @@ pnpm dev:web
 
 Bitcoin addresses are validated with checksum decoding (`bitcoinjs-lib`) at ingest and via the API. Scrapers use regex only as finders; invalid candidates are dropped before insert/enqueue.
 
+### Dev & deploy
+
+| Command | Description |
+|---------|-------------|
+| `pnpm dev:api` | Hono API server (Node + SQLite) |
+| `pnpm dev:web` | Vite dev server |
+| `pnpm cf:dev` | Cloudflare Workers + D1 + static UI (local wrangler dev) |
+| `pnpm cf:deploy` | Deploy Worker + assets to Cloudflare (`--env production`) |
+| `pnpm db:pull-d1:remote` | **Preferred sync:** prod D1 → local SQLite snapshot (resumable import) |
+| `pnpm db:pull-d1` | Local wrangler D1 → local SQLite |
+| `pnpm db:push-d1` | Bootstrap only: local SQLite → local D1 (resumable batches) |
+| `pnpm db:push-d1:remote` | **Danger:** local SQLite → prod D1 (bootstrap/DR only; `--clear` wipes prod) |
+
 ### Invalid address cleanup (prod)
 
 After building, preview then remove checksum-invalid rows (all roles — hackers, victims, downstream):
@@ -80,15 +117,6 @@ Fair scheduling keeps graph ingest ahead of maintenance work. Cloudflare cron us
 - **Overlap safety:** `RUNNING_JOB_STALE_MS` (default `120000`) only reclaims stale running jobs; active tick holds `scheduler_state.tick_lease_until`.
 - **Phase 2 (steady-state):** when backlog is stable, relax production caps toward `CRAWL_ENQUEUE_PER_CRON=2`, `HACKER_MAINTENANCE_EVERY_N_CRONS=10`, `BALANCE_REFRESH_INTERVAL_SEC=600`, `DOWNSTREAM_POLL_INTERVAL_SEC=600`.
 
-| `pnpm dev:api` | Hono API server (Node + SQLite) |
-| `pnpm dev:web` | Vite dev server |
-| `pnpm cf:dev` | Cloudflare Workers + D1 + static UI (local) |
-| `pnpm cf:deploy` | Deploy Worker + assets to Cloudflare (`--env production`) |
-| `pnpm db:pull-d1:remote` | **Preferred sync:** prod D1 → local SQLite snapshot (resumable import) |
-| `pnpm db:pull-d1` | Local wrangler D1 → local SQLite |
-| `pnpm db:push-d1` | Bootstrap only: local SQLite → local D1 (resumable batches) |
-| `pnpm db:push-d1:remote` | **Danger:** local SQLite → prod D1 (bootstrap/DR only; `--clear` wipes prod) |
-
 ## Docker (self-host)
 
 ```bash
@@ -98,64 +126,10 @@ cd docker && docker compose up --build
 
 Web: http://localhost:8080
 
-## Cloudflare
-
-Dual hosting: same codebase runs on Node+SQLite locally and Workers+D1 remotely.
-
-**After go-live, production D1 is the source of truth.** Day-to-day changes use the indexer ops CLI with `--remote`. Refresh a local analysis snapshot with `pnpm db:pull-d1:remote`. Do **not** use `db:push-d1:remote` as normal sync — `--clear` can wipe prod with a stale laptop DB.
-
-1. Create a D1 database: `npx wrangler d1 create cointrace` and set `database_id` in `wrangler.toml`
-2. Copy `.dev.vars.example` → `.dev.vars` (`RATE_LIMIT_MS=8000` is in `wrangler.toml` and the example file)
-3. Apply migrations: `pnpm db:d1:migrate` (local) / `pnpm db:d1:migrate:remote`
-4. Optional bootstrap — copy existing local data once (avoids re-crawl):
-   ```bash
-   sqlite3 data/cointrace.db "PRAGMA wal_checkpoint(FULL);"
-   pnpm db:push-d1          # local D1
-   pnpm db:push-d1:remote   # production D1 (first-time / disaster recovery only)
-   ```
-   Push is batched and resumable with live `Push N%` progress. Re-run the same command to resume from checkpoint. Prefer avoiding `--clear` on resume.
-5. Set `CORS_ORIGINS` under `[env.production.vars]` in `wrangler.toml` to your Worker URL(s). `ENVIRONMENT=production` is already pinned there (`pnpm cf:deploy` uses `--env production`).
-6. Set the same `database_id` on both top-level and `[[env.production.d1_databases]]`.
-7. Deploy: `pnpm cf:deploy` (Worker name: `cointrace-production`; `[env.production.vars]` includes `RATE_LIMIT_MS=8000`)
-8. Cloudflare dashboard (defense-in-depth): enable Bot Fight Mode and/or rate-limiting rules for the Worker hostname; optionally WAF managed rules if available on your plan
-
-### Ops CLI (no public admin HTTP)
-
-```bash
-# Against production D1 (preferred once live)
-node apps/indexer/dist/index.js add-hacker <addr> --label "…" --remote
-node apps/indexer/dist/index.js remove-hacker <addr> --remote
-node apps/indexer/dist/index.js clear-queue --remote   # before/after JOB_PRIORITY changes; then let cron re-enqueue
-node apps/indexer/dist/index.js prune-invalid-addresses --remote --dry-run
-node apps/indexer/dist/index.js prune-invalid-addresses --remote
-
-# Local SQLite (default)
-node apps/indexer/dist/index.js add-hacker <addr>
-```
-
-Pull prod for local analysis (export is all-or-nothing; SQL→SQLite import is resumable with `Import N%`):
-
-```bash
-pnpm db:pull-d1:remote
-# Interrupted import: node scripts/d1-to-sqlite.mjs --remote --skip-export
-```
-
-### Security notes (public deploy)
-
-- Public read APIs power the SPA; downstream crawl is indexer/cron-only (no public expand HTTP). Hacker add/remove is CLI-only (no admin HTTP).
-- **CSRF tokens are N/A** without cookie sessions; CORS allowlist + rate limits are the controls.
-- App-level per-IP rate limits (GET, graph) apply **only when `ENVIRONMENT=production`**. Local Node and `pnpm cf:dev` skip them. See `GET_*`, `GRAPH_*` env knobs.
-- Graph loads on demand (hacker change, filters, victim search, Reset layout). The client caches recent `/api/graph` responses by query key (instant revisit via dropdown/Page Down); concurrent misses for the same key share one in-flight request. Header stats poll every **15 min** (`statsPollMs` from `/api/config`, tied to `BTC_USD_PRICE_REFRESH_INTERVAL_SEC`); sync status polls every **15s**. BTC/USD spot is refreshed inline on cron (one mempool fetch per interval while stale; failures keep last stored price).
-- Production requires explicit `CORS_ORIGINS` (`assertProductionSecrets`).
-- Before deploy: `pnpm audit` (or `npx pnpm@9.15.0 audit`).
-- SQL: Store uses parameterized Drizzle queries; addresses are validated at the API/CLI boundary; remote ops SQL is generated from validated inputs (never hand-typed by the operator).
-
-Cron (`*/1 * * * *`) runs indexer ticks on the Worker.
-
 ## Architecture
 
 - **packages/db** — SQLite/D1 schema + Store
 - **packages/core** — Esplora/Mempool router, indexer, graph builder, ColdcardWatch sync
 - **packages/api** — Hono REST API (Node `server.ts` + Worker `worker.ts`)
 - **apps/indexer** — CLI job processor (local)
-- **apps/web** — React Flow UI (Vite; served as Worker assets on CF)
+- **apps/web** — React Flow UI (Vite locally; static assets on Worker in remote deploy)
