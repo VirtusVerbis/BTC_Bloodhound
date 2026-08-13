@@ -59,7 +59,7 @@ pnpm dev:web
 |---------|-------------|
 | `pnpm --filter @cointrace/indexer seed` | Load `config/watchlist.seed.json` |
 | `pnpm --filter @cointrace/indexer load-local` | Merge `config/watchlist.local.json` |
-| `pnpm --filter @cointrace/indexer run` | Background indexer (cron + job queue) |
+| `pnpm --filter @cointrace/indexer run` | Background indexer (cron + job queue); add `--job-details` for verbose cron/job tracing |
 | `node apps/indexer/dist/index.js add-hacker <addr> [--label …] [--remote]` | Upsert flagged hacker (`source=ops`) + enqueue backfill |
 | `node apps/indexer/dist/index.js remove-hacker <addr> [--no-prune] [--remote]` | Soft-unflag; prune exclusive victims/downstream by default |
 | `node apps/indexer/dist/index.js clear-queue [--remote]` | Delete pending/running jobs only (queue depth → 0) |
@@ -115,6 +115,7 @@ Fair scheduling keeps graph ingest ahead of maintenance work. Cloudflare cron us
 - **Poll gating:** `poll_hacker_address` only enqueues when `backfill_complete=1`.
 - **Priority tiers:** backfill/expand > polls > sync > balance/USD price.
 - **Overlap safety:** `RUNNING_JOB_STALE_MS` (default `120000`) only reclaims stale running jobs; active tick holds `scheduler_state.tick_lease_until`.
+- **Cron debug logging:** set `INDEXER_JOB_DETAILS=1` (Worker env / wrangler.toml) or run local indexer with `--job-details` to emit `[cron] tick start`, `[cron] schedule done`, `[job] start`, and `[cron] tick done` in `wrangler tail`. Off by default. `[job] done` and `[job] fail` are always logged.
 - **Phase 2 (steady-state):** when backlog is stable, relax production caps toward `CRAWL_ENQUEUE_PER_CRON=2`, `HACKER_MAINTENANCE_EVERY_N_CRONS=10`, `BALANCE_REFRESH_INTERVAL_SEC=600`, `DOWNSTREAM_POLL_INTERVAL_SEC=600`.
 
 ## Docker (self-host)

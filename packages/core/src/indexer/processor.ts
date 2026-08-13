@@ -14,6 +14,7 @@ import {
 import { applyColdcardSweepWatchSync, fetchColdcardSweepWatch } from "../sources/coldcardSweepWatch.js";
 import { fetchMempoolBtcUsd } from "../price/mempoolPrices.js";
 import { normalizeBitcoinAddress } from "../util/address.js";
+import { formatJobStartLine, logJobFail } from "./jobLog.js";
 import { processTxPriority } from "./rebuildMode.js";
 
 async function readJsonText(filePath: string, inlineJson: string | null | undefined): Promise<string> {
@@ -684,14 +685,18 @@ export async function processJobs(
   store: Store,
   router: ChainRouter,
   config: AppConfig,
-  opts?: { deadlineMs?: number },
+  opts?: { deadlineMs?: number; jobDetails?: boolean },
 ): Promise<number> {
+  const jobDetails = opts?.jobDetails ?? false;
   let processed = 0;
   for (let i = 0; i < config.jobsPerTick; i++) {
     if (opts?.deadlineMs != null && Date.now() >= opts.deadlineMs) break;
     const job =
       (await store.claimNextIngestJob({ preferContinuation: true })) ?? (await store.claimNextJob());
     if (!job) break;
+    if (jobDetails) {
+      console.log(formatJobStartLine(job));
+    }
     try {
       if (job.type === "sync_coldcardwatch") {
         await syncColdcardwatch(store, config);
@@ -708,6 +713,7 @@ export async function processJobs(
         `[job] done id=${job.id} type=${job.type} duration=${formatJobDurationMs(jobDurationMs(job))} queue=${queueDepth}`,
       );
     } catch (err) {
+      logJobFail(job, err);
       if (err instanceof RateLimitNotReadyError) {
         await store.failJob(job.id, err.message, err.retryAt);
         break;

@@ -65,6 +65,7 @@ function baseConfig(): AppConfig {
     maxGraphVictims: 1000,
     maxGraphDownstream: 1000,
     maxQueueDepth: 360,
+    indexerJobDetails: false,
   };
 }
 

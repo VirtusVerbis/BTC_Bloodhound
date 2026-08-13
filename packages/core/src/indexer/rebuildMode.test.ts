@@ -54,6 +54,7 @@ function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     maxGraphVictims: 1000,
     maxGraphDownstream: 1000,
     maxQueueDepth: 360,
+    indexerJobDetails: false,
     ...overrides,
   };
 }

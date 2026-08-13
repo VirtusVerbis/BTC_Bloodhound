@@ -5,6 +5,7 @@ export * from "./chain/esplora.js";
 export * from "./chain/types.js";
 export * from "./graph/builder.js";
 export * from "./indexer/jobClass.js";
+export * from "./indexer/jobLog.js";
 export * from "./indexer/processor.js";
 export * from "./indexer/crawl.js";
 export * from "./indexer/rebuildMode.js";

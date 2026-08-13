@@ -85,6 +85,8 @@ export interface AppConfig {
   maxGraphDownstream: number;
   /** Pause cron/discovery enqueue when pending queue reaches this depth; resume when depth hits 0. */
   maxQueueDepth: number;
+  /** Opt-in verbose cron/job console logging ([cron] tick start, [job] start, etc.). */
+  indexerJobDetails: boolean;
 }
 
 let envFileLoaded = false;
@@ -183,6 +185,7 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     maxGraphVictims: Number(env.MAX_GRAPH_VICTIMS ?? 10000),
     maxGraphDownstream: Number(env.MAX_GRAPH_DOWNSTREAM ?? 10000),
     maxQueueDepth: Number(env.MAX_QUEUE_DEPTH ?? 360),
+    indexerJobDetails: env.INDEXER_JOB_DETAILS === "1",
   };
 }
 

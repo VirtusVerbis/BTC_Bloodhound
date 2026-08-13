@@ -114,7 +114,10 @@ const worker = {
     if (!acquired) return;
     try {
       await store.resetRunningJobs(config.runningJobStaleMs);
-      await runIndexerTick(store, router, config, { schedule: true });
+      await runIndexerTick(store, router, config, {
+        schedule: true,
+        jobDetails: config.indexerJobDetails,
+      });
     } finally {
       await clearTickLeaseLogged(store);
     }

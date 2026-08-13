@@ -77,6 +77,10 @@ export const hackCoverageLinks: ExternalLink[] = [
     label: "Block Engineering — Predictable RNG fallback analysis",
     url: "https://engineering.block.xyz/blog/predictable-rng-fallback-and-32-bit-reseed-in-coldcard-firmware",
   },
+  {
+    label: "Wizardsardine — Coldcard: the technical autopsy of an entropy failure",
+    url: "https://wizardsardine.com/blog/coldcard-vuln-deep-dive/",
+  },
 ];
 
 export const dataSourceLinks: ExternalLink[] = [

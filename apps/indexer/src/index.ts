@@ -275,6 +275,7 @@ async function main() {
   if (cmd === "run") {
     const store = openLocalStore();
     const router = openChainRouter(store);
+    const jobDetails = argv.includes("--job-details") || config.indexerJobDetails;
     const reclaimed = await store.resetRunningJobs(config.runningJobStaleMs);
     if (reclaimed > 0) {
       console.log(`Reclaimed ${reclaimed} orphaned running job(s) to pending`);
@@ -291,7 +292,10 @@ async function main() {
       try {
         const now = Date.now();
         const due = now - lastCron >= config.cronIntervalSec * 1000;
-        const { jobsProcessed } = await runIndexerTick(store, router, config, { schedule: due });
+        const { jobsProcessed } = await runIndexerTick(store, router, config, {
+          schedule: due,
+          jobDetails,
+        });
         if (due) lastCron = now;
         if (jobsProcessed === 0) await new Promise((r) => setTimeout(r, 1000));
       } finally {
