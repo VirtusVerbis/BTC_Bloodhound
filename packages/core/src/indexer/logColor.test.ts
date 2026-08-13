@@ -36,7 +36,7 @@ describe("colorizeIndexerLogLine", () => {
       "[job] fail id=42 type=backfill_hacker_address attempts=3 error=boom",
       true,
     );
-    expect(out).toContain("\x1b[97mattempts=");
+    expect(out).toContain("\x1b[95mattempts=");
   });
 
   it("colors duration= and queue= on done lines", () => {
