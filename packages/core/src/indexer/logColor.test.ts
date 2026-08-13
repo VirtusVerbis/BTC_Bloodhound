@@ -3,7 +3,7 @@ import { colorizeIndexerLogLine } from "./logColor.js";
 
 describe("colorizeIndexerLogLine", () => {
   const sampleFail =
-    "[job] fail id=42 type=backfill_hacker_address address=bc1qtest continuation=true error=Rate limit not ready";
+    "[job] fail id=42 type=backfill_hacker_address address=bc1qtest continuation=true reason=pacing error=Provider pacing: next call allowed at 2026-08-13T05:51:05.846Z";
 
   it("returns input unchanged when disabled", () => {
     expect(colorizeIndexerLogLine(sampleFail, false)).toBe(sampleFail);
@@ -19,6 +19,7 @@ describe("colorizeIndexerLogLine", () => {
     expect(out).toContain("\x1b[35maddress=");
     expect(out).toContain("\x1b[34mcontinuation=");
     expect(out).toContain("\x1b[31merror=");
+    expect(out).toContain("\x1b[96mreason=");
   });
 
   it("colors [cron] prefix at line start", () => {

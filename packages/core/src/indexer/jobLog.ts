@@ -1,4 +1,5 @@
 import type { Job } from "@cointrace/db";
+import { RateLimitNotReadyError } from "../chain/router.js";
 import { summarizeJobPayload } from "../ops/queue.js";
 import { colorizeIndexerLogLine } from "./logColor.js";
 
@@ -83,9 +84,11 @@ export function logJobFail(
   const details = summarizeJobPayload(job.type, payload);
   const message = err instanceof Error ? err.message : String(err);
   const attempt = opts?.attempt ?? job.attempts + 1;
+  const reasonSuffix =
+    err instanceof RateLimitNotReadyError ? ` reason=${err.reason}` : "";
   emitLog(
     console.error,
-    `[job] fail id=${job.id} type=${job.type} attempts=${attempt}${formatDetailSuffix(details)} error=${message}`,
+    `[job] fail id=${job.id} type=${job.type} attempts=${attempt}${formatDetailSuffix(details)}${reasonSuffix} error=${message}`,
     opts?.color ?? false,
   );
 }

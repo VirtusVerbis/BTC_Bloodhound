@@ -7,6 +7,7 @@ const MAGENTA = "\x1b[35m";
 const BLUE = "\x1b[34m";
 const BRIGHT_MAGENTA = "\x1b[95m";
 const BRIGHT_BLUE = "\x1b[94m";
+const BRIGHT_CYAN = "\x1b[96m";
 
 /** Longest prefix first so `[job] start` wins over `[job]`. */
 const LINE_PREFIXES: ReadonlyArray<readonly [string, string]> = [
@@ -24,6 +25,7 @@ const KEY_LABELS: ReadonlyArray<readonly [string, string]> = [
   ["continuation=", BLUE],
   ["error=", RED],
   ["attempts=", BRIGHT_MAGENTA],
+  ["reason=", BRIGHT_CYAN],
   ["duration=", GREEN],
   ["queue=", BRIGHT_BLUE],
 ];

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Job } from "@cointrace/db";
+import { RateLimitNotReadyError } from "../chain/router.js";
 import { formatJobStartLine, logCronDetail, logJobDefer, logJobFail } from "./jobLog.js";
 
 function makeJob(overrides: Partial<Job> & Pick<Job, "type" | "payloadJson">): Job {
@@ -64,6 +65,20 @@ describe("jobLog", () => {
       expect.stringContaining("[job] fail id=42 type=poll_hacker_address attempts=3 address=bc1qhack"),
     );
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("error=429 Too Many Requests"));
+    spy.mockRestore();
+  });
+
+  it("logJobFail includes reason for RateLimitNotReadyError", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const job = makeJob({
+      type: "backfill_hacker_address",
+      payloadJson: JSON.stringify({ address: "bc1qtest" }),
+    });
+    const retryAt = "2026-08-13T05:51:05.846Z";
+    logJobFail(job, new RateLimitNotReadyError(retryAt, "pacing"), { attempt: 3 });
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringContaining("reason=pacing error=Provider pacing: next call allowed at 2026-08-13T05:51:05.846Z"),
+    );
     spy.mockRestore();
   });
 

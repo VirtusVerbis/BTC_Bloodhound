@@ -87,7 +87,7 @@ function makeJob(overrides: Partial<Job> & Pick<Job, "type">): Job {
 describe("handleJobFailure defer", () => {
   it("failJob with short retry when ingest attempt is below threshold", async () => {
     const retryAt = new Date(Date.now() + 10_000).toISOString();
-    const err = new RateLimitNotReadyError(retryAt);
+    const err = new RateLimitNotReadyError(retryAt, "pacing");
     const failJob = vi.fn();
     const deferJob = vi.fn();
     const store = { failJob, deferJob } as unknown as Store;
@@ -102,7 +102,7 @@ describe("handleJobFailure defer", () => {
 
   it("deferJob when ingest attempt reaches threshold", async () => {
     const retryAt = new Date(Date.now() + 10_000).toISOString();
-    const err = new RateLimitNotReadyError(retryAt);
+    const err = new RateLimitNotReadyError(retryAt, "pacing");
     const failJob = vi.fn();
     const deferJob = vi.fn();
     const store = { failJob, deferJob } as unknown as Store;
@@ -133,7 +133,7 @@ describe("handleJobFailure defer", () => {
 
   it("failJob for non-ingest job even above threshold", async () => {
     const retryAt = new Date(Date.now() + 10_000).toISOString();
-    const err = new RateLimitNotReadyError(retryAt);
+    const err = new RateLimitNotReadyError(retryAt, "pacing");
     const failJob = vi.fn();
     const deferJob = vi.fn();
     const store = { failJob, deferJob } as unknown as Store;

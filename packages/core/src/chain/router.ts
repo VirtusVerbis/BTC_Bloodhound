@@ -3,14 +3,25 @@ import type { ChainProvider, ChainTxSummary } from "./types.js";
 import type { Store, ChainApiProviderId } from "@cointrace/db";
 import { providerBackoffSec } from "./backoff.js";
 
+export type RateLimitNotReadyReason = "pacing" | "provider-backoff";
+
+function formatRateLimitNotReadyMessage(retryAt: string, reason: RateLimitNotReadyReason): string {
+  if (reason === "pacing") {
+    return `Provider pacing: next call allowed at ${retryAt}`;
+  }
+  return `All providers in backoff until ${retryAt}`;
+}
+
 /** Thrown when rate limit window is not ready and sleeping is disabled (Workers). */
 export class RateLimitNotReadyError extends Error {
   readonly retryAt: string;
+  readonly reason: RateLimitNotReadyReason;
 
-  constructor(retryAt: string) {
-    super(`Rate limit not ready until ${retryAt}`);
+  constructor(retryAt: string, reason: RateLimitNotReadyReason) {
+    super(formatRateLimitNotReadyMessage(retryAt, reason));
     this.name = "RateLimitNotReadyError";
     this.retryAt = retryAt;
+    this.reason = reason;
   }
 }
 
@@ -59,7 +70,10 @@ export class ChainRouter {
     const wait = Math.max(0, nextAt - Date.now());
     if (wait <= 0) return;
     if (!this.sleepOnRateLimit) {
-      throw new RateLimitNotReadyError(nextAtIso ?? new Date(Date.now() + wait).toISOString());
+      throw new RateLimitNotReadyError(
+        nextAtIso ?? new Date(Date.now() + wait).toISOString(),
+        "pacing",
+      );
     }
     await new Promise((r) => setTimeout(r, wait));
   }
@@ -103,7 +117,7 @@ export class ChainRouter {
     const provider = await this.resolveAvailableProvider(state, preferAlternate);
     if (!provider) {
       const retryAt = (await this.store.earliestProviderRetryAt()) ?? new Date(Date.now() + 60_000).toISOString();
-      throw new RateLimitNotReadyError(retryAt);
+      throw new RateLimitNotReadyError(retryAt, "provider-backoff");
     }
     const providerId = this.providerId(provider.name);
     try {

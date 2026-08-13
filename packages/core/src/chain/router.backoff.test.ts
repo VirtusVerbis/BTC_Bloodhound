@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Store } from "@cointrace/db";
-import { ChainRouter, RateLimitNotReadyError } from "./router.js";
+import { ChainRouter } from "./router.js";
 import { RateLimitHttpError } from "./esplora.js";
 
 const backoff = {
@@ -128,8 +128,34 @@ describe("ChainRouter per-provider backoff", () => {
       { backoff },
     );
 
-    await expect(router.withProvider((p) => p.getTx("abc"))).rejects.toBeInstanceOf(
-      RateLimitNotReadyError,
+    await expect(router.withProvider((p) => p.getTx("abc"))).rejects.toMatchObject({
+      name: "RateLimitNotReadyError",
+      reason: "provider-backoff",
+    });
+    await expect(router.withProvider((p) => p.getTx("abc"))).rejects.toThrow(
+      "All providers in backoff until",
+    );
+  });
+
+  it("throws RateLimitNotReadyError with pacing reason when sleepOnRateLimit is false", async () => {
+    const future = new Date(Date.now() + 8_000).toISOString();
+    const { store } = makeMockStore({ nextProviderCallAt: future });
+
+    const router = new ChainRouter(
+      "https://blockstream.info/api",
+      "https://mempool.space/api",
+      store,
+      8000,
+      { sleepOnRateLimit: false, backoff: { ...backoff, rateLimitMs: 8000 } },
+    );
+
+    await expect(router.withProvider((p) => p.getTx("abc"))).rejects.toMatchObject({
+      name: "RateLimitNotReadyError",
+      reason: "pacing",
+      retryAt: future,
+    });
+    await expect(router.withProvider((p) => p.getTx("abc"))).rejects.toThrow(
+      "Provider pacing: next call allowed at",
     );
   });
 
