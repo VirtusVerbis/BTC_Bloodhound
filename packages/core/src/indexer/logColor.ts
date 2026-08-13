@@ -5,6 +5,8 @@ const GREEN = "\x1b[32m";
 const RED = "\x1b[31m";
 const MAGENTA = "\x1b[35m";
 const BLUE = "\x1b[34m";
+const BRIGHT_WHITE = "\x1b[97m";
+const BRIGHT_BLUE = "\x1b[94m";
 
 /** Longest prefix first so `[job] start` wins over `[job]`. */
 const LINE_PREFIXES: ReadonlyArray<readonly [string, string]> = [
@@ -21,6 +23,9 @@ const KEY_LABELS: ReadonlyArray<readonly [string, string]> = [
   ["address=", MAGENTA],
   ["continuation=", BLUE],
   ["error=", RED],
+  ["attempts=", BRIGHT_WHITE],
+  ["duration=", GREEN],
+  ["queue=", BRIGHT_BLUE],
 ];
 
 function colorToken(text: string, token: string, color: string): string {

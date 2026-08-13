@@ -30,4 +30,18 @@ describe("colorizeIndexerLogLine", () => {
     const out = colorizeIndexerLogLine("[job] start id=1 type=poll_hacker_address", true);
     expect(out).toMatch(/^\x1b\[36m\[job\] start\x1b\[0m/);
   });
+
+  it("colors attempts= on fail lines", () => {
+    const out = colorizeIndexerLogLine(
+      "[job] fail id=42 type=backfill_hacker_address attempts=3 error=boom",
+      true,
+    );
+    expect(out).toContain("\x1b[97mattempts=");
+  });
+
+  it("colors duration= and queue= on done lines", () => {
+    const out = colorizeIndexerLogLine("[job] done id=1 type=refresh_live_balance duration=1.2s queue=42", true);
+    expect(out).toContain("\x1b[32mduration=");
+    expect(out).toContain("\x1b[94mqueue=");
+  });
 });
