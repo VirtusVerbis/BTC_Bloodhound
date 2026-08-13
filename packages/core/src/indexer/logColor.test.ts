@@ -45,4 +45,15 @@ describe("colorizeIndexerLogLine", () => {
     expect(out).toContain("\x1b[32mduration=");
     expect(out).toContain("\x1b[94mqueue=");
   });
+
+  it("colors progress and cursor labels on job start lines", () => {
+    const out = colorizeIndexerLogLine(
+      "[job] start id=1 type=backfill_hacker_address attempts=0 pendingTxidsCount=25 processedIndex=18 chainCursor=abc123def456 pagesExhausted=false",
+      true,
+    );
+    expect(out).toContain("\x1b[92mpendingTxidsCount=");
+    expect(out).toContain("\x1b[93mprocessedIndex=");
+    expect(out).toContain("\x1b[90mchainCursor=");
+    expect(out).toContain("\x1b[34mpagesExhausted=");
+  });
 });
