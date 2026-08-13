@@ -13,6 +13,7 @@ export interface IndexerTickResult {
 export interface IndexerTickOptions {
   schedule?: boolean;
   jobDetails?: boolean;
+  logColor?: boolean;
 }
 
 /** Extra lease time beyond tickBudgetMs so clearTickLease can run after the budget. */
@@ -31,21 +32,22 @@ export async function runIndexerTick(
 ): Promise<IndexerTickResult> {
   const schedule = opts?.schedule ?? true;
   const jobDetails = opts?.jobDetails ?? false;
+  const logColor = opts?.logColor ?? config.indexerLogColor;
   const startedAt = Date.now();
   let jobsProcessed = 0;
 
-  logCronDetail(jobDetails, "[cron] tick start");
+  logCronDetail(jobDetails, "[cron] tick start", logColor);
   try {
     if (schedule) {
       await scheduleBtcUsdPriceRefresh(store, config);
       await scheduleDownstreamCrawl(store, config);
-      logCronDetail(jobDetails, "[cron] schedule done");
+      logCronDetail(jobDetails, "[cron] schedule done", logColor);
     }
     const deadlineMs = Date.now() + config.tickBudgetMs;
-    jobsProcessed = await processJobs(store, router, config, { deadlineMs, jobDetails });
+    jobsProcessed = await processJobs(store, router, config, { deadlineMs, jobDetails, logColor });
     return { scheduled: schedule, jobsProcessed };
   } finally {
     const elapsed = Date.now() - startedAt;
-    logCronDetail(jobDetails, `[cron] tick done processed=${jobsProcessed} ms=${elapsed}`);
+    logCronDetail(jobDetails, `[cron] tick done processed=${jobsProcessed} ms=${elapsed}`, logColor);
   }
 }

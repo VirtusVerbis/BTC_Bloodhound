@@ -87,6 +87,12 @@ export interface AppConfig {
   maxQueueDepth: number;
   /** Opt-in verbose cron/job console logging ([cron] tick start, [job] start, etc.). */
   indexerJobDetails: boolean;
+  /** ANSI-colorize indexer log prefixes and key labels in console output. */
+  indexerLogColor: boolean;
+  /** Defer ingest jobs after this many consecutive RateLimitNotReadyError failures. */
+  jobDeferAfterAttempts: number;
+  /** How long deferred ingest jobs stay out of the claim queue (seconds). */
+  jobDeferSec: number;
 }
 
 let envFileLoaded = false;
@@ -186,6 +192,9 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     maxGraphDownstream: Number(env.MAX_GRAPH_DOWNSTREAM ?? 10000),
     maxQueueDepth: Number(env.MAX_QUEUE_DEPTH ?? 360),
     indexerJobDetails: env.INDEXER_JOB_DETAILS === "1",
+    indexerLogColor: env.INDEXER_LOG_COLOR === "1",
+    jobDeferAfterAttempts: Number(env.JOB_DEFER_AFTER_ATTEMPTS ?? 20),
+    jobDeferSec: Number(env.JOB_DEFER_SEC ?? 86400),
   };
 }
 

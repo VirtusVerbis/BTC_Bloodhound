@@ -55,6 +55,9 @@ function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     maxGraphDownstream: 1000,
     maxQueueDepth: 360,
     indexerJobDetails: false,
+    indexerLogColor: false,
+    jobDeferAfterAttempts: 20,
+    jobDeferSec: 86400,
     ...overrides,
   };
 }

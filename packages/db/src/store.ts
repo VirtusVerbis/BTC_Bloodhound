@@ -909,6 +909,21 @@ export class Store {
       .run();
   }
 
+  /** Push a stuck job to the back of the queue without incrementing attempts. */
+  async deferJob(id: number, error: string, runAfter: string) {
+    await this.db
+      .update(jobs)
+      .set({
+        status: "pending",
+        attempts: 0,
+        lastError: error,
+        runAfter,
+        startedAt: null,
+      })
+      .where(eq(jobs.id, id))
+      .run();
+  }
+
   /**
    * Reclaim running jobs to pending. When staleMs > 0, only jobs with null started_at
    * or started_at older than staleMs are reset (avoids interrupting an in-flight tick).

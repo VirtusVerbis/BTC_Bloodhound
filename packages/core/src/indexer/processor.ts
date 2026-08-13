@@ -14,7 +14,8 @@ import {
 import { applyColdcardSweepWatchSync, fetchColdcardSweepWatch } from "../sources/coldcardSweepWatch.js";
 import { fetchMempoolBtcUsd } from "../price/mempoolPrices.js";
 import { normalizeBitcoinAddress } from "../util/address.js";
-import { formatJobStartLine, logJobFail } from "./jobLog.js";
+import { logJobDefer, logJobDone, logJobFail, logJobStart } from "./jobLog.js";
+import { isIngestJobType } from "./jobClass.js";
 import { processTxPriority } from "./rebuildMode.js";
 
 async function readJsonText(filePath: string, inlineJson: string | null | undefined): Promise<string> {
@@ -681,13 +682,50 @@ function jobDurationMs(job: Job): number | null {
   return durationMs >= 0 ? durationMs : null;
 }
 
+/** Handle job failure: log, defer or fail, return whether to stop claiming more jobs this tick. */
+export async function handleJobFailure(
+  store: Store,
+  config: AppConfig,
+  job: Job,
+  err: unknown,
+  logColor = false,
+): Promise<boolean> {
+  const attempt = job.attempts + 1;
+  logJobFail(job, err, { attempt, color: logColor });
+
+  if (err instanceof RateLimitNotReadyError) {
+    if (isIngestJobType(job.type) && attempt >= config.jobDeferAfterAttempts) {
+      const runAfter = new Date(Date.now() + config.jobDeferSec * 1000).toISOString();
+      await store.deferJob(job.id, err.message, runAfter);
+      logJobDefer(job, { attempt, deferSec: config.jobDeferSec, runAfter, color: logColor });
+    } else {
+      await store.failJob(job.id, err.message, err.retryAt);
+    }
+    return true;
+  }
+
+  const message = err instanceof Error ? err.message : String(err);
+  if (isRateLimitError(err)) {
+    const retryAt =
+      (await store.earliestProviderRetryAt()) ??
+      new Date(Date.now() + config.apiThresholdBaseSec * 1000).toISOString();
+    await store.failJob(job.id, message, retryAt);
+    return true;
+  }
+
+  const backoff = Math.min(300, 30 * attempt);
+  await store.failJob(job.id, message, new Date(Date.now() + backoff * 1000).toISOString());
+  return false;
+}
+
 export async function processJobs(
   store: Store,
   router: ChainRouter,
   config: AppConfig,
-  opts?: { deadlineMs?: number; jobDetails?: boolean },
+  opts?: { deadlineMs?: number; jobDetails?: boolean; logColor?: boolean },
 ): Promise<number> {
   const jobDetails = opts?.jobDetails ?? false;
+  const logColor = opts?.logColor ?? false;
   let processed = 0;
   for (let i = 0; i < config.jobsPerTick; i++) {
     if (opts?.deadlineMs != null && Date.now() >= opts.deadlineMs) break;
@@ -695,7 +733,7 @@ export async function processJobs(
       (await store.claimNextIngestJob({ preferContinuation: true })) ?? (await store.claimNextJob());
     if (!job) break;
     if (jobDetails) {
-      console.log(formatJobStartLine(job));
+      logJobStart(job, { color: logColor });
     }
     try {
       if (job.type === "sync_coldcardwatch") {
@@ -709,25 +747,9 @@ export async function processJobs(
       await store.maybeClearQueueSchedulingPause();
       processed++;
       const queueDepth = await store.getQueueDepth();
-      console.log(
-        `[job] done id=${job.id} type=${job.type} duration=${formatJobDurationMs(jobDurationMs(job))} queue=${queueDepth}`,
-      );
+      logJobDone(job, formatJobDurationMs(jobDurationMs(job)), queueDepth, { color: logColor });
     } catch (err) {
-      logJobFail(job, err);
-      if (err instanceof RateLimitNotReadyError) {
-        await store.failJob(job.id, err.message, err.retryAt);
-        break;
-      }
-      const message = err instanceof Error ? err.message : String(err);
-      if (isRateLimitError(err)) {
-        const retryAt =
-          (await store.earliestProviderRetryAt()) ??
-          new Date(Date.now() + config.apiThresholdBaseSec * 1000).toISOString();
-        await store.failJob(job.id, message, retryAt);
-        break;
-      }
-      const backoff = Math.min(300, 30 * (job.attempts + 1));
-      await store.failJob(job.id, message, new Date(Date.now() + backoff * 1000).toISOString());
+      if (await handleJobFailure(store, config, job, err, logColor)) break;
     }
   }
   return processed;

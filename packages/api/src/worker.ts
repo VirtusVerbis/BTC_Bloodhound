@@ -3,6 +3,7 @@ import {
   assertProductionSecrets,
   ChainRouter,
   loadConfig,
+  logCronError,
   runIndexerTick,
   TICK_LEASE_SKEW_MS,
   type EnvMap,
@@ -54,19 +55,22 @@ function build(env: WorkerEnv) {
   return { config, store, router, app };
 }
 
-async function clearTickLeaseLogged(store: { clearTickLease(): Promise<void> }): Promise<void> {
+async function clearTickLeaseLogged(
+  store: { clearTickLease(): Promise<void> },
+  logColor: boolean,
+): Promise<void> {
   try {
     await store.clearTickLease();
   } catch (error) {
     const err = error as Error & { cause?: unknown };
-    console.error("[cron] clearTickLease failed:", err.message);
+    logCronError(`[cron] clearTickLease failed: ${err.message}`, logColor);
     if (err.cause != null) {
-      console.error("[cron] clearTickLease cause:", String(err.cause));
+      logCronError(`[cron] clearTickLease cause: ${String(err.cause)}`, logColor);
       if (err.cause instanceof Error && err.cause.stack) {
-        console.error("[cron] clearTickLease cause stack:", err.cause.stack);
+        logCronError(`[cron] clearTickLease cause stack: ${err.cause.stack}`, logColor);
       }
     } else if (err.stack) {
-      console.error("[cron] clearTickLease stack:", err.stack);
+      logCronError(`[cron] clearTickLease stack: ${err.stack}`, logColor);
     }
   }
 }
@@ -119,7 +123,7 @@ const worker = {
         jobDetails: config.indexerJobDetails,
       });
     } finally {
-      await clearTickLeaseLogged(store);
+      await clearTickLeaseLogged(store, config.indexerLogColor);
     }
   },
 };

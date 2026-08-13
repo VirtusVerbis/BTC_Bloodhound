@@ -59,7 +59,7 @@ pnpm dev:web
 |---------|-------------|
 | `pnpm --filter @cointrace/indexer seed` | Load `config/watchlist.seed.json` |
 | `pnpm --filter @cointrace/indexer load-local` | Merge `config/watchlist.local.json` |
-| `pnpm --filter @cointrace/indexer run` | Background indexer (cron + job queue); add `--job-details` for verbose cron/job tracing |
+| `pnpm --filter @cointrace/indexer run` | Background indexer (cron + job queue); add `--job-details` for verbose cron/job tracing; add `--log-color` for ANSI-colored log labels |
 | `node apps/indexer/dist/index.js add-hacker <addr> [--label …] [--remote]` | Upsert flagged hacker (`source=ops`) + enqueue backfill |
 | `node apps/indexer/dist/index.js remove-hacker <addr> [--no-prune] [--remote]` | Soft-unflag; prune exclusive victims/downstream by default |
 | `node apps/indexer/dist/index.js clear-queue [--remote]` | Delete pending/running jobs only (queue depth → 0) |
@@ -115,7 +115,9 @@ Fair scheduling keeps graph ingest ahead of maintenance work. Cloudflare cron us
 - **Poll gating:** `poll_hacker_address` only enqueues when `backfill_complete=1`.
 - **Priority tiers:** backfill/expand > polls > sync > balance/USD price.
 - **Overlap safety:** `RUNNING_JOB_STALE_MS` (default `120000`) only reclaims stale running jobs; active tick holds `scheduler_state.tick_lease_until`.
-- **Cron debug logging:** set `INDEXER_JOB_DETAILS=1` (Worker env / wrangler.toml) or run local indexer with `--job-details` to emit `[cron] tick start`, `[cron] schedule done`, `[job] start`, and `[cron] tick done` in `wrangler tail`. Off by default. `[job] done` and `[job] fail` are always logged.
+- **Cron debug logging:** set `INDEXER_JOB_DETAILS=1` (Worker env / wrangler.toml) or run local indexer with `--job-details` to emit `[cron] tick start`, `[cron] schedule done`, `[job] start`, and `[cron] tick done` in `wrangler tail`. Off by default. `[job] done`, `[job] fail`, and `[job] defer` are always logged. `[job] fail` and gated `[job] start` include `attempts`, `processedIndex`, `pendingTxidsCount`, and abbreviated `chainCursor` when present.
+- **Log colorization:** set `INDEXER_LOG_COLOR=1` (Worker env / wrangler.toml) or run local indexer with `--log-color` to ANSI-colorize log prefixes and key labels (`id=`, `type=`, `address=`, `continuation=`, `error=`) in `wrangler tail`.
+- **Rate-limit defer:** ingest jobs (`backfill_hacker_address`, `audit_hacker_backfill`, `expand_downstream`) that fail repeatedly with `Rate limit not ready` are deferred after `JOB_DEFER_AFTER_ATTEMPTS` (default `20`) failures: `run_after` is pushed out by `JOB_DEFER_SEC` (default `86400` = 24h), `attempts` resets to `0`, and the cron picks another eligible job. Below the threshold, the job is re-queued with a short `retryAt` as today.
 - **Phase 2 (steady-state):** when backlog is stable, relax production caps toward `CRAWL_ENQUEUE_PER_CRON=2`, `HACKER_MAINTENANCE_EVERY_N_CRONS=10`, `BALANCE_REFRESH_INTERVAL_SEC=600`, `DOWNSTREAM_POLL_INTERVAL_SEC=600`.
 
 ## Docker (self-host)

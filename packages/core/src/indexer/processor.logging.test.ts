@@ -56,6 +56,9 @@ function baseConfig(): AppConfig {
     maxGraphDownstream: 1000,
     maxQueueDepth: 360,
     indexerJobDetails: false,
+    indexerLogColor: false,
+    jobDeferAfterAttempts: 20,
+    jobDeferSec: 86400,
   };
 }
 
@@ -144,7 +147,7 @@ describe("processJobs logging", () => {
     await processJobs(store, router, baseConfig(), { jobDetails: true });
 
     expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining("[job] start id=7 type=refresh_live_balance address=bc1qbal"),
+      expect.stringContaining("[job] start id=7 type=refresh_live_balance attempts=0 address=bc1qbal"),
     );
   });
 
@@ -169,7 +172,7 @@ describe("processJobs logging", () => {
     await processJobs(store, router, baseConfig(), { jobDetails: false });
 
     expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("[job] fail id=9 type=refresh_live_balance address=bc1qbal error=boom"),
+      expect.stringContaining("[job] fail id=9 type=refresh_live_balance attempts=1 address=bc1qbal error=boom"),
     );
   });
 });
