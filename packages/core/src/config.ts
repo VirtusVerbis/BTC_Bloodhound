@@ -60,6 +60,8 @@ export interface AppConfig {
   apiThresholdBaseSec: number;
   apiThresholdMaxSec: number;
   backfillTxsPerJob: number;
+  /** Max chain API calls per job (0 = unlimited / legacy local behavior). */
+  maxChainCallsPerJob: number;
   backfillMaxTxs: number;
   backfillHealAuditIntervalSec: number;
   backfillHealAuditPerCron: number;
@@ -171,6 +173,7 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     ),
     apiThresholdMaxSec: Number(env.API_THRESHOLD_MAX_SEC ?? 3600),
     backfillTxsPerJob: Number(env.BACKFILL_TXS_PER_JOB ?? 5),
+    maxChainCallsPerJob: Number(env.MAX_CHAIN_CALLS_PER_JOB ?? 0),
     backfillMaxTxs: Number(env.BACKFILL_MAX_TXS ?? 10000),
     backfillHealAuditIntervalSec: Number(env.BACKFILL_HEAL_AUDIT_INTERVAL_SEC ?? 86400),
     backfillHealAuditPerCron: Number(env.BACKFILL_HEAL_AUDIT_PER_CRON ?? 1),

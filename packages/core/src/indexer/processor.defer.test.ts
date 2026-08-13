@@ -35,6 +35,7 @@ function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     apiThresholdBaseSec: 300,
     apiThresholdMaxSec: 3600,
     backfillTxsPerJob: 5,
+    maxChainCallsPerJob: 0,
     backfillMaxTxs: 10000,
     backfillHealAuditIntervalSec: 86400,
     backfillHealAuditPerCron: 1,

@@ -17,6 +17,7 @@ import { normalizeBitcoinAddress } from "../util/address.js";
 import { logJobDefer, logJobDone, logJobFail, logJobStart } from "./jobLog.js";
 import { isIngestJobType } from "./jobClass.js";
 import { processTxPriority } from "./rebuildMode.js";
+import { createChainCallBudget } from "./chainCallBudget.js";
 
 async function readJsonText(filePath: string, inlineJson: string | null | undefined): Promise<string> {
   if (inlineJson?.trim()) return inlineJson;
@@ -40,10 +41,14 @@ async function processAddressTxs(
   txs: Array<{ txid: string }>,
   hackers: Set<string>,
   hop: number,
+  maxCalls?: number,
 ): Promise<void> {
+  let calls = 0;
   for (const t of txs) {
+    if (maxCalls != null && calls >= maxCalls) break;
     if (await store.getTransaction(t.txid)) continue;
     const tx = await router.withProvider((p) => p.getTx(t.txid));
+    calls++;
     if (!txInvolvesSpend(tx, address)) continue;
     await processTxForHackTrace(store, router, t.txid, hackers, {
       tx,
@@ -264,6 +269,21 @@ function toPersistedPayload(payload: BackfillPayload): Record<string, unknown> {
   };
 }
 
+async function enqueueBackfillContinuation(
+  store: Store,
+  payload: BackfillPayload,
+  enqueueContinuation: boolean,
+): Promise<void> {
+  await store.upsertBackfillState(payload.address, toPersistedPayload(payload), false);
+  if (enqueueContinuation) {
+    await store.enqueueJob(
+      "backfill_hacker_address",
+      toPersistedPayload(payload),
+      JOB_PRIORITY.BACKFILL_HACKER,
+    );
+  }
+}
+
 async function backfillHacker(
   store: Store,
   router: ChainRouter,
@@ -284,8 +304,14 @@ async function backfillHacker(
   const hackers = await getHackerAddressSet(store);
   await store.setExpandStatus(address, "backfilling");
 
-  if (processedIndex >= pendingTxids.length && !pagesExhausted) {
+  const budget = createChainCallBudget(config.maxChainCallsPerJob);
+  const limited = config.maxChainCallsPerJob > 0;
+  const needsProcess = processedIndex < pendingTxids.length;
+  const needsFetch = processedIndex >= pendingTxids.length && !pagesExhausted;
+
+  if ((!limited || !needsProcess) && needsFetch && budget.canCall()) {
     const { txs } = await router.fetchAddressTxPage(address, chainCursor);
+    budget.consume();
     if (txs.length === 0) {
       pagesExhausted = true;
     } else {
@@ -297,15 +323,44 @@ async function backfillHacker(
       processedIndex = 0;
       chainCursor = txs[txs.length - 1]!.txid;
     }
+    if (limited && budget.exhausted()) {
+      const hasPendingAfterFetch = processedIndex < pendingTxids.length;
+      const needsMoreAfterFetch = hasPendingAfterFetch || !pagesExhausted;
+      if (needsMoreAfterFetch) {
+        await enqueueBackfillContinuation(
+          store,
+          {
+            address,
+            chainCursor,
+            pendingTxids: hasPendingAfterFetch ? pendingTxids : [],
+            processedIndex: hasPendingAfterFetch ? processedIndex : 0,
+            pagesExhausted,
+            newestTxid,
+            newestBlockHeight,
+          },
+          enqueueContinuation,
+        );
+        return;
+      }
+    }
   }
 
+  const processLimit = limited
+    ? budget.processBatchLimit(config.backfillTxsPerJob)
+    : config.backfillTxsPerJob;
   let processed = 0;
-  while (processedIndex < pendingTxids.length && processed < config.backfillTxsPerJob) {
+  while (
+    processedIndex < pendingTxids.length &&
+    processed < processLimit &&
+    budget.canCall()
+  ) {
     const txid = pendingTxids[processedIndex]!;
     processedIndex++;
     if (await store.getTransaction(txid)) continue;
     await processTxForHackTrace(store, router, txid, hackers);
+    budget.consume();
     processed++;
+    if (limited && budget.exhausted()) break;
   }
 
   const hasPending = processedIndex < pendingTxids.length;
@@ -322,14 +377,7 @@ async function backfillHacker(
   };
 
   if (needsMore) {
-    await store.upsertBackfillState(address, toPersistedPayload(currentPayload), false);
-    if (enqueueContinuation) {
-      await store.enqueueJob(
-        "backfill_hacker_address",
-        toPersistedPayload(currentPayload),
-        JOB_PRIORITY.BACKFILL_HACKER,
-      );
-    }
+    await enqueueBackfillContinuation(store, currentPayload, enqueueContinuation);
     return;
   }
 
@@ -448,36 +496,216 @@ async function auditHackerBackfill(
   }
 }
 
-async function pollHacker(store: Store, router: ChainRouter, address: string): Promise<void> {
-  const sync = await store.getSyncState(address);
-  const txs = await router.withProvider((p) => p.getAddressTxs(address, sync?.lastSeenTxid ?? undefined));
-  const hackers = await getHackerAddressSet(store);
-  for (const t of txs.reverse()) {
-    await processTxForHackTrace(store, router, t.txid, hackers);
+interface PollPayload {
+  address: string;
+  pendingTxids?: string[];
+  processedIndex?: number;
+  pollFetched?: boolean;
+  newestTxid?: string;
+  newestBlockHeight?: number | null;
+}
+
+function parsePollPayload(raw: Record<string, unknown>): PollPayload {
+  return {
+    address: raw.address as string,
+    pendingTxids: raw.pendingTxids as string[] | undefined,
+    processedIndex: raw.processedIndex as number | undefined,
+    pollFetched: raw.pollFetched as boolean | undefined,
+    newestTxid: raw.newestTxid as string | undefined,
+    newestBlockHeight: raw.newestBlockHeight as number | null | undefined,
+  };
+}
+
+function toPollJobPayload(payload: PollPayload): Record<string, unknown> {
+  return {
+    address: payload.address,
+    pendingTxids: payload.pendingTxids,
+    processedIndex: payload.processedIndex,
+    pollFetched: payload.pollFetched,
+    newestTxid: payload.newestTxid,
+    newestBlockHeight: payload.newestBlockHeight,
+  };
+}
+
+async function pollHacker(
+  store: Store,
+  router: ChainRouter,
+  config: AppConfig,
+  rawPayload: Record<string, unknown>,
+): Promise<void> {
+  const payload = parsePollPayload(rawPayload);
+  const address = payload.address;
+  let pendingTxids = payload.pendingTxids ?? [];
+  let processedIndex = payload.processedIndex ?? 0;
+  let pollFetched = payload.pollFetched ?? false;
+  let newestTxid = payload.newestTxid;
+  let newestBlockHeight = payload.newestBlockHeight ?? null;
+
+  const budget = createChainCallBudget(config.maxChainCallsPerJob);
+  const limited = config.maxChainCallsPerJob > 0;
+  const needsProcess = processedIndex < pendingTxids.length;
+
+  if (!pollFetched && !needsProcess && budget.canCall()) {
+    const sync = await store.getSyncState(address);
+    const txs = await router.withProvider((p) => p.getAddressTxs(address, sync?.lastSeenTxid ?? undefined));
+    budget.consume();
+    if (txs.length === 0) {
+      await store.touchSyncPoll(address);
+      return;
+    }
+    newestTxid = txs[0]!.txid;
+    newestBlockHeight = txs[0]!.status?.block_height ?? null;
+    pendingTxids = [...txs].reverse().map((t) => t.txid);
+    processedIndex = 0;
+    pollFetched = true;
+    if (limited && budget.exhausted()) {
+      await store.enqueueJob("poll_hacker_address", toPollJobPayload({
+        address,
+        pendingTxids,
+        processedIndex,
+        pollFetched,
+        newestTxid,
+        newestBlockHeight,
+      }), JOB_PRIORITY.POLL_HACKER);
+      return;
+    }
   }
-  if (txs.length > 0) {
+
+  const hackers = await getHackerAddressSet(store);
+  const processLimit = limited
+    ? budget.processBatchLimit(1)
+    : pendingTxids.length - processedIndex;
+  let processed = 0;
+  while (
+    processedIndex < pendingTxids.length &&
+    processed < processLimit &&
+    budget.canCall()
+  ) {
+    const txid = pendingTxids[processedIndex]!;
+    processedIndex++;
+    await processTxForHackTrace(store, router, txid, hackers);
+    budget.consume();
+    processed++;
+    if (limited && budget.exhausted()) break;
+  }
+
+  const hasPending = processedIndex < pendingTxids.length;
+  if (hasPending) {
+    await store.enqueueJob(
+      "poll_hacker_address",
+      toPollJobPayload({
+        address,
+        pendingTxids,
+        processedIndex,
+        pollFetched: true,
+        newestTxid,
+        newestBlockHeight,
+      }),
+      JOB_PRIORITY.POLL_HACKER,
+    );
+    return;
+  }
+
+  if (pollFetched && newestTxid) {
     await store.upsertSyncState(address, {
-      lastSeenTxid: txs[0]!.txid,
-      lastBlockHeight: txs[0]!.status?.block_height ?? null,
+      lastSeenTxid: newestTxid,
+      lastBlockHeight: newestBlockHeight,
     });
-  } else {
+  } else if (!pollFetched) {
     await store.touchSyncPoll(address);
   }
 }
 
-async function pollDownstream(store: Store, router: ChainRouter, address: string): Promise<void> {
+async function pollDownstream(
+  store: Store,
+  router: ChainRouter,
+  config: AppConfig,
+  rawPayload: Record<string, unknown>,
+): Promise<void> {
+  const payload = parsePollPayload(rawPayload);
+  const address = payload.address;
+  let pendingTxids = payload.pendingTxids ?? [];
+  let processedIndex = payload.processedIndex ?? 0;
+  let pollFetched = payload.pollFetched ?? false;
+  let newestTxid = payload.newestTxid;
+  let newestBlockHeight = payload.newestBlockHeight ?? null;
+
   const addr = await store.getAddress(address);
   const hop = addr?.hopFromHacker ?? 0;
-  const sync = await store.getSyncState(address);
-  const txs = await router.withProvider((p) => p.getAddressTxs(address, sync?.lastSeenTxid ?? undefined));
+  const budget = createChainCallBudget(config.maxChainCallsPerJob);
+  const limited = config.maxChainCallsPerJob > 0;
+  const needsProcess = processedIndex < pendingTxids.length;
+
+  if (!pollFetched && !needsProcess && budget.canCall()) {
+    const sync = await store.getSyncState(address);
+    const txs = await router.withProvider((p) => p.getAddressTxs(address, sync?.lastSeenTxid ?? undefined));
+    budget.consume();
+    if (txs.length === 0) {
+      await store.touchSyncPoll(address);
+      return;
+    }
+    newestTxid = txs[0]!.txid;
+    newestBlockHeight = txs[0]!.status?.block_height ?? null;
+    pendingTxids = txs.map((t) => t.txid);
+    processedIndex = 0;
+    pollFetched = true;
+    if (limited && budget.exhausted()) {
+      await store.enqueueJob("poll_downstream_address", toPollJobPayload({
+        address,
+        pendingTxids,
+        processedIndex,
+        pollFetched,
+        newestTxid,
+        newestBlockHeight,
+      }), JOB_PRIORITY.POLL_DOWNSTREAM);
+      return;
+    }
+  }
+
   const hackers = await getHackerAddressSet(store);
-  await processAddressTxs(store, router, address, txs, hackers, hop);
-  if (txs.length > 0) {
+  const processLimit = limited
+    ? budget.processBatchLimit(1)
+    : pendingTxids.length - processedIndex;
+  let processed = 0;
+  const batch: Array<{ txid: string }> = [];
+  while (
+    processedIndex < pendingTxids.length &&
+    processed < processLimit &&
+    budget.canCall()
+  ) {
+    batch.push({ txid: pendingTxids[processedIndex]! });
+    processedIndex++;
+    processed++;
+  }
+  if (batch.length > 0) {
+    const maxCalls = limited ? 1 : undefined;
+    await processAddressTxs(store, router, address, batch, hackers, hop, maxCalls);
+    if (limited) budget.consume();
+  }
+
+  const hasPending = processedIndex < pendingTxids.length;
+  if (hasPending) {
+    await store.enqueueJob(
+      "poll_downstream_address",
+      toPollJobPayload({
+        address,
+        pendingTxids,
+        processedIndex,
+        pollFetched: true,
+        newestTxid,
+        newestBlockHeight,
+      }),
+      JOB_PRIORITY.POLL_DOWNSTREAM,
+    );
+    return;
+  }
+
+  if (pollFetched && newestTxid) {
     await store.upsertSyncState(address, {
-      lastSeenTxid: txs[0]!.txid,
-      lastBlockHeight: txs[0]!.status?.block_height ?? null,
+      lastSeenTxid: newestTxid,
+      lastBlockHeight: newestBlockHeight,
     });
-  } else {
+  } else if (!pollFetched) {
     await store.touchSyncPoll(address);
   }
 }
@@ -514,10 +742,16 @@ async function expandDownstream(
   const hackers = await getHackerAddressSet(store);
   await store.setExpandStatus(address, "expanding");
 
+  const budget = createChainCallBudget(config.maxChainCallsPerJob);
+  const limited = config.maxChainCallsPerJob > 0;
   const maxPages = Math.max(1, Math.ceil(config.backfillMaxTxs / 25));
+  const needsProcess = processedIndex < pendingTxids.length;
+  const needsFetch =
+    processedIndex >= pendingTxids.length && !pagesExhausted && pagesFetched < maxPages;
 
-  if (processedIndex >= pendingTxids.length && !pagesExhausted && pagesFetched < maxPages) {
+  if ((!limited || !needsProcess) && needsFetch && budget.canCall()) {
     const { txs } = await router.fetchAddressTxPage(address, chainCursor);
+    budget.consume();
     pagesFetched++;
     if (txs.length === 0) {
       pagesExhausted = true;
@@ -531,19 +765,50 @@ async function expandDownstream(
       chainCursor = txs[txs.length - 1]!.txid;
       if (pagesFetched * 25 >= config.backfillMaxTxs) pagesExhausted = true;
     }
+    if (limited && budget.exhausted()) {
+      const hasPendingAfterFetch = processedIndex < pendingTxids.length;
+      const needsMoreAfterFetch = hasPendingAfterFetch || !pagesExhausted;
+      if (needsMoreAfterFetch) {
+        const nextPayload: ExpandPayload = {
+          address,
+          chainCursor,
+          pendingTxids: hasPendingAfterFetch ? pendingTxids : [],
+          processedIndex: hasPendingAfterFetch ? processedIndex : 0,
+          pagesExhausted,
+          newestTxid,
+          newestBlockHeight,
+          pagesFetched,
+        };
+        await store.enqueueJob(
+          "expand_downstream",
+          nextPayload as unknown as Record<string, unknown>,
+          JOB_PRIORITY.CRON_EXPAND,
+        );
+        return;
+      }
+    }
   } else if (pagesFetched >= maxPages) {
     pagesExhausted = true;
   }
 
+  const processLimit = limited
+    ? budget.processBatchLimit(config.backfillTxsPerJob)
+    : config.backfillTxsPerJob;
   let processed = 0;
   const batch: Array<{ txid: string }> = [];
-  while (processedIndex < pendingTxids.length && processed < config.backfillTxsPerJob) {
+  while (
+    processedIndex < pendingTxids.length &&
+    processed < processLimit &&
+    budget.canCall()
+  ) {
     batch.push({ txid: pendingTxids[processedIndex]! });
     processedIndex++;
     processed++;
   }
   if (batch.length > 0) {
-    await processAddressTxs(store, router, address, batch, hackers, hop);
+    const maxCalls = limited ? 1 : undefined;
+    await processAddressTxs(store, router, address, batch, hackers, hop, maxCalls);
+    if (limited) budget.consume();
   }
 
   const hasPending = processedIndex < pendingTxids.length;
@@ -636,10 +901,10 @@ export async function processJob(
       await auditHackerBackfill(store, router, config, payload.address as string);
       break;
     case "poll_hacker_address":
-      await pollHacker(store, router, payload.address as string);
+      await pollHacker(store, router, config, payload);
       break;
     case "poll_downstream_address":
-      await pollDownstream(store, router, payload.address as string);
+      await pollDownstream(store, router, config, payload);
       break;
     case "expand_downstream":
       await expandDownstream(store, router, config, payload);

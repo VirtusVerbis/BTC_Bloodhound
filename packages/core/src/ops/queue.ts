@@ -129,7 +129,15 @@ export function summarizeJobPayload(type: string, payload: Record<string, unknow
     case "audit_hacker_backfill":
       return { address: payload.address };
     case "poll_hacker_address":
-    case "poll_downstream_address":
+    case "poll_downstream_address": {
+      const pendingTxids = payload.pendingTxids;
+      return {
+        address: payload.address,
+        continuation: isIngestContinuation(JSON.stringify(payload)),
+        pendingTxidsCount: Array.isArray(pendingTxids) ? pendingTxids.length : 0,
+        processedIndex: payload.processedIndex ?? null,
+      };
+    }
     case "refresh_live_balance":
       return { address: payload.address };
     case "expand_downstream":
