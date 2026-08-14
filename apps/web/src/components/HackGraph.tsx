@@ -37,6 +37,19 @@ interface ApiGraphNode {
   incomingSats?: number;
   latestTxTime?: string | null;
   earliestTxTime?: string | null;
+  expandProfile?: "sweep_relay" | "spend_fanout" | null;
+  relayMeta?: {
+    receiveTxCount: number;
+    spendTxCount: number;
+    primarySweepTarget?: string;
+    totalReceivedSats?: number;
+  };
+  fanoutMeta?: {
+    outputCount: number;
+    totalOutSats: number;
+    txid: string;
+    topOutputs?: Array<{ address: string; sats: number }>;
+  };
 }
 
 interface ApiGraphEdge {
@@ -46,6 +59,13 @@ interface ApiGraphEdge {
   txid: string;
   amount: number;
   time: string | null;
+  edgeKind?: "default" | "peel_relay" | "spend_fanout";
+  bundled?: boolean;
+  edgeCount?: number;
+  txids?: string[];
+  totalAmount?: number;
+  outputCount?: number;
+  topOutputs?: Array<{ address: string; sats: number }>;
 }
 
 type GraphMode = "hacker" | "victim-filtered" | "victim-centric";
@@ -57,28 +77,57 @@ interface ApiGraphResponse {
   matchedHackers?: string[];
 }
 
-const edgeDefaults = {
+const PEEL_EDGE_COLOR = "#4caf50";
+const FANOUT_EDGE_COLOR = "#ff00ff";
+const DEFAULT_EDGE_COLOR = "#f7931a";
+
+const defaultEdgeOptions = {
   type: "smoothstep" as const,
-  markerEnd: { type: MarkerType.ArrowClosed, color: "#f7931a" },
-  style: { stroke: "#f7931a" },
+  markerEnd: { type: MarkerType.ArrowClosed, color: DEFAULT_EDGE_COLOR },
+  style: { stroke: DEFAULT_EDGE_COLOR, strokeWidth: 2 },
 };
 
-function formatEdgeLabel(e: { txid?: string; amount: number }, show: boolean): string | undefined {
+function edgeStrokeWidth(e: ApiGraphEdge): number {
+  if (e.edgeKind === "peel_relay") return 2 + Math.min((e.edgeCount ?? 1) / 20, 4);
+  if (e.edgeKind === "spend_fanout") return 2 + Math.min((e.outputCount ?? 1) / 20, 4);
+  return 2;
+}
+
+function edgeColor(e: ApiGraphEdge): string {
+  if (e.edgeKind === "peel_relay") return PEEL_EDGE_COLOR;
+  if (e.edgeKind === "spend_fanout") return FANOUT_EDGE_COLOR;
+  return DEFAULT_EDGE_COLOR;
+}
+
+function formatEdgeLabel(e: ApiGraphEdge, show: boolean): string | undefined {
   if (!show) return undefined;
+  if (e.edgeKind === "peel_relay") return "peel addresses";
+  if (e.edgeKind === "spend_fanout") return "input fan out";
   if (e.txid) return `${satsToBtc(e.amount)} BTC`;
   if (e.amount > 0) return `${satsToBtc(e.amount)} BTC`;
   return undefined;
 }
 
 function mapApiEdges(apiEdges: ApiGraphEdge[], showEdgeLabels: boolean): Edge[] {
-  return apiEdges.map((e) => ({
-    id: e.id,
-    source: e.source,
-    target: e.target,
-    ...edgeDefaults,
-    label: formatEdgeLabel(e, showEdgeLabels),
-    data: { txid: e.txid, time: e.time },
-  }));
+  return apiEdges.map((e) => {
+    const color = edgeColor(e);
+    return {
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      type: "smoothstep",
+      markerEnd: { type: MarkerType.ArrowClosed, color },
+      style: { stroke: color, strokeWidth: edgeStrokeWidth(e) },
+      label: formatEdgeLabel(e, showEdgeLabels),
+      data: {
+        txid: e.txid,
+        time: e.time,
+        edgeKind: e.edgeKind,
+        outputCount: e.outputCount,
+        topOutputs: e.topOutputs,
+      },
+    };
+  });
 }
 
 function filterEdgesToNodes(nodes: ApiGraphNode[], edges: ApiGraphEdge[]): ApiGraphEdge[] {
@@ -265,6 +314,9 @@ export function HackGraph({
           incomingSats: n.incomingSats,
           latestTxTime: n.latestTxTime,
           earliestTxTime: n.earliestTxTime,
+          expandProfile: n.expandProfile,
+          relayMeta: n.relayMeta,
+          fanoutMeta: n.fanoutMeta,
           onExpandVictims:
             n.type === "victimCluster"
               ? () => window.dispatchEvent(new CustomEvent("cointrace-expand-victims"))
@@ -434,7 +486,7 @@ export function HackGraph({
           minZoom={0.1}
           maxZoom={2}
           fitView
-          defaultEdgeOptions={edgeDefaults}
+          defaultEdgeOptions={defaultEdgeOptions}
           style={{ background: "#000" }}
         >
           <Background color="#222" gap={20} />

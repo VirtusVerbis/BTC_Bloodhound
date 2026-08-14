@@ -364,7 +364,7 @@ describe("scheduleBtcUsdPriceRefresh", () => {
     expect(mode).toBe("inline");
 
     expect(store.setBtcUsdRefreshAttemptAt).toHaveBeenCalledOnce();
-    expect(fetchMempoolBtcUsd).toHaveBeenCalledWith("https://mempool.space/api");
+    expect(fetchMempoolBtcUsd).toHaveBeenCalledWith("https://mempool.space/api", store);
     expect(store.setBtcUsdPrice).toHaveBeenCalledWith(65000, expect.any(String));
     expect(store.enqueueJobIfAbsent).not.toHaveBeenCalled();
   });

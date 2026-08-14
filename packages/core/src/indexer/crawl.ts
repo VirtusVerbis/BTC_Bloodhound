@@ -123,8 +123,7 @@ export async function scheduleBtcUsdPriceRefresh(
   await store.setBtcUsdRefreshAttemptAt(new Date(ts).toISOString());
 
   try {
-    if (budget.limit() > 0) budget.consume(1);
-    const { usd, at } = await fetchMempoolBtcUsd(config.mempoolBase);
+    const { usd, at } = await fetchMempoolBtcUsd(config.mempoolBase, store);
     await store.setBtcUsdPrice(usd, at);
     return "inline";
   } catch (err) {

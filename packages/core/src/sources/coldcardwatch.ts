@@ -2,6 +2,8 @@ import type { Store } from "@cointrace/db";
 import { JOB_PRIORITY } from "../config.js";
 import { sha256Hex } from "../util/hash.js";
 import { normalizeBitcoinAddress } from "../util/address.js";
+import { instrumentedFetch, type SubrequestSink } from "../subrequest/instrumentedFetch.js";
+import type { JobSubrequestBudget } from "../indexer/subrequestBudget.js";
 
 export interface ColdcardWatchData {
   collectors: string[];
@@ -22,10 +24,14 @@ function dedupeNormalized(raw: string[]): string[] {
   return out;
 }
 
-export async function fetchColdcardWatch(base: string): Promise<ColdcardWatchData> {
-  const res = await fetch(`${base}/`, {
-    headers: { "User-Agent": "cointrace-indexer/1.0", Accept: "text/html" },
-  });
+export async function fetchColdcardWatch(base: string, sink?: SubrequestSink): Promise<ColdcardWatchData> {
+  const res = await instrumentedFetch(
+    `${base}/`,
+    {
+      headers: { "User-Agent": "cointrace-indexer/1.0", Accept: "text/html" },
+    },
+    sink,
+  );
   if (!res.ok) throw new Error(`ColdcardWatch fetch failed: ${res.status}`);
   const html = await res.text();
 
@@ -40,9 +46,13 @@ export async function fetchColdcardWatch(base: string): Promise<ColdcardWatchDat
 
   let victims: string[] = [];
   try {
-    const listRes = await fetch(`${base}/addresses`, {
-      headers: { "User-Agent": "cointrace-indexer/1.0", Accept: "text/html" },
-    });
+    const listRes = await instrumentedFetch(
+      `${base}/addresses`,
+      {
+        headers: { "User-Agent": "cointrace-indexer/1.0", Accept: "text/html" },
+      },
+      sink,
+    );
     if (listRes.ok) {
       const listHtml = await listRes.text();
       victims = dedupeNormalized(listHtml.match(bc1Regex) ?? []);
@@ -119,8 +129,26 @@ export async function enqueueColdcardWatchBatchJobs(
 export async function applyColdcardWatchSyncBatch(
   store: Store,
   payload: ColdcardWatchBatchPayload,
+  opts?: { jobSubreq?: JobSubrequestBudget },
 ): Promise<void> {
-  for (const address of payload.collectors ?? []) {
+  const collectors = payload.collectors ?? [];
+  for (let i = 0; i < collectors.length; i++) {
+    if (opts?.jobSubreq?.exhausted()) {
+      await store.enqueueJob(
+        "sync_coldcardwatch",
+        {
+          contentHash: payload.contentHash,
+          collectors: collectors.slice(i),
+          victims: payload.victims,
+          downstream: payload.downstream,
+          finalize: payload.finalize,
+          lastAddressCount: payload.lastAddressCount,
+        } as unknown as Record<string, unknown>,
+        JOB_PRIORITY.SYNC_COLDCARDWATCH,
+      );
+      return;
+    }
+    const address = collectors[i]!;
     const inserted = await store.insertAddressIfMissing({
       address,
       role: "hacker",
@@ -157,9 +185,24 @@ export async function applyColdcardWatchSyncBatch(
     }
   }
 
-  if ((payload.victims?.length ?? 0) > 0) {
+  const victims = payload.victims ?? [];
+  if (victims.length > 0) {
+    if (opts?.jobSubreq?.exhausted()) {
+      await store.enqueueJob(
+        "sync_coldcardwatch",
+        {
+          contentHash: payload.contentHash,
+          victims,
+          downstream: payload.downstream,
+          finalize: payload.finalize,
+          lastAddressCount: payload.lastAddressCount,
+        } as unknown as Record<string, unknown>,
+        JOB_PRIORITY.SYNC_COLDCARDWATCH,
+      );
+      return;
+    }
     await store.upsertAddressesBatch(
-      (payload.victims ?? []).map((address) => ({
+      victims.map((address) => ({
         address,
         role: "victim",
         source: "coldcardwatch",
@@ -167,7 +210,22 @@ export async function applyColdcardWatchSyncBatch(
     );
   }
 
-  for (const address of payload.downstream ?? []) {
+  const downstream = payload.downstream ?? [];
+  for (let i = 0; i < downstream.length; i++) {
+    if (opts?.jobSubreq?.exhausted()) {
+      await store.enqueueJob(
+        "sync_coldcardwatch",
+        {
+          contentHash: payload.contentHash,
+          downstream: downstream.slice(i),
+          finalize: payload.finalize,
+          lastAddressCount: payload.lastAddressCount,
+        } as unknown as Record<string, unknown>,
+        JOB_PRIORITY.SYNC_COLDCARDWATCH,
+      );
+      return;
+    }
+    const address = downstream[i]!;
     const inserted = await store.insertAddressIfMissing({
       address,
       role: "downstream",

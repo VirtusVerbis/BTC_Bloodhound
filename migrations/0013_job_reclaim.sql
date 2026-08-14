@@ -1,0 +1,2 @@
+ALTER TABLE jobs ADD COLUMN reclaim_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE jobs ADD COLUMN reclaim_progress_json TEXT;

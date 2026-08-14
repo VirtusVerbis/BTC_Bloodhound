@@ -16,6 +16,19 @@ export type GraphNodeData = {
   latestTxTime?: string | null;
   earliestTxTime?: string | null;
   hopFromHacker?: number | null;
+  expandProfile?: "sweep_relay" | "spend_fanout" | null;
+  relayMeta?: {
+    receiveTxCount: number;
+    spendTxCount: number;
+    primarySweepTarget?: string;
+    totalReceivedSats?: number;
+  };
+  fanoutMeta?: {
+    outputCount: number;
+    totalOutSats: number;
+    txid: string;
+    topOutputs?: Array<{ address: string; sats: number }>;
+  };
   onExpandVictims?: () => void;
 };
 
@@ -65,8 +78,20 @@ export function DownstreamNode({ data }: NodeProps) {
     <div className="node-card default">
       <Handle type="target" position={Position.Left} style={handleStyle} />
       <Handle type="source" position={Position.Right} style={handleStyle} />
+      {d.expandProfile === "sweep_relay" && <div className="node-badge">SWEEP RELAY</div>}
+      {d.expandProfile === "spend_fanout" && <div className="node-badge">SPEND FANOUT</div>}
       <div>Downstream</div>
       {d.address && <AddressLine address={d.address} />}
+      {d.expandProfile === "sweep_relay" && d.relayMeta && (
+        <div>
+          Received: {d.relayMeta.receiveTxCount} batch txs · {d.relayMeta.spendTxCount} sweeps
+        </div>
+      )}
+      {d.expandProfile === "spend_fanout" && d.fanoutMeta && (
+        <div>
+          Fanout: {d.fanoutMeta.outputCount} outputs · {satsToBtc(d.fanoutMeta.totalOutSats)} BTC
+        </div>
+      )}
       {d.incomingSats != null && (
         <div>
           In: {satsToBtc(d.incomingSats)} BTC

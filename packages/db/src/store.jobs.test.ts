@@ -12,7 +12,7 @@ describe("resetRunningJobs", () => {
     sqlite.prepare("UPDATE jobs SET status = 'running' WHERE id = ?").run(runningId);
     await store.completeJob(doneId);
 
-    expect(await store.resetRunningJobs()).toBe(1);
+    expect((await store.resetRunningJobs()).reclaimed).toBe(1);
     expect((await store.getJob(runningId))?.status).toBe("pending");
     expect((await store.getJob(runningId))?.startedAt).toBeNull();
     expect((await store.getJob(doneId))?.status).toBe("done");
@@ -24,7 +24,7 @@ describe("resetRunningJobs", () => {
     const store = new Store(db);
 
     await store.enqueueJob("process_tx", { txid: "abc123" }, 1);
-    expect(await store.resetRunningJobs()).toBe(0);
+    expect((await store.resetRunningJobs()).reclaimed).toBe(0);
   });
 
   it("clears started_at when reclaiming a claimed job", async () => {
@@ -35,7 +35,7 @@ describe("resetRunningJobs", () => {
     await store.enqueueJob("process_tx", { txid: "abc123" }, 1);
     const claimed = await store.claimNextJob();
     expect(claimed?.startedAt).toBeTruthy();
-    expect(await store.resetRunningJobs()).toBe(1);
+    expect((await store.resetRunningJobs()).reclaimed).toBe(1);
     expect((await store.getJob(claimed!.id))?.startedAt).toBeNull();
     expect((await store.getJob(claimed!.id))?.status).toBe("pending");
   });
@@ -53,7 +53,7 @@ describe("resetRunningJobs", () => {
     const old = new Date(Date.now() - 60_000).toISOString();
     sqlite.prepare("UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?").run(old, staleId);
 
-    expect(await store.resetRunningJobs(30_000)).toBe(1);
+    expect((await store.resetRunningJobs(30_000)).reclaimed).toBe(1);
     expect((await store.getJob(fresh!.id))?.status).toBe("running");
     expect((await store.getJob(staleId))?.status).toBe("pending");
   });

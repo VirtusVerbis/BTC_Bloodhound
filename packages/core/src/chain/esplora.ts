@@ -1,6 +1,7 @@
 import type { ChainAddressStats, ChainProvider, ChainTxDetail, ChainTxSummary } from "./types.js";
+import { instrumentedFetch, type SubrequestSink } from "../subrequest/instrumentedFetch.js";
 
-type TxPage = Array<{ txid: string; status?: { block_height?: number; block_time?: number }; fee?: number }>;
+type TxPage = ChainTxSummary[];
 
 export class RateLimitHttpError extends Error {
   readonly retryAfterSec: number | null;
@@ -54,14 +55,19 @@ async function fetchJsonWithRetry<T>(
   base: string,
   providerName: string,
   path: string,
+  sink?: SubrequestSink,
   maxRetries = 3,
 ): Promise<T> {
   let lastErr: Error | undefined;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      const res = await fetch(`${base}${path}`, {
-        headers: { Accept: "application/json", "User-Agent": "cointrace-indexer/1.0" },
-      });
+      const res = await instrumentedFetch(
+        `${base}${path}`,
+        {
+          headers: { Accept: "application/json", "User-Agent": "cointrace-indexer/1.0" },
+        },
+        sink,
+      );
       if (res.status === 429) {
         const retryAfterSec = parseRetryAfterHeader(res.headers.get("Retry-After"));
         throw new RateLimitHttpError(`${providerName} ${path}: 429 Too Many Requests`, retryAfterSec);
@@ -84,10 +90,13 @@ async function fetchJsonWithRetry<T>(
 export class EsploraProvider implements ChainProvider {
   name = "esplora";
 
-  constructor(private base: string) {}
+  constructor(
+    private base: string,
+    private sink?: SubrequestSink,
+  ) {}
 
   private fetchJson<T>(path: string): Promise<T> {
-    return fetchJsonWithRetry<T>(this.base, "Esplora", path);
+    return fetchJsonWithRetry<T>(this.base, "Esplora", path, this.sink);
   }
 
   async getAddressTxs(address: string, lastSeenTxid?: string): Promise<ChainTxSummary[]> {
@@ -113,10 +122,13 @@ export class EsploraProvider implements ChainProvider {
 export class MempoolProvider implements ChainProvider {
   name = "mempool";
 
-  constructor(private base: string) {}
+  constructor(
+    private base: string,
+    private sink?: SubrequestSink,
+  ) {}
 
   private fetchJson<T>(path: string): Promise<T> {
-    return fetchJsonWithRetry<T>(this.base, "Mempool", path);
+    return fetchJsonWithRetry<T>(this.base, "Mempool", path, this.sink);
   }
 
   async getAddressTxs(address: string, lastSeenTxid?: string): Promise<ChainTxSummary[]> {

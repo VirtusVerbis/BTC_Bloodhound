@@ -154,4 +154,21 @@ describe("processJobs stopReason", () => {
 
     expect(result).toEqual({ processed: 2, stopReason: "jobs_cap" });
   });
+
+  it("stops claiming jobs when store subrequest sink is exhausted", async () => {
+    const budget = createSubrequestBudget(50);
+    budget.consume(48);
+    const store = {
+      claimNextIngestJob: vi.fn(),
+      claimNextJob: vi.fn(),
+      canUseSubrequests: vi.fn().mockReturnValue(false),
+    } as unknown as Store;
+
+    const result = await processJobs(store, {} as ChainRouter, baseConfig(), {
+      subrequestBudget: budget,
+    });
+
+    expect(result).toEqual({ processed: 0, stopReason: "subreq" });
+    expect(store.claimNextJob).not.toHaveBeenCalled();
+  });
 });

@@ -13,6 +13,9 @@ export const addresses = sqliteTable("addresses", {
   hopFromHacker: integer("hop_from_hacker"),
   expandStatus: text("expand_status").notNull().default("pending"),
   lastExpandedAt: text("last_expanded_at"),
+  expandProfile: text("expand_profile"),
+  relayMetaJson: text("relay_meta_json"),
+  fanoutMetaJson: text("fanout_meta_json"),
   totalReceivedSats: integer("total_received_sats").notNull().default(0),
   liveBalanceSats: integer("live_balance_sats"),
   liveBalanceAt: text("live_balance_at"),
@@ -29,6 +32,8 @@ export const edges = sqliteTable(
     blockTime: text("block_time"),
     hopFromHacker: integer("hop_from_hacker"),
     direction: text("direction").notNull(),
+    edgeKind: text("edge_kind"),
+    fanoutMetaJson: text("fanout_meta_json"),
   },
   (table) => [uniqueIndex("edges_from_to_txid_uq").on(table.fromAddress, table.toAddress, table.txid)],
 );
@@ -63,6 +68,8 @@ export const jobs = sqliteTable("jobs", {
   createdAt: text("created_at").notNull(),
   startedAt: text("started_at"),
   completedAt: text("completed_at"),
+  reclaimCount: integer("reclaim_count").notNull().default(0),
+  reclaimProgressJson: text("reclaim_progress_json"),
 });
 
 export const sourceSyncState = sqliteTable("source_sync_state", {

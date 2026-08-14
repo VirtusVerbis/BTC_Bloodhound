@@ -29,6 +29,35 @@ function jobPayloadAddressEq(address: string) {
   return sql`json_extract(${jobs.payloadJson}, '$.address') = ${address}`;
 }
 
+function extractIngestProgressSnapshot(payloadJson: string): {
+  processedIndex: number;
+  headTxid: string | null;
+  chainCursor: string | null;
+} {
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(payloadJson) as Record<string, unknown>;
+  } catch {
+    return { processedIndex: 0, headTxid: null, chainCursor: null };
+  }
+
+  const processedIndex = typeof payload.processedIndex === "number" ? payload.processedIndex : 0;
+  let headTxid: string | null = null;
+  const pendingTxs = payload.pendingTxs;
+  if (Array.isArray(pendingTxs) && pendingTxs.length > processedIndex) {
+    const entry = pendingTxs[processedIndex] as { txid?: string };
+    headTxid = entry?.txid ?? null;
+  } else {
+    const pendingTxids = payload.pendingTxids;
+    if (Array.isArray(pendingTxids) && pendingTxids.length > processedIndex) {
+      headTxid = String(pendingTxids[processedIndex]);
+    }
+  }
+  const chainCursor =
+    payload.chainCursor != null && payload.chainCursor !== "" ? String(payload.chainCursor) : null;
+  return { processedIndex, headTxid, chainCursor };
+}
+
 function isIngestContinuation(payloadJson: string): boolean {
   let payload: Record<string, unknown>;
   try {
@@ -41,6 +70,9 @@ function isIngestContinuation(payloadJson: string): boolean {
 
   const pending = payload.pendingTxids;
   if (Array.isArray(pending) && pending.length > 0) return true;
+
+  const pendingTxs = payload.pendingTxs;
+  if (Array.isArray(pendingTxs) && pendingTxs.length > 0) return true;
 
   const processedIndex = payload.processedIndex;
   if (typeof processedIndex === "number" && processedIndex > 0) return true;
@@ -87,6 +119,9 @@ export type AddressUpsertData = {
   isFlaggedHacker?: boolean;
   hopFromHacker?: number | null;
   expandStatus?: string;
+  expandProfile?: string | null;
+  relayMetaJson?: string | null;
+  fanoutMetaJson?: string | null;
   totalReceivedSats?: number;
   liveBalanceSats?: number | null;
   liveBalanceAt?: string | null;
@@ -100,6 +135,8 @@ export type EdgeUpsertData = {
   blockTime?: string | null;
   hopFromHacker?: number | null;
   direction: string;
+  edgeKind?: string | null;
+  fanoutMetaJson?: string | null;
 };
 
 export type ChainApiProviderId = "esplora" | "mempool";
@@ -171,6 +208,10 @@ export class Store {
     this.d1BatchSize = options?.d1BatchSize ?? 8;
     this.d1 = options?.d1;
     this.subrequestBudget = options?.subrequestBudget;
+  }
+
+  consumeSubrequests(count = 1): void {
+    this.trackSubrequest(count);
   }
 
   private trackSubrequest(count = 1): void {
@@ -361,7 +402,6 @@ export class Store {
 
   private async executeSqlBatch(statements: ReturnType<typeof sql>[]): Promise<void> {
     if (statements.length === 0) return;
-    this.trackSubrequest(1);
     const d1 = this.d1;
     const d1Batch = d1?.batch;
     if (d1 && d1Batch) {
@@ -454,16 +494,20 @@ export class Store {
       const statements = chunk.map((data) =>
         sql`
           INSERT INTO edges (
-            from_address, to_address, txid, amount_sats, block_time, hop_from_hacker, direction
+            from_address, to_address, txid, amount_sats, block_time, hop_from_hacker, direction,
+            edge_kind, fanout_meta_json
           ) VALUES (
             ${data.fromAddress}, ${data.toAddress}, ${data.txid}, ${data.amountSats},
-            ${data.blockTime ?? null}, ${data.hopFromHacker ?? null}, ${data.direction}
+            ${data.blockTime ?? null}, ${data.hopFromHacker ?? null}, ${data.direction},
+            ${data.edgeKind ?? null}, ${data.fanoutMetaJson ?? null}
           )
           ON CONFLICT(from_address, to_address, txid) DO UPDATE SET
             amount_sats = excluded.amount_sats,
             block_time = COALESCE(excluded.block_time, edges.block_time),
             hop_from_hacker = COALESCE(excluded.hop_from_hacker, edges.hop_from_hacker),
-            direction = excluded.direction
+            direction = excluded.direction,
+            edge_kind = COALESCE(excluded.edge_kind, edges.edge_kind),
+            fanout_meta_json = COALESCE(excluded.fanout_meta_json, edges.fanout_meta_json)
         `,
       );
       await this.executeSqlBatch(statements);
@@ -477,7 +521,6 @@ export class Store {
   async recalcTotalReceivedFor(hackerAddresses: string[]): Promise<void> {
     const unique = [...new Set(hackerAddresses)];
     if (unique.length === 0) return;
-    this.trackSubrequest(unique.length * 2);
     for (const hackerAddress of unique) {
       await this.recalcTotalReceived(hackerAddress);
     }
@@ -1001,7 +1044,9 @@ export class Store {
 
     let pick = candidates[0]!;
     if (opts?.preferContinuation) {
-      const cont = candidates.find((j) => isIngestContinuation(j.payloadJson));
+      const cont = candidates.find(
+        (j) => isIngestContinuation(j.payloadJson) && (j.reclaimCount ?? 0) === 0,
+      );
       if (cont) pick = cont;
     }
 
@@ -1019,7 +1064,13 @@ export class Store {
   async completeJob(id: number) {
     await this.db
       .update(jobs)
-      .set({ status: "done", lastError: null, completedAt: now() })
+      .set({
+        status: "done",
+        lastError: null,
+        completedAt: now(),
+        reclaimCount: 0,
+        reclaimProgressJson: null,
+      })
       .where(eq(jobs.id, id))
       .run();
   }
@@ -1054,23 +1105,73 @@ export class Store {
       .run();
   }
 
+  async clearJobReclaimState(id: number) {
+    await this.db
+      .update(jobs)
+      .set({ reclaimCount: 0, reclaimProgressJson: null })
+      .where(eq(jobs.id, id))
+      .run();
+  }
+
   /**
    * Reclaim running jobs to pending. When staleMs > 0, only jobs with null started_at
    * or started_at older than staleMs are reset (avoids interrupting an in-flight tick).
    * When staleMs is 0/omitted, all running jobs are reclaimed.
    */
-  async resetRunningJobs(staleMs = 0): Promise<number> {
+  async resetRunningJobs(
+    staleMs = 0,
+    opts?: { jobReclaimDeferAfter?: number; jobDeferSec?: number },
+  ): Promise<{ reclaimed: number; deferred: number }> {
     const cutoff = new Date(Date.now() - Math.max(0, staleMs)).toISOString();
-    const stale =
+    const staleCondition =
       staleMs <= 0
         ? eq(jobs.status, "running")
         : and(eq(jobs.status, "running"), or(isNull(jobs.startedAt), lte(jobs.startedAt, cutoff)));
-    const result = await this.db
-      .update(jobs)
-      .set({ status: "pending", startedAt: null })
-      .where(stale)
-      .run();
-    return changesCount(result as { changes?: number; meta?: { changes?: number } });
+
+    const staleJobs = await this.db.select().from(jobs).where(staleCondition).all();
+    if (staleJobs.length === 0) return { reclaimed: 0, deferred: 0 };
+
+    const deferAfter = opts?.jobReclaimDeferAfter ?? 0;
+    const deferSec = opts?.jobDeferSec ?? 86400;
+    let reclaimed = 0;
+    let deferred = 0;
+
+    for (const job of staleJobs) {
+      const progress = extractIngestProgressSnapshot(job.payloadJson);
+      const progressJson = JSON.stringify(progress);
+      const nextReclaimCount = (job.reclaimCount ?? 0) + 1;
+      const unchanged = job.reclaimProgressJson === progressJson;
+
+      if (deferAfter > 0 && nextReclaimCount >= deferAfter && unchanged) {
+        const runAfter = new Date(Date.now() + deferSec * 1000).toISOString();
+        await this.deferJob(job.id, "deferred: reclaimed without progress", runAfter);
+        await this.db
+          .update(jobs)
+          .set({
+            reclaimCount: 0,
+            reclaimProgressJson: null,
+          })
+          .where(eq(jobs.id, job.id))
+          .run();
+        deferred++;
+        continue;
+      }
+
+      await this.db
+        .update(jobs)
+        .set({
+          status: "pending",
+          startedAt: null,
+          reclaimCount: nextReclaimCount,
+          reclaimProgressJson: progressJson,
+          lastError: "reclaimed: stale running",
+        })
+        .where(eq(jobs.id, job.id))
+        .run();
+      reclaimed++;
+    }
+
+    return { reclaimed, deferred };
   }
 
   /** Acquire exclusive tick lease if none held or lease expired. */
@@ -1567,6 +1668,22 @@ export class Store {
     await this.db
       .update(addresses)
       .set({ expandStatus: status, lastExpandedAt: now() })
+      .where(eq(addresses.address, address))
+      .run();
+  }
+
+  async setExpandProfile(
+    address: string,
+    profile: string,
+    meta?: { relayMetaJson?: string | null; fanoutMetaJson?: string | null },
+  ) {
+    await this.db
+      .update(addresses)
+      .set({
+        expandProfile: profile,
+        ...(meta?.relayMetaJson !== undefined ? { relayMetaJson: meta.relayMetaJson } : {}),
+        ...(meta?.fanoutMetaJson !== undefined ? { fanoutMetaJson: meta.fanoutMetaJson } : {}),
+      })
       .where(eq(addresses.address, address))
       .run();
   }

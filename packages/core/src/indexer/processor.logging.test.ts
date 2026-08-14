@@ -111,6 +111,7 @@ describe("processJobs logging", () => {
       maybeClearQueueSchedulingPause: vi.fn(),
       getQueueDepth: vi.fn().mockResolvedValue(0),
       upsertAddress: vi.fn(),
+      canUseSubrequests: vi.fn().mockReturnValue(true),
     } as unknown as Store;
     const router = {
       withProvider: vi.fn(async (fn: (p: { getAddressStats: () => Promise<unknown> }) => unknown) =>
@@ -141,6 +142,7 @@ describe("processJobs logging", () => {
       maybeClearQueueSchedulingPause: vi.fn(),
       getQueueDepth: vi.fn().mockResolvedValue(0),
       upsertAddress: vi.fn(),
+      canUseSubrequests: vi.fn().mockReturnValue(true),
     } as unknown as Store;
     const router = {
       withProvider: vi.fn(async (fn: (p: { getAddressStats: () => Promise<unknown> }) => unknown) =>
@@ -173,6 +175,7 @@ describe("processJobs logging", () => {
       failJob: vi.fn(),
       maybeClearQueueSchedulingPause: vi.fn(),
       getQueueDepth: vi.fn().mockResolvedValue(1),
+      canUseSubrequests: vi.fn().mockReturnValue(true),
     } as unknown as Store;
     const router = {
       withProvider: vi.fn().mockRejectedValue(new Error("boom")),

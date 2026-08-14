@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createSubrequestBudget, scheduleSubrequestReserve } from "./subrequestBudget.js";
+import {
+  createJobSubrequestBudget,
+  createSubrequestBudget,
+  scheduleSubrequestReserve,
+} from "./subrequestBudget.js";
 
 describe("createSubrequestBudget", () => {
   it("allows unlimited when limit is 0", () => {
@@ -18,6 +22,30 @@ describe("createSubrequestBudget", () => {
     budget.consume(40);
     expect(budget.exhausted()).toBe(true);
     expect(budget.canConsume(1)).toBe(false);
+  });
+});
+
+describe("createJobSubrequestBudget", () => {
+  it("tracks per-job delta against tick budget", () => {
+    const tick = createSubrequestBudget(50);
+    tick.consume(5);
+    const job = createJobSubrequestBudget(10, tick, 5);
+    expect(job.unlimited()).toBe(false);
+    expect(job.used()).toBe(0);
+    tick.consume(4);
+    expect(job.used()).toBe(4);
+    expect(job.canUse(7)).toBe(false);
+    expect(job.exhausted()).toBe(false);
+    tick.consume(6);
+    expect(job.exhausted()).toBe(true);
+  });
+
+  it("is unlimited when maxSubrequestsPerJob is 0", () => {
+    const tick = createSubrequestBudget(50);
+    const job = createJobSubrequestBudget(0, tick, 0);
+    expect(job.unlimited()).toBe(true);
+    tick.consume(100);
+    expect(job.exhausted()).toBe(false);
   });
 });
 

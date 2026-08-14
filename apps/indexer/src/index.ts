@@ -220,7 +220,7 @@ async function main() {
     const wait = argv.includes("--wait");
     const fresh = argv.includes("--fresh");
     if (wait) {
-      const reclaimed = await store.resetRunningJobs();
+      const { reclaimed } = await store.resetRunningJobs();
       if (reclaimed > 0) {
         console.log(`Reclaimed ${reclaimed} orphaned running job(s) to pending`);
       }
@@ -243,7 +243,7 @@ async function main() {
     const wait = argv.includes("--wait");
     const fresh = argv.includes("--fresh");
     if (wait) {
-      const reclaimed = await store.resetRunningJobs();
+      const { reclaimed } = await store.resetRunningJobs();
       if (reclaimed > 0) {
         console.log(`Reclaimed ${reclaimed} orphaned running job(s) to pending`);
       }
@@ -260,7 +260,7 @@ async function main() {
     const router = openChainRouter(store);
     const wait = argv.includes("--wait");
     if (wait) {
-      const reclaimed = await store.resetRunningJobs();
+      const { reclaimed } = await store.resetRunningJobs();
       if (reclaimed > 0) {
         console.log(`Reclaimed ${reclaimed} orphaned running job(s) to pending`);
       }
@@ -277,7 +277,10 @@ async function main() {
     const router = openChainRouter(store);
     const jobDetails = argv.includes("--job-details") || config.indexerJobDetails;
     const logColor = argv.includes("--log-color") || config.indexerLogColor;
-    const reclaimed = await store.resetRunningJobs(config.runningJobStaleMs);
+    const { reclaimed } = await store.resetRunningJobs(config.runningJobStaleMs, {
+      jobReclaimDeferAfter: config.jobReclaimDeferAfter,
+      jobDeferSec: config.jobDeferSec,
+    });
     if (reclaimed > 0) {
       console.log(`Reclaimed ${reclaimed} orphaned running job(s) to pending`);
     }

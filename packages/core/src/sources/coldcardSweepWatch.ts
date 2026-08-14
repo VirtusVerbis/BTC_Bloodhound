@@ -3,6 +3,8 @@ import { JOB_PRIORITY } from "../config.js";
 import { sha256Hex } from "../util/hash.js";
 import { normalizeBitcoinAddress } from "../util/address.js";
 import { insertAddressIfMissing } from "./insertIfMissing.js";
+import { instrumentedFetch, type SubrequestSink } from "../subrequest/instrumentedFetch.js";
+import type { JobSubrequestBudget } from "../indexer/subrequestBudget.js";
 
 export interface ColdcardSweepWatchData {
   collectors: string[];
@@ -22,17 +24,28 @@ function dedupeNormalized(raw: string[]): string[] {
   return out;
 }
 
-export async function fetchColdcardSweepWatch(base: string): Promise<ColdcardSweepWatchData> {
+export async function fetchColdcardSweepWatch(
+  base: string,
+  sink?: SubrequestSink,
+): Promise<ColdcardSweepWatchData> {
   const headers = { "User-Agent": "cointrace-indexer/1.0" };
 
-  const waveRes = await fetch(`${base}/wave3.js`, { headers: { ...headers, Accept: "*/*" } });
+  const waveRes = await instrumentedFetch(
+    `${base}/wave3.js`,
+    { headers: { ...headers, Accept: "*/*" } },
+    sink,
+  );
   if (!waveRes.ok) throw new Error(`ColdcardSweepWatch wave3 fetch failed: ${waveRes.status}`);
   const waveBody = await waveRes.text();
   const waveJson = waveBody.replace(/^\s*window\.WAVE3\s*=\s*/, "").trim().replace(/;$/, "");
   const wave = JSON.parse(waveJson) as { vaults?: Array<[string, number]> };
   const vaults = dedupeNormalized((wave.vaults ?? []).map(([addr]) => addr));
 
-  const homeRes = await fetch(`${base}/`, { headers: { ...headers, Accept: "text/html" } });
+  const homeRes = await instrumentedFetch(
+    `${base}/`,
+    { headers: { ...headers, Accept: "text/html" } },
+    sink,
+  );
   if (!homeRes.ok) throw new Error(`ColdcardSweepWatch homepage fetch failed: ${homeRes.status}`);
   const html = await homeRes.text();
 
@@ -102,10 +115,32 @@ export async function enqueueColdcardSweepWatchBatchJobs(
 export async function applyColdcardSweepWatchSyncBatch(
   store: Store,
   payload: ColdcardSweepWatchBatchPayload,
+  opts?: { jobSubreq?: JobSubrequestBudget },
 ): Promise<number> {
   let inserted = 0;
 
-  for (const address of payload.collectors ?? []) {
+  const collectors = payload.collectors ?? [];
+  for (let i = 0; i < collectors.length; i++) {
+    if (opts?.jobSubreq?.exhausted()) {
+      const remainingCollectors = collectors.slice(i);
+      const remainingVaults = payload.vaults ?? [];
+      if (remainingCollectors.length > 0 || remainingVaults.length > 0) {
+        await store.enqueueJob(
+          "sync_vercel_trackers",
+          {
+            source: "coldcard_sweep_watch",
+            contentHash: payload.contentHash,
+            collectors: remainingCollectors,
+            vaults: remainingVaults,
+            finalize: payload.finalize,
+            lastAddressCount: payload.lastAddressCount,
+          } as unknown as Record<string, unknown>,
+          JOB_PRIORITY.SYNC_VERCEL_TRACKERS,
+        );
+      }
+      return inserted;
+    }
+    const address = collectors[i]!;
     const added = await insertAddressIfMissing(store, address, {
       role: "hacker",
       isFlaggedHacker: true,
@@ -127,7 +162,22 @@ export async function applyColdcardSweepWatchSyncBatch(
 
   if ((payload.vaults?.length ?? 0) > 0) {
     const rows = payload.vaults ?? [];
-    for (const address of rows) {
+    for (let i = 0; i < rows.length; i++) {
+      if (opts?.jobSubreq?.exhausted()) {
+        await store.enqueueJob(
+          "sync_vercel_trackers",
+          {
+            source: "coldcard_sweep_watch",
+            contentHash: payload.contentHash,
+            vaults: rows.slice(i),
+            finalize: payload.finalize,
+            lastAddressCount: payload.lastAddressCount,
+          } as unknown as Record<string, unknown>,
+          JOB_PRIORITY.SYNC_VERCEL_TRACKERS,
+        );
+        return inserted;
+      }
+      const address = rows[i]!;
       if (
         await insertAddressIfMissing(store, address, {
           role: "victim",

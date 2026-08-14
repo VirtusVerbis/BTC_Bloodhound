@@ -1,20 +1,26 @@
+export interface ChainTxVin {
+  txid?: string;
+  vout?: number;
+  prevout?: { scriptpubkey_address?: string; value?: number };
+  is_coinbase?: boolean;
+}
+
+export interface ChainTxVout {
+  scriptpubkey_address?: string;
+  value?: number;
+}
+
 export interface ChainTxSummary {
   txid: string;
   status?: { block_height?: number; block_time?: number };
   fee?: number;
+  vin?: ChainTxVin[];
+  vout?: ChainTxVout[];
 }
 
 export interface ChainTxDetail extends ChainTxSummary {
-  vin: Array<{
-    txid?: string;
-    vout?: number;
-    prevout?: { scriptpubkey_address?: string; value?: number };
-    is_coinbase?: boolean;
-  }>;
-  vout: Array<{
-    scriptpubkey_address?: string;
-    value?: number;
-  }>;
+  vin: ChainTxVin[];
+  vout: ChainTxVout[];
 }
 
 export interface ChainAddressStats {

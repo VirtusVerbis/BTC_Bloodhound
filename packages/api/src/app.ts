@@ -168,6 +168,7 @@ export function createApp(store: Store, config: AppConfig) {
       maxVictims: clampInt(maxVictimsRaw, 1, config.maxGraphVictims),
       maxOutputs: clampInt(maxOutputsRaw, 1, config.maxGraphDownstream),
       minEdgeSats,
+      graphBundleMinEdges: config.graphBundleMinEdges,
     };
 
     if (victim) {

@@ -107,6 +107,20 @@ export interface AppConfig {
   maxEdgesPerJob: number;
   /** CPU guard: cap edges computed per tx. */
   maxGraphEdgesPerTx: number;
+  /** Peel relay: min receive ratio on first page. */
+  sweepRelayMinReceiveRatio: number;
+  sweepRelayMinVoutCount: number;
+  sweepRelayMinSpendTargetShare: number;
+  /** Spend fanout detection thresholds. */
+  spendFanoutMinVoutCount: number;
+  spendFanoutMinOutputAddresses: number;
+  spendFanoutTopK: number;
+  /** Graph bundling threshold for peel relay edges. */
+  graphBundleMinEdges: number;
+  /** Reclaim poison pill after N stale reclaims without progress. */
+  jobReclaimDeferAfter: number;
+  /** Skip getTx when receive-only tx has more than this many outputs. */
+  maxVoutCountSkipGetTx: number;
   /** Max D1 statements per batch() call. */
   d1BatchSize: number;
   /** Source sync addresses processed per job chunk. */
@@ -220,6 +234,15 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     maxSubrequestsPerJob: Number(env.MAX_SUBREQUESTS_PER_JOB ?? 0),
     maxEdgesPerJob: Number(env.MAX_EDGES_PER_JOB ?? 0),
     maxGraphEdgesPerTx: Number(env.MAX_GRAPH_EDGES_PER_TX ?? 0),
+    sweepRelayMinReceiveRatio: Number(env.SWEEP_RELAY_MIN_RECEIVE_RATIO ?? 0.7),
+    sweepRelayMinVoutCount: Number(env.SWEEP_RELAY_MIN_VOUT_COUNT ?? 20),
+    sweepRelayMinSpendTargetShare: Number(env.SWEEP_RELAY_MIN_SPEND_TARGET_SHARE ?? 0.8),
+    spendFanoutMinVoutCount: Number(env.SPEND_FANOUT_MIN_VOUT_COUNT ?? 20),
+    spendFanoutMinOutputAddresses: Number(env.SPEND_FANOUT_MIN_OUTPUT_ADDRESSES ?? 10),
+    spendFanoutTopK: Number(env.SPEND_FANOUT_TOP_K ?? 5),
+    graphBundleMinEdges: Number(env.GRAPH_BUNDLE_MIN_EDGES ?? 2),
+    jobReclaimDeferAfter: Number(env.JOB_RECLAIM_DEFER_AFTER ?? 3),
+    maxVoutCountSkipGetTx: Number(env.MAX_VOUT_COUNT_SKIP_GET_TX ?? 20),
     d1BatchSize: Number(env.D1_BATCH_SIZE ?? 8),
     syncAddressesPerJob: Number(env.SYNC_ADDRESSES_PER_JOB ?? 5),
   };

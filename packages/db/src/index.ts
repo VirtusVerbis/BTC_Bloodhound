@@ -195,6 +195,31 @@ export function runMigrations(sqlite: Database.Database): void {
   if (!jobCols.some((c) => c.name === "completed_at")) {
     sqlite.exec(`ALTER TABLE jobs ADD COLUMN completed_at TEXT`);
   }
+  if (!jobCols.some((c) => c.name === "reclaim_count")) {
+    sqlite.exec(`ALTER TABLE jobs ADD COLUMN reclaim_count INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!jobCols.some((c) => c.name === "reclaim_progress_json")) {
+    sqlite.exec(`ALTER TABLE jobs ADD COLUMN reclaim_progress_json TEXT`);
+  }
+
+  const addressCols = sqlite.prepare("PRAGMA table_info(addresses)").all() as Array<{ name: string }>;
+  if (!addressCols.some((c) => c.name === "expand_profile")) {
+    sqlite.exec(`ALTER TABLE addresses ADD COLUMN expand_profile TEXT`);
+  }
+  if (!addressCols.some((c) => c.name === "relay_meta_json")) {
+    sqlite.exec(`ALTER TABLE addresses ADD COLUMN relay_meta_json TEXT`);
+  }
+  if (!addressCols.some((c) => c.name === "fanout_meta_json")) {
+    sqlite.exec(`ALTER TABLE addresses ADD COLUMN fanout_meta_json TEXT`);
+  }
+
+  const edgeCols = sqlite.prepare("PRAGMA table_info(edges)").all() as Array<{ name: string }>;
+  if (!edgeCols.some((c) => c.name === "edge_kind")) {
+    sqlite.exec(`ALTER TABLE edges ADD COLUMN edge_kind TEXT`);
+  }
+  if (!edgeCols.some((c) => c.name === "fanout_meta_json")) {
+    sqlite.exec(`ALTER TABLE edges ADD COLUMN fanout_meta_json TEXT`);
+  }
 
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS rate_limits (
@@ -208,4 +233,4 @@ export function runMigrations(sqlite: Database.Database): void {
 export * from "./schema.js";
 export * from "./store.js";
 // D1 helper is also available via `@cointrace/db/d1` (avoids bundling better-sqlite3 in Workers).
-export { createD1Store, type D1Binding, type D1Db } from "./d1.js";
+export { createD1Store, instrumentD1Binding, type D1Binding, type D1Db, type D1SubrequestSink } from "./d1.js";

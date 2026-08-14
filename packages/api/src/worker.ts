@@ -120,7 +120,10 @@ const worker = {
     const acquired = await store.tryAcquireTickLease(leaseMs);
     if (!acquired) return;
     try {
-      await store.resetRunningJobs(config.runningJobStaleMs);
+      await store.resetRunningJobs(config.runningJobStaleMs, {
+        jobReclaimDeferAfter: config.jobReclaimDeferAfter,
+        jobDeferSec: config.jobDeferSec,
+      });
       await runIndexerTick(store, router, config, {
         schedule: true,
         jobDetails: config.indexerJobDetails,

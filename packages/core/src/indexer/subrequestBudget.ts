@@ -55,3 +55,37 @@ export function scheduleSubrequestReserve(config: {
     config.maintenanceCronCounter % config.hackerMaintenanceEveryNCrons === 0;
   return base + (isMaintTick ? config.scheduleReserveMaintExtra : 0);
 }
+
+/** Per-job subrequest cap within a tick (mirrors chain-call budget pattern). */
+export interface JobSubrequestBudget {
+  canUse(n?: number): boolean;
+  exhausted(): boolean;
+  used(): number;
+  unlimited(): boolean;
+}
+
+export function createJobSubrequestBudget(
+  maxSubrequestsPerJob: number,
+  tickBudget: SubrequestBudget | undefined,
+  jobStartUsed: number,
+): JobSubrequestBudget {
+  const cap = maxSubrequestsPerJob;
+  const unlimited = cap <= 0 || !tickBudget || tickBudget.limit() <= 0;
+  return {
+    unlimited(): boolean {
+      return unlimited;
+    },
+    canUse(n = 1): boolean {
+      if (unlimited) return true;
+      return tickBudget!.used() - jobStartUsed + Math.max(0, n) <= cap;
+    },
+    exhausted(): boolean {
+      if (unlimited) return false;
+      return tickBudget!.used() - jobStartUsed >= cap;
+    },
+    used(): number {
+      if (unlimited) return 0;
+      return tickBudget!.used() - jobStartUsed;
+    },
+  };
+}

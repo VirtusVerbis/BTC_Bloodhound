@@ -6,7 +6,7 @@ import type { ChainRouter } from "../chain/router.js";
 import { processJob } from "./processor.js";
 
 const { processTxForHackTraceMock } = vi.hoisted(() => ({
-  processTxForHackTraceMock: vi.fn().mockResolvedValue(undefined),
+  processTxForHackTraceMock: vi.fn().mockResolvedValue({ traceComplete: true }),
 }));
 
 vi.mock("../graph/builder.js", () => ({
@@ -77,6 +77,15 @@ function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     maxSubrequestsPerJob: 0,
     maxEdgesPerJob: 0,
     maxGraphEdgesPerTx: 0,
+    sweepRelayMinReceiveRatio: 0.7,
+    sweepRelayMinVoutCount: 20,
+    sweepRelayMinSpendTargetShare: 0.8,
+    spendFanoutMinVoutCount: 20,
+    spendFanoutMinOutputAddresses: 10,
+    spendFanoutTopK: 5,
+    graphBundleMinEdges: 2,
+    jobReclaimDeferAfter: 3,
+    maxVoutCountSkipGetTx: 20,
     d1BatchSize: 8,
     syncAddressesPerJob: 5,
     ...overrides,
@@ -116,11 +125,20 @@ describe("single chain call per job", () => {
     const store = {
       getBackfillState: vi.fn().mockResolvedValue(null),
       setExpandStatus: vi.fn(),
+      getAddress: vi.fn().mockResolvedValue(null),
       upsertBackfillState,
       enqueueJob,
       getTransaction: vi.fn().mockResolvedValue(null),
     } as unknown as Store;
-    const router = { fetchAddressTxPage } as unknown as ChainRouter;
+    const withProvider = vi.fn(async (fn: (p: { getTx: () => Promise<{ vin: unknown[]; vout: unknown[] }> }) => unknown) =>
+      fn({
+        getTx: async () => ({
+          vin: [{ prevout: { scriptpubkey_address: ADDRESS } }],
+          vout: [{ scriptpubkey_address: "bc1qdest", value: 1000 }],
+        }),
+      }),
+    );
+    const router = { fetchAddressTxPage, withProvider } as unknown as ChainRouter;
 
     await processJob(
       store,
@@ -153,11 +171,20 @@ describe("single chain call per job", () => {
     const store = {
       getBackfillState: vi.fn().mockResolvedValue(null),
       setExpandStatus: vi.fn(),
+      getAddress: vi.fn().mockResolvedValue(null),
       upsertBackfillState,
       enqueueJob,
       getTransaction: vi.fn().mockResolvedValue(null),
     } as unknown as Store;
-    const router = { fetchAddressTxPage } as unknown as ChainRouter;
+    const withProvider = vi.fn(async (fn: (p: { getTx: () => Promise<{ vin: unknown[]; vout: unknown[] }> }) => unknown) =>
+      fn({
+        getTx: async () => ({
+          vin: [{ prevout: { scriptpubkey_address: ADDRESS } }],
+          vout: [{ scriptpubkey_address: "bc1qdest", value: 1000 }],
+        }),
+      }),
+    );
+    const router = { fetchAddressTxPage, withProvider } as unknown as ChainRouter;
 
     await processJob(
       store,
@@ -178,6 +205,7 @@ describe("single chain call per job", () => {
       router,
       "tx1",
       expect.any(Set),
+      expect.objectContaining({ spendingAddress: ADDRESS }),
     );
     expect(upsertBackfillState).toHaveBeenCalledWith(
       ADDRESS,
@@ -193,11 +221,20 @@ describe("single chain call per job", () => {
     const store = {
       getBackfillState: vi.fn().mockResolvedValue(null),
       setExpandStatus: vi.fn(),
+      getAddress: vi.fn().mockResolvedValue(null),
       upsertBackfillState: vi.fn(),
       enqueueJob: vi.fn(),
       getTransaction: vi.fn().mockResolvedValue(null),
     } as unknown as Store;
-    const router = { fetchAddressTxPage } as unknown as ChainRouter;
+    const withProvider = vi.fn(async (fn: (p: { getTx: () => Promise<{ vin: unknown[]; vout: unknown[] }> }) => unknown) =>
+      fn({
+        getTx: async () => ({
+          vin: [{ prevout: { scriptpubkey_address: ADDRESS } }],
+          vout: [{ scriptpubkey_address: "bc1qdest", value: 1000 }],
+        }),
+      }),
+    );
+    const router = { fetchAddressTxPage, withProvider } as unknown as ChainRouter;
 
     await processJob(
       store,
@@ -222,7 +259,15 @@ describe("single chain call per job", () => {
       getTransaction: vi.fn().mockResolvedValue(null),
       getEdgesFromAddress: vi.fn().mockResolvedValue([]),
     } as unknown as Store;
-    const router = { fetchAddressTxPage } as unknown as ChainRouter;
+    const withProvider = vi.fn(async (fn: (p: { getTx: () => Promise<{ vin: unknown[]; vout: unknown[] }> }) => unknown) =>
+      fn({
+        getTx: async () => ({
+          vin: [{ prevout: { scriptpubkey_address: ADDRESS } }],
+          vout: [{ scriptpubkey_address: "bc1qdest", value: 1000 }],
+        }),
+      }),
+    );
+    const router = { fetchAddressTxPage, withProvider } as unknown as ChainRouter;
 
     await processJob(
       store,
@@ -240,15 +285,23 @@ describe("single chain call per job", () => {
   });
 
   it("poll_hacker fetch then process across two invocations", async () => {
-    const withProvider = vi
+    const getAddressTxs = vi
       .fn()
-      .mockResolvedValueOnce([{ txid: "tx-new", status: { block_height: 99 } }])
-      .mockResolvedValueOnce({ txid: "tx-new", vin: [], vout: [] });
+      .mockResolvedValue([{ txid: "tx-new", status: { block_height: 99 } }]);
+    const getTx = vi.fn().mockResolvedValue({
+      txid: "tx-new",
+      vin: [{ prevout: { scriptpubkey_address: ADDRESS, value: 1000 } }],
+      vout: [{ scriptpubkey_address: "bc1qdest", value: 500 }],
+    });
+    const withProvider = vi.fn(async (fn: (p: { getAddressTxs: typeof getAddressTxs; getTx: typeof getTx }) => unknown) =>
+      fn({ getAddressTxs, getTx }),
+    );
     const enqueueJob = vi.fn();
     const upsertSyncState = vi.fn();
     const touchSyncPoll = vi.fn();
     const store = {
       getSyncState: vi.fn().mockResolvedValue({ lastSeenTxid: "tx-old" }),
+      getTransaction: vi.fn().mockResolvedValue(null),
       enqueueJob,
       upsertSyncState,
       touchSyncPoll,
@@ -276,6 +329,8 @@ describe("single chain call per job", () => {
     expect(upsertSyncState).not.toHaveBeenCalled();
 
     processTxForHackTraceMock.mockClear();
+    getTx.mockClear();
+    getAddressTxs.mockClear();
     withProvider.mockClear();
 
     await processJob(
@@ -292,7 +347,7 @@ describe("single chain call per job", () => {
       }),
     );
 
-    expect(withProvider).not.toHaveBeenCalled();
+    expect(withProvider).toHaveBeenCalledTimes(1);
     expect(processTxForHackTraceMock).toHaveBeenCalledTimes(1);
     expect(upsertSyncState).toHaveBeenCalledWith(ADDRESS, {
       lastSeenTxid: "tx-new",

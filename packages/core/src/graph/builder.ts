@@ -3,11 +3,28 @@ import type { AppConfig } from "../config.js";
 import { blockTimeIso } from "../chain/esplora.js";
 import type { ChainRouter } from "../chain/router.js";
 import type { ChainTxDetail } from "../chain/types.js";
+import { bundleParallelEdges, mapDbEdgeToGraph, type EdgeKind } from "./graphEdges.js";
 
 export interface HackTraceOptions {
   tx?: ChainTxDetail;
   spendingAddress?: string;
   spendingHop?: number;
+}
+
+export type { EdgeKind } from "./graphEdges.js";
+
+export interface RelayMeta {
+  receiveTxCount: number;
+  spendTxCount: number;
+  primarySweepTarget?: string;
+  totalReceivedSats?: number;
+}
+
+export interface FanoutMeta {
+  outputCount: number;
+  totalOutSats: number;
+  txid: string;
+  topOutputs?: Array<{ address: string; sats: number }>;
 }
 
 export interface GraphNode {
@@ -26,6 +43,9 @@ export interface GraphNode {
   incomingSats?: number;
   latestTxTime?: string | null;
   earliestTxTime?: string | null;
+  expandProfile?: "sweep_relay" | "spend_fanout" | null;
+  relayMeta?: RelayMeta;
+  fanoutMeta?: FanoutMeta;
 }
 
 export interface GraphEdge {
@@ -35,6 +55,13 @@ export interface GraphEdge {
   txid: string;
   amount: number;
   time: string | null;
+  edgeKind?: EdgeKind;
+  bundled?: boolean;
+  edgeCount?: number;
+  txids?: string[];
+  totalAmount?: number;
+  outputCount?: number;
+  topOutputs?: Array<{ address: string; sats: number }>;
 }
 
 export type GraphMode = "hacker" | "victim-filtered" | "victim-centric";
@@ -56,6 +83,7 @@ export async function buildGraph(
     maxVictims?: number;
     minEdgeSats?: number;
     victimFilter?: string;
+    graphBundleMinEdges?: number;
   },
 ): Promise<GraphResult> {
   const depth = options.depth ?? 1;
@@ -63,6 +91,7 @@ export async function buildGraph(
   const maxVictims = options.maxVictims ?? 100;
   const minEdgeSats = options.minEdgeSats ?? 1000;
   const victimFilter = options.victimFilter?.trim().toLowerCase();
+  const graphBundleMinEdges = options.graphBundleMinEdges ?? 2;
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
   const seen = new Set<string>();
@@ -172,59 +201,35 @@ export async function buildGraph(
     .sort((a, b) => b.amountSats - a.amountSats)
     .slice(0, maxOutputs);
 
-  for (const e of outEdges) {
-    const id = e.toAddress;
+  const hackerOutGraphEdges = outEdges.map((e) =>
+    mapDbEdgeToGraph(hackerId, e.toAddress, e),
+  );
+  const bundledHackerOut = bundleParallelEdges(hackerOutGraphEdges, graphBundleMinEdges);
+
+  for (const ge of bundledHackerOut) {
+    const id = ge.target;
     const downstream = await store.getAddress(id);
     if (!seen.has(id)) {
-      nodes.push({
-        id,
-        type: "downstream",
-        label: "Downstream",
-        role: "downstream",
-        address: id,
-        hopFromHacker: downstream?.hopFromHacker ?? 1,
-        totalReceivedSats: downstream?.totalReceivedSats ?? e.amountSats,
-        incomingSats: e.amountSats,
-      });
+      nodes.push(downstreamNodeFromAddress(id, downstream, ge.amount));
       seen.add(id);
     }
-    edges.push({
-      id: `${hackerId}->${id}:${e.txid}`,
-      source: hackerId,
-      target: id,
-      txid: e.txid,
-      amount: e.amountSats,
-      time: e.blockTime,
-    });
+    edges.push(ge);
 
     if (depth > 1 && (downstream?.hopFromHacker ?? 1) < depth) {
       const childEdges = (await store.getEdgesFromAddress(id))
         .filter((ce) => ce.direction === "out_from_hacker" && ce.amountSats >= minEdgeSats)
         .sort((a, b) => b.amountSats - a.amountSats)
         .slice(0, maxOutputs);
-      for (const ce of childEdges) {
-        const cid = ce.toAddress;
+      const childGraphEdges = childEdges.map((ce) => mapDbEdgeToGraph(id, ce.toAddress, ce));
+      const bundledChild = bundleParallelEdges(childGraphEdges, graphBundleMinEdges);
+      for (const cge of bundledChild) {
+        const cid = cge.target;
         const child = await store.getAddress(cid);
         if (!seen.has(cid)) {
-          nodes.push({
-            id: cid,
-            type: "downstream",
-            label: "Downstream",
-            role: "downstream",
-            address: cid,
-            hopFromHacker: child?.hopFromHacker ?? (downstream?.hopFromHacker ?? 1) + 1,
-            incomingSats: ce.amountSats,
-          });
+          nodes.push(downstreamNodeFromAddress(cid, child, cge.amount));
           seen.add(cid);
         }
-        edges.push({
-          id: `${id}->${cid}:${ce.txid}`,
-          source: id,
-          target: cid,
-          txid: ce.txid,
-          amount: ce.amountSats,
-          time: ce.blockTime,
-        });
+        edges.push(cge);
       }
     }
   }
@@ -234,6 +239,48 @@ export async function buildGraph(
     edges,
     mode: victimFilter ? "victim-filtered" : "hacker",
     matchedHackers: victimFilter ? [hacker] : undefined,
+  };
+}
+
+function parseRelayMeta(json: string | null | undefined): RelayMeta | undefined {
+  if (!json) return undefined;
+  try {
+    return JSON.parse(json) as RelayMeta;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseFanoutMeta(json: string | null | undefined): FanoutMeta | undefined {
+  if (!json) return undefined;
+  try {
+    return JSON.parse(json) as FanoutMeta;
+  } catch {
+    return undefined;
+  }
+}
+
+function downstreamNodeFromAddress(
+  id: string,
+  downstream: Awaited<ReturnType<Store["getAddress"]>>,
+  incomingSats: number,
+): GraphNode {
+  const expandProfile =
+    downstream?.expandProfile === "sweep_relay" || downstream?.expandProfile === "spend_fanout"
+      ? downstream.expandProfile
+      : null;
+  return {
+    id,
+    type: "downstream",
+    label: "Downstream",
+    role: "downstream",
+    address: id,
+    hopFromHacker: downstream?.hopFromHacker ?? 1,
+    totalReceivedSats: downstream?.totalReceivedSats ?? incomingSats,
+    incomingSats,
+    expandProfile,
+    relayMeta: parseRelayMeta(downstream?.relayMetaJson),
+    fanoutMeta: parseFanoutMeta(downstream?.fanoutMetaJson),
   };
 }
 

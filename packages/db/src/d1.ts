@@ -11,9 +11,62 @@ export type D1Binding = {
 
 export type D1Db = DrizzleD1Database<typeof schema>;
 
+export type D1SubrequestSink = (count?: number) => void;
+
+function wrapBoundStatement(bound: Record<string, unknown>, sink: D1SubrequestSink): Record<string, unknown> {
+  const wrapTerminal = (name: string) => {
+    const fn = bound[name];
+    if (typeof fn !== "function") return;
+    bound[name] = (...args: unknown[]) => {
+      sink(1);
+      return (fn as (...a: unknown[]) => unknown).apply(bound, args);
+    };
+  };
+  wrapTerminal("run");
+  wrapTerminal("all");
+  wrapTerminal("first");
+  wrapTerminal("raw");
+  return bound;
+}
+
+function wrapPreparedStatement(stmt: unknown, sink: D1SubrequestSink): unknown {
+  if (stmt == null || typeof stmt !== "object") return stmt;
+  const prepared = stmt as Record<string, unknown>;
+  const bindFn = prepared.bind;
+  if (typeof bindFn !== "function") return stmt;
+  return {
+    ...prepared,
+    bind(...args: unknown[]) {
+      const bound = bindFn.apply(prepared, args) as Record<string, unknown>;
+      return wrapBoundStatement(bound, sink);
+    },
+  };
+}
+
+/** Count D1 subrequests (1 per statement execution or batch call). */
+export function instrumentD1Binding(d1: D1Binding, sink: D1SubrequestSink): D1Binding {
+  return {
+    prepare(query: string) {
+      return wrapPreparedStatement(d1.prepare(query), sink);
+    },
+    batch<T = unknown>(statements: unknown[]) {
+      sink(1);
+      if (!d1.batch) throw new Error("D1 batch not available");
+      return d1.batch<T>(statements);
+    },
+    exec(query: string) {
+      sink(1);
+      if (!d1.exec) throw new Error("D1 exec not available");
+      return d1.exec(query);
+    },
+  };
+}
+
 /** Create a Store backed by Cloudflare D1 (async drizzle driver). */
 export function createD1Store(d1: D1Binding, options?: StoreOptions): Store {
-  const db = drizzle(d1 as Parameters<typeof drizzle>[0], { schema });
-  // Store awaits all query terminators; D1 returns Promises at runtime.
-  return new Store(db as unknown as Db, { ...options, d1 });
+  let storeRef: Store | undefined;
+  const instrumented = instrumentD1Binding(d1, (n) => storeRef?.consumeSubrequests(n ?? 1));
+  const db = drizzle(instrumented as Parameters<typeof drizzle>[0], { schema });
+  storeRef = new Store(db as unknown as Db, { ...options, d1: instrumented });
+  return storeRef;
 }

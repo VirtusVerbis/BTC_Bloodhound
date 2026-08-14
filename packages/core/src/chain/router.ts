@@ -50,7 +50,10 @@ export class ChainRouter {
     rateLimitMs: number,
     options?: ChainRouterOptions,
   ) {
-    this.providers = [new EsploraProvider(esploraBase), new MempoolProvider(mempoolBase)];
+    this.providers = [
+      new EsploraProvider(esploraBase, store),
+      new MempoolProvider(mempoolBase, store),
+    ];
     this.sleepOnRateLimit = options?.sleepOnRateLimit ?? true;
     this.backoff = options?.backoff ?? {
       rateLimitMs,

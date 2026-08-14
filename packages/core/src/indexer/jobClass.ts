@@ -47,6 +47,9 @@ export function isIngestContinuation(payloadJson: string): boolean {
   const pending = payload.pendingTxids;
   if (Array.isArray(pending) && pending.length > 0) return true;
 
+  const pendingTxs = payload.pendingTxs;
+  if (Array.isArray(pendingTxs) && pendingTxs.length > 0) return true;
+
   const processedIndex = payload.processedIndex;
   if (typeof processedIndex === "number" && processedIndex > 0) return true;
 

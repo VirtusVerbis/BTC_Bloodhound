@@ -3,16 +3,25 @@ import { JOB_PRIORITY } from "../config.js";
 import { sha256Hex } from "../util/hash.js";
 import { normalizeBitcoinAddress } from "../util/address.js";
 import { insertAddressIfMissing } from "./insertIfMissing.js";
+import { instrumentedFetch, type SubrequestSink } from "../subrequest/instrumentedFetch.js";
+import type { JobSubrequestBudget } from "../indexer/subrequestBudget.js";
 
 export interface ColdcardHackTrackerData {
   addresses: string[];
   contentHash: string;
 }
 
-export async function fetchColdcardHackTracker(base: string): Promise<ColdcardHackTrackerData> {
-  const res = await fetch(`${base}/snapshot.json`, {
-    headers: { "User-Agent": "cointrace-indexer/1.0", Accept: "application/json" },
-  });
+export async function fetchColdcardHackTracker(
+  base: string,
+  sink?: SubrequestSink,
+): Promise<ColdcardHackTrackerData> {
+  const res = await instrumentedFetch(
+    `${base}/snapshot.json`,
+    {
+      headers: { "User-Agent": "cointrace-indexer/1.0", Accept: "application/json" },
+    },
+    sink,
+  );
   if (!res.ok) throw new Error(`ColdcardHackTracker fetch failed: ${res.status}`);
   const body = (await res.json()) as {
     updatedAt?: string;
@@ -80,9 +89,29 @@ export async function enqueueColdcardHackTrackerBatchJobs(
 export async function applyColdcardHackTrackerSyncBatch(
   store: Store,
   payload: ColdcardHackTrackerBatchPayload,
+  opts?: { jobSubreq?: JobSubrequestBudget },
 ): Promise<number> {
   let inserted = 0;
-  for (const address of payload.addresses ?? []) {
+  const addresses = payload.addresses ?? [];
+  for (let i = 0; i < addresses.length; i++) {
+    if (opts?.jobSubreq?.exhausted()) {
+      const remaining = addresses.slice(i);
+      if (remaining.length > 0) {
+        await store.enqueueJob(
+          "sync_vercel_trackers",
+          {
+            source: "coldcard_hack_tracker",
+            contentHash: payload.contentHash,
+            addresses: remaining,
+            finalize: payload.finalize,
+            lastAddressCount: payload.lastAddressCount,
+          },
+          JOB_PRIORITY.SYNC_VERCEL_TRACKERS,
+        );
+      }
+      return inserted;
+    }
+    const address = addresses[i]!;
     const added = await insertAddressIfMissing(store, address, {
       role: "hacker",
       isFlaggedHacker: true,

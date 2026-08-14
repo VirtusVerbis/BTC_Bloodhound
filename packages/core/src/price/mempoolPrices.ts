@@ -1,11 +1,20 @@
+import { instrumentedFetch, type SubrequestSink } from "../subrequest/instrumentedFetch.js";
+
 export function mempoolPricesUrl(mempoolBase: string): string {
   return `${mempoolBase.replace(/\/$/, "")}/v1/prices`;
 }
 
-export async function fetchMempoolBtcUsd(mempoolBase: string): Promise<{ usd: number; at: string }> {
-  const res = await fetch(mempoolPricesUrl(mempoolBase), {
-    headers: { "User-Agent": "cointrace-indexer/1.0", Accept: "application/json" },
-  });
+export async function fetchMempoolBtcUsd(
+  mempoolBase: string,
+  sink?: SubrequestSink,
+): Promise<{ usd: number; at: string }> {
+  const res = await instrumentedFetch(
+    mempoolPricesUrl(mempoolBase),
+    {
+      headers: { "User-Agent": "cointrace-indexer/1.0", Accept: "application/json" },
+    },
+    sink,
+  );
   if (!res.ok) throw new Error(`Mempool prices fetch failed: ${res.status}`);
 
   const body = (await res.json()) as { time?: number; USD?: number };

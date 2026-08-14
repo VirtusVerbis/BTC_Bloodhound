@@ -26,6 +26,8 @@ function mapJobRow(row: Row): Job {
     createdAt: str(row.created_at),
     startedAt: row.started_at != null ? str(row.started_at) : null,
     completedAt: row.completed_at != null ? str(row.completed_at) : null,
+    reclaimCount: num(row.reclaim_count),
+    reclaimProgressJson: row.reclaim_progress_json != null ? str(row.reclaim_progress_json) : null,
   };
 }
 
