@@ -4,6 +4,13 @@ import type { ChainRouter } from "../chain/router.js";
 import { scheduleBtcUsdPriceRefresh, scheduleDownstreamCrawl } from "./crawl.js";
 import { logCronDetail } from "./jobLog.js";
 import { processJobs } from "./processor.js";
+import {
+  createSubrequestBudget,
+  createUnlimitedSubrequestBudget,
+  scheduleSubrequestReserve,
+  type SubrequestBudget,
+} from "./subrequestBudget.js";
+import { formatCronScheduleDoneLine, formatCronTickDoneLine, type TickStopReason } from "./tickStats.js";
 
 export interface IndexerTickResult {
   scheduled: boolean;
@@ -18,6 +25,15 @@ export interface IndexerTickOptions {
 
 /** Extra lease time beyond tickBudgetMs so clearTickLease can run after the budget. */
 export const TICK_LEASE_SKEW_MS = 10_000;
+
+function attachSubrequestBudget(store: Store, config: AppConfig): SubrequestBudget {
+  const budget =
+    config.subrequestLimitPerInvocation > 0
+      ? createSubrequestBudget(config.subrequestLimitPerInvocation)
+      : createUnlimitedSubrequestBudget();
+  store.setSubrequestBudget(budget);
+  return budget;
+}
 
 /**
  * One indexer cron tick: optional schedule enqueue + process up to jobsPerTick jobs
@@ -35,19 +51,60 @@ export async function runIndexerTick(
   const logColor = opts?.logColor ?? config.indexerLogColor;
   const startedAt = Date.now();
   let jobsProcessed = 0;
+  let tickStop: TickStopReason = "idle";
+  let schedSubreq = 0;
+  const budget = attachSubrequestBudget(store, config);
 
   logCronDetail(jobDetails, "[cron] tick start", logColor);
   try {
     if (schedule) {
-      await scheduleBtcUsdPriceRefresh(store, config);
-      await scheduleDownstreamCrawl(store, config);
-      logCronDetail(jobDetails, "[cron] schedule done", logColor);
+      const maintCounter = (await store.getSchedulerState())?.maintenanceCronCounter ?? 0;
+      const reserve = scheduleSubrequestReserve({
+        scheduleSubrequestReserve: config.scheduleSubrequestReserve,
+        scheduleReserveMaintExtra: config.scheduleReserveMaintExtra,
+        hackerMaintenanceEveryNCrons: config.hackerMaintenanceEveryNCrons,
+        maintenanceCronCounter: maintCounter + 1,
+      });
+      const schedBefore = budget.used();
+      const btc = await scheduleBtcUsdPriceRefresh(store, router, config, budget, reserve);
+      const crawlStats = await scheduleDownstreamCrawl(store, config, budget, reserve);
+      schedSubreq = budget.used() - schedBefore;
+      logCronDetail(
+        jobDetails,
+        formatCronScheduleDoneLine({ ...crawlStats, btc }, budget, schedSubreq),
+        logColor,
+      );
     }
     const deadlineMs = Date.now() + config.tickBudgetMs;
-    jobsProcessed = await processJobs(store, router, config, { deadlineMs, jobDetails, logColor });
+    const jobResult = await processJobs(store, router, config, {
+      deadlineMs,
+      jobDetails,
+      logColor,
+      subrequestBudget: budget,
+    });
+    jobsProcessed = jobResult.processed;
+    tickStop = jobResult.stopReason;
     return { scheduled: schedule, jobsProcessed };
   } finally {
+    store.setSubrequestBudget(undefined);
     const elapsed = Date.now() - startedAt;
-    logCronDetail(jobDetails, `[cron] tick done processed=${jobsProcessed} ms=${elapsed}`, logColor);
+    const queue = await store.getQueueDepth();
+    const subreqLimit = budget.limit();
+    const subreqUsed = budget.used();
+    logCronDetail(
+      jobDetails,
+      formatCronTickDoneLine({
+        processed: jobsProcessed,
+        elapsedMs: elapsed,
+        subreqUsed,
+        subreqLimit,
+        schedSubreq,
+        workSubreq: subreqUsed - schedSubreq,
+        subreqRem: subreqLimit > 0 ? budget.remaining() : 0,
+        queue,
+        stop: tickStop,
+      }),
+      logColor,
+    );
   }
 }

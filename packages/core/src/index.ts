@@ -10,6 +10,8 @@ export * from "./indexer/processor.js";
 export * from "./indexer/crawl.js";
 export * from "./indexer/rebuildMode.js";
 export * from "./indexer/tick.js";
+export * from "./indexer/subrequestBudget.js";
+export * from "./indexer/tickStats.js";
 export * from "./scheduler/eta.js";
 export * from "./sources/coldcardwatch.js";
 export * from "./sources/coldcardHackTracker.js";

@@ -50,4 +50,12 @@ describe("isIngestContinuation", () => {
       ),
     ).toBe(true);
   });
+
+  it("returns true when trace edge apply is pending", () => {
+    expect(
+      isIngestContinuation(
+        JSON.stringify({ address: "bc1q", traceEdgesPending: true, traceEdgeIndex: 3 }),
+      ),
+    ).toBe(true);
+  });
 });

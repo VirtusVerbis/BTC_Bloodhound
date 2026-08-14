@@ -15,5 +15,5 @@ export type D1Db = DrizzleD1Database<typeof schema>;
 export function createD1Store(d1: D1Binding, options?: StoreOptions): Store {
   const db = drizzle(d1 as Parameters<typeof drizzle>[0], { schema });
   // Store awaits all query terminators; D1 returns Promises at runtime.
-  return new Store(db as unknown as Db, options);
+  return new Store(db as unknown as Db, { ...options, d1 });
 }

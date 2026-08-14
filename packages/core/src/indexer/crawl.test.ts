@@ -7,11 +7,16 @@ import {
 import { JOB_PRIORITY } from "../config.js";
 import type { AppConfig } from "../config.js";
 import type { Store } from "@cointrace/db";
+import type { ChainRouter } from "../chain/router.js";
 import { fetchMempoolBtcUsd } from "../price/mempoolPrices.js";
+import { createUnlimitedSubrequestBudget } from "./subrequestBudget.js";
 
 vi.mock("../price/mempoolPrices.js", () => ({
   fetchMempoolBtcUsd: vi.fn(),
 }));
+
+const unlimitedBudget = createUnlimitedSubrequestBudget();
+const mockRouter = {} as ChainRouter;
 
 const BACKFILL_DEDUPE = {
   dedupeTypes: ["backfill_hacker_address", "audit_hacker_backfill"],
@@ -72,6 +77,14 @@ function baseConfig(): AppConfig {
     indexerLogColor: false,
     jobDeferAfterAttempts: 20,
     jobDeferSec: 86400,
+    subrequestLimitPerInvocation: 0,
+    scheduleSubrequestReserve: 38,
+    scheduleReserveMaintExtra: 10,
+    maxSubrequestsPerJob: 0,
+    maxEdgesPerJob: 0,
+    maxGraphEdgesPerTx: 0,
+    d1BatchSize: 8,
+    syncAddressesPerJob: 5,
   };
 }
 
@@ -89,6 +102,11 @@ function mockStore(overrides: Partial<Store> = {}): Store {
     incrementMaintenanceCronCounter: vi.fn().mockResolvedValue(10),
     getBtcUsdPrice: vi.fn().mockResolvedValue(null),
     getSchedulerState: vi.fn().mockResolvedValue(null),
+    getQueueDepth: vi.fn().mockResolvedValue(0),
+    getSourceSync: vi.fn().mockResolvedValue(null),
+    getDownstreamFrontier: vi.fn().mockResolvedValue([]),
+    listDownstreamForPoll: vi.fn().mockResolvedValue([]),
+    setExpandStatus: vi.fn().mockResolvedValue(undefined),
     setBtcUsdRefreshAttemptAt: vi.fn().mockResolvedValue(undefined),
     setBtcUsdPrice: vi.fn().mockResolvedValue(undefined),
     ...overrides,
@@ -207,7 +225,7 @@ describe("scheduleDownstreamCrawl", () => {
       listDownstreamForPoll: vi.fn().mockResolvedValue([{ address: "bc1qdown2" }]),
     });
 
-    await scheduleDownstreamCrawl(store, baseConfig());
+    await scheduleDownstreamCrawl(store, baseConfig(), unlimitedBudget, 0);
 
     expect(store.enqueueJobIfAbsent).not.toHaveBeenCalled();
   });
@@ -221,7 +239,7 @@ describe("scheduleDownstreamCrawl", () => {
       listDownstreamForPoll: vi.fn().mockResolvedValue([]),
     });
 
-    await scheduleDownstreamCrawl(store, baseConfig());
+    await scheduleDownstreamCrawl(store, baseConfig(), unlimitedBudget, 0);
 
     expect(store.listHackers).not.toHaveBeenCalled();
   });
@@ -236,7 +254,7 @@ describe("scheduleDownstreamCrawl", () => {
       listDownstreamForPoll: vi.fn().mockResolvedValue([]),
     });
 
-    await scheduleDownstreamCrawl(store, baseConfig());
+    await scheduleDownstreamCrawl(store, baseConfig(), unlimitedBudget, 0);
 
     expect(store.enqueueJobIfAbsent).not.toHaveBeenCalledWith(
       "poll_hacker_address",
@@ -261,7 +279,7 @@ describe("scheduleDownstreamCrawl", () => {
       listDownstreamForPoll: vi.fn().mockResolvedValue([]),
     });
 
-    await scheduleDownstreamCrawl(store, baseConfig());
+    await scheduleDownstreamCrawl(store, baseConfig(), unlimitedBudget, 0);
 
     const pollCalls = (store.enqueueJobIfAbsent as ReturnType<typeof vi.fn>).mock.calls.filter(
       (c) => c[0] === "poll_hacker_address",
@@ -286,7 +304,7 @@ describe("scheduleDownstreamCrawl", () => {
       listDownstreamForPoll: vi.fn().mockResolvedValue([]),
     });
 
-    await scheduleDownstreamCrawl(store, baseConfig());
+    await scheduleDownstreamCrawl(store, baseConfig(), unlimitedBudget, 0);
 
     expect(store.enqueueJobIfAbsent).toHaveBeenCalledWith(
       "poll_hacker_address",
@@ -315,7 +333,7 @@ describe("scheduleDownstreamCrawl", () => {
       listDownstreamForPoll: vi.fn().mockResolvedValue([]),
     });
 
-    await scheduleDownstreamCrawl(store, baseConfig());
+    await scheduleDownstreamCrawl(store, baseConfig(), unlimitedBudget, 0);
 
     expect(store.enqueueJobIfAbsent).toHaveBeenCalledWith(
       "backfill_hacker_address",
@@ -341,7 +359,9 @@ describe("scheduleBtcUsdPriceRefresh", () => {
       getBtcUsdPrice: vi.fn().mockResolvedValue(null),
     });
 
-    await scheduleBtcUsdPriceRefresh(store, baseConfig());
+    const mode = await scheduleBtcUsdPriceRefresh(store, mockRouter, baseConfig(), unlimitedBudget, 0);
+
+    expect(mode).toBe("inline");
 
     expect(store.setBtcUsdRefreshAttemptAt).toHaveBeenCalledOnce();
     expect(fetchMempoolBtcUsd).toHaveBeenCalledWith("https://mempool.space/api");
@@ -356,7 +376,7 @@ describe("scheduleBtcUsdPriceRefresh", () => {
       getSchedulerState: vi.fn().mockResolvedValue(null),
     });
 
-    await scheduleBtcUsdPriceRefresh(store, baseConfig());
+    await scheduleBtcUsdPriceRefresh(store, mockRouter, baseConfig(), unlimitedBudget, 0);
 
     expect(fetchMempoolBtcUsd).toHaveBeenCalledOnce();
     expect(store.setBtcUsdPrice).toHaveBeenCalled();
@@ -368,7 +388,9 @@ describe("scheduleBtcUsdPriceRefresh", () => {
       getBtcUsdPrice: vi.fn().mockResolvedValue({ usd: 64000, at: freshAt }),
     });
 
-    await scheduleBtcUsdPriceRefresh(store, baseConfig());
+    const mode = await scheduleBtcUsdPriceRefresh(store, mockRouter, baseConfig(), unlimitedBudget, 0);
+
+    expect(mode).toBe("fresh");
 
     expect(fetchMempoolBtcUsd).not.toHaveBeenCalled();
     expect(store.setBtcUsdPrice).not.toHaveBeenCalled();
@@ -383,7 +405,7 @@ describe("scheduleBtcUsdPriceRefresh", () => {
       getSchedulerState: vi.fn().mockResolvedValue({ btcUsdRefreshAttemptAt: recentAttempt }),
     });
 
-    await scheduleBtcUsdPriceRefresh(store, baseConfig());
+    await scheduleBtcUsdPriceRefresh(store, mockRouter, baseConfig(), unlimitedBudget, 0);
 
     expect(fetchMempoolBtcUsd).not.toHaveBeenCalled();
     expect(store.setBtcUsdPrice).not.toHaveBeenCalled();
@@ -396,7 +418,7 @@ describe("scheduleBtcUsdPriceRefresh", () => {
       getBtcUsdPrice: vi.fn().mockResolvedValue(null),
     });
 
-    await scheduleBtcUsdPriceRefresh(store, baseConfig());
+    await scheduleBtcUsdPriceRefresh(store, mockRouter, baseConfig(), unlimitedBudget, 0);
 
     expect(store.setBtcUsdRefreshAttemptAt).toHaveBeenCalledOnce();
     expect(store.setBtcUsdPrice).not.toHaveBeenCalled();
@@ -416,8 +438,8 @@ describe("scheduleBtcUsdPriceRefresh", () => {
       }),
     });
 
-    await scheduleBtcUsdPriceRefresh(store, baseConfig());
-    await scheduleBtcUsdPriceRefresh(store, baseConfig());
+    await scheduleBtcUsdPriceRefresh(store, mockRouter, baseConfig(), unlimitedBudget, 0);
+    await scheduleBtcUsdPriceRefresh(store, mockRouter, baseConfig(), unlimitedBudget, 0);
 
     expect(fetchMempoolBtcUsd).toHaveBeenCalledOnce();
     expect(store.setBtcUsdPrice).not.toHaveBeenCalled();

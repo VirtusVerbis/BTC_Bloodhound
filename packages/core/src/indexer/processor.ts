@@ -6,18 +6,50 @@ import { JOB_PRIORITY } from "../config.js";
 import { ChainRouter, RateLimitNotReadyError } from "../chain/router.js";
 import { txInvolvesSpend, isRateLimitError, isTransientFetchError } from "../chain/esplora.js";
 import { getHackerAddressSet, processTxForHackTrace } from "../graph/builder.js";
-import { applyColdcardWatchSync, fetchColdcardWatch } from "../sources/coldcardwatch.js";
+import { applyColdcardWatchSync, applyColdcardWatchSyncBatch, enqueueColdcardWatchBatchJobs, fetchColdcardWatch } from "../sources/coldcardwatch.js";
 import {
   applyColdcardHackTrackerSync,
+  applyColdcardHackTrackerSyncBatch,
+  enqueueColdcardHackTrackerBatchJobs,
   fetchColdcardHackTracker,
 } from "../sources/coldcardHackTracker.js";
-import { applyColdcardSweepWatchSync, fetchColdcardSweepWatch } from "../sources/coldcardSweepWatch.js";
+import {
+  applyColdcardSweepWatchSync,
+  applyColdcardSweepWatchSyncBatch,
+  enqueueColdcardSweepWatchBatchJobs,
+  fetchColdcardSweepWatch,
+} from "../sources/coldcardSweepWatch.js";
 import { fetchMempoolBtcUsd } from "../price/mempoolPrices.js";
 import { normalizeBitcoinAddress } from "../util/address.js";
 import { logJobDefer, logJobDone, logJobFail, logJobStart } from "./jobLog.js";
 import { isIngestJobType } from "./jobClass.js";
 import { processTxPriority } from "./rebuildMode.js";
 import { createChainCallBudget } from "./chainCallBudget.js";
+import type { SubrequestBudget } from "./subrequestBudget.js";
+import type { JobRunStats, TickStopReason } from "./tickStats.js";
+import type { HackTraceOptions } from "../graph/builder.js";
+
+export interface ProcessJobsResult {
+  processed: number;
+  stopReason: TickStopReason;
+}
+
+function jobStatsFromTrace(
+  traceResult: {
+    traceComplete: boolean;
+    nextEdgeIndex: number;
+    edgesApplied: number;
+    traceEdgeTotal: number;
+  },
+  continued: boolean,
+): JobRunStats {
+  return {
+    continued,
+    traceEdgeIndex: traceResult.nextEdgeIndex,
+    traceEdgeTotal: traceResult.traceEdgeTotal,
+    edgesApplied: traceResult.edgesApplied,
+  };
+}
 
 async function readJsonText(filePath: string, inlineJson: string | null | undefined): Promise<string> {
   if (inlineJson?.trim()) return inlineJson;
@@ -32,30 +64,75 @@ export interface BackfillPayload {
   pagesExhausted?: boolean;
   newestTxid?: string;
   newestBlockHeight?: number | null;
+  traceTxid?: string;
+  traceEdgeIndex?: number;
+  traceEdgesPending?: boolean;
+}
+
+function traceProcessOptions(
+  config: AppConfig,
+  payload: Pick<BackfillPayload, "traceTxid" | "traceEdgeIndex" | "traceEdgesPending">,
+  txid: string,
+  extra?: HackTraceOptions,
+): HackTraceOptions & { maxGraphEdgesPerTx?: number; maxEdgesPerJob?: number; traceEdgeIndex?: number } {
+  return {
+    ...extra,
+    traceEdgeIndex:
+      payload.traceEdgesPending && payload.traceTxid === txid ? (payload.traceEdgeIndex ?? 0) : 0,
+    maxGraphEdgesPerTx: config.maxGraphEdgesPerTx > 0 ? config.maxGraphEdgesPerTx : undefined,
+    maxEdgesPerJob: config.maxEdgesPerJob > 0 ? config.maxEdgesPerJob : undefined,
+  };
+}
+
+function clearTraceFields(payload: BackfillPayload): BackfillPayload {
+  return {
+    ...payload,
+    traceTxid: undefined,
+    traceEdgeIndex: undefined,
+    traceEdgesPending: undefined,
+  };
 }
 
 async function processAddressTxs(
   store: Store,
   router: ChainRouter,
+  config: AppConfig,
   address: string,
   txs: Array<{ txid: string }>,
   hackers: Set<string>,
   hop: number,
   maxCalls?: number,
-): Promise<void> {
+  tracePayload?: Pick<BackfillPayload, "traceTxid" | "traceEdgeIndex" | "traceEdgesPending">,
+): Promise<Pick<BackfillPayload, "traceTxid" | "traceEdgeIndex" | "traceEdgesPending"> | null> {
   let calls = 0;
   for (const t of txs) {
     if (maxCalls != null && calls >= maxCalls) break;
-    if (await store.getTransaction(t.txid)) continue;
-    const tx = await router.withProvider((p) => p.getTx(t.txid));
+    const txid = t.txid;
+    const traceActive = tracePayload?.traceEdgesPending && tracePayload.traceTxid === txid;
+    if (!traceActive && (await store.getTransaction(txid))) continue;
+    const tx = await router.withProvider((p) => p.getTx(txid));
     calls++;
-    if (!txInvolvesSpend(tx, address)) continue;
-    await processTxForHackTrace(store, router, t.txid, hackers, {
-      tx,
-      spendingAddress: address,
-      spendingHop: hop,
-    });
+    if (!traceActive && !txInvolvesSpend(tx, address)) continue;
+    const traceResult = await processTxForHackTrace(
+      store,
+      router,
+      txid,
+      hackers,
+      traceProcessOptions(config, tracePayload ?? {}, txid, {
+        tx,
+        spendingAddress: address,
+        spendingHop: hop,
+      }),
+    );
+    if (!traceResult.traceComplete) {
+      return {
+        traceTxid: txid,
+        traceEdgeIndex: traceResult.nextEdgeIndex,
+        traceEdgesPending: true,
+      };
+    }
   }
+  return null;
 }
 
 export async function runSeedPublicHackers(
@@ -192,7 +269,7 @@ export async function runRebuildHackEdgesWait(
   console.log(`Processing ${total} transaction(s)...`);
   let processed = 0;
   while ((await store.countActiveJobs("process_tx")) > 0) {
-    const n = await processJobs(store, router, config);
+    const { processed: n } = await processJobs(store, router, config);
     processed += n;
     if (processed > 0 && processed % 25 === 0) {
       const remaining = await store.countActiveJobs("process_tx");
@@ -214,6 +291,9 @@ function parseBackfillPayload(raw: Record<string, unknown>): BackfillPayload {
     pagesExhausted: raw.pagesExhausted as boolean | undefined,
     newestTxid: raw.newestTxid as string | undefined,
     newestBlockHeight: raw.newestBlockHeight as number | null | undefined,
+    traceTxid: raw.traceTxid as string | undefined,
+    traceEdgeIndex: raw.traceEdgeIndex as number | undefined,
+    traceEdgesPending: raw.traceEdgesPending as boolean | undefined,
   };
 }
 
@@ -226,7 +306,8 @@ export function hasResumableBackfillState(
     p.chainCursor != null ||
     (Array.isArray(p.pendingTxids) && p.pendingTxids.length > 0) ||
     p.pagesExhausted === true ||
-    p.newestTxid != null
+    p.newestTxid != null ||
+    p.traceEdgesPending === true
   );
 }
 
@@ -236,7 +317,8 @@ async function hydrateBackfillPayload(store: Store, rawPayload: Record<string, u
     parsed.chainCursor != null ||
     (parsed.pendingTxids != null && parsed.pendingTxids.length > 0) ||
     parsed.pagesExhausted === true ||
-    parsed.newestTxid != null;
+    parsed.newestTxid != null ||
+    parsed.traceEdgesPending === true;
   if (hasContinuation) return parsed;
 
   const saved = await store.getBackfillState(parsed.address);
@@ -266,6 +348,9 @@ function toPersistedPayload(payload: BackfillPayload): Record<string, unknown> {
     pagesExhausted: payload.pagesExhausted,
     newestTxid: payload.newestTxid,
     newestBlockHeight: payload.newestBlockHeight,
+    traceTxid: payload.traceTxid,
+    traceEdgeIndex: payload.traceEdgeIndex,
+    traceEdgesPending: payload.traceEdgesPending,
   };
 }
 
@@ -290,7 +375,7 @@ async function backfillHacker(
   config: AppConfig,
   rawPayload: Record<string, unknown>,
   options?: { enqueueContinuation?: boolean },
-): Promise<void> {
+): Promise<JobRunStats | undefined> {
   const enqueueContinuation = options?.enqueueContinuation !== false;
   const payload = await hydrateBackfillPayload(store, rawPayload);
   const address = payload.address;
@@ -340,7 +425,7 @@ async function backfillHacker(
           },
           enqueueContinuation,
         );
-        return;
+        return { continued: true };
       }
     }
   }
@@ -349,24 +434,69 @@ async function backfillHacker(
     ? budget.processBatchLimit(config.backfillTxsPerJob)
     : config.backfillTxsPerJob;
   let processed = 0;
+  let traceTxid = payload.traceTxid;
+  let traceEdgeIndex = payload.traceEdgeIndex;
+  let traceEdgesPending = payload.traceEdgesPending;
   while (
     processedIndex < pendingTxids.length &&
     processed < processLimit &&
     budget.canCall()
   ) {
     const txid = pendingTxids[processedIndex]!;
-    processedIndex++;
-    if (await store.getTransaction(txid)) continue;
-    await processTxForHackTrace(store, router, txid, hackers);
+    const traceActive = traceEdgesPending && traceTxid === txid;
+    if (!traceActive && (await store.getTransaction(txid))) {
+      processedIndex++;
+      continue;
+    }
+    const tx = await router.withProvider((p) => p.getTx(txid));
     budget.consume();
     processed++;
+    if (!traceActive && !txInvolvesSpend(tx, address)) {
+      processedIndex++;
+      traceTxid = undefined;
+      traceEdgeIndex = undefined;
+      traceEdgesPending = undefined;
+      continue;
+    }
+    const traceResult = await processTxForHackTrace(
+      store,
+      router,
+      txid,
+      hackers,
+      traceProcessOptions(
+        config,
+        { traceTxid, traceEdgeIndex, traceEdgesPending },
+        txid,
+        { tx, spendingAddress: address, spendingHop: 0 },
+      ),
+    );
+    if (!traceResult.traceComplete) {
+      const pendingPayload: BackfillPayload = {
+        address,
+        chainCursor,
+        pendingTxids,
+        processedIndex,
+        pagesExhausted,
+        newestTxid,
+        newestBlockHeight,
+        traceTxid: txid,
+        traceEdgeIndex: traceResult.nextEdgeIndex,
+        traceEdgesPending: true,
+      };
+      await enqueueBackfillContinuation(store, pendingPayload, enqueueContinuation);
+      return jobStatsFromTrace(traceResult, true);
+    }
+    processedIndex++;
+    traceTxid = undefined;
+    traceEdgeIndex = undefined;
+    traceEdgesPending = undefined;
     if (limited && budget.exhausted()) break;
   }
 
   const hasPending = processedIndex < pendingTxids.length;
-  const needsMore = hasPending || !pagesExhausted;
+  const needsMore = hasPending || !pagesExhausted || traceEdgesPending === true;
 
-  const currentPayload: BackfillPayload = {
+  const currentPayload: BackfillPayload = clearTraceFields({
     address,
     chainCursor,
     pendingTxids: hasPending ? pendingTxids : [],
@@ -374,11 +504,14 @@ async function backfillHacker(
     pagesExhausted,
     newestTxid,
     newestBlockHeight,
-  };
+    traceTxid,
+    traceEdgeIndex,
+    traceEdgesPending,
+  });
 
   if (needsMore) {
     await enqueueBackfillContinuation(store, currentPayload, enqueueContinuation);
-    return;
+    return { continued: true };
   }
 
   if (newestTxid) {
@@ -389,6 +522,7 @@ async function backfillHacker(
   }
   await store.upsertBackfillState(address, null, true);
   await store.setExpandStatus(address, "expanded");
+  return { continued: false };
 }
 
 function rateLimitBackoffMs(err: unknown): number {
@@ -679,7 +813,7 @@ async function pollDownstream(
   }
   if (batch.length > 0) {
     const maxCalls = limited ? 1 : undefined;
-    await processAddressTxs(store, router, address, batch, hackers, hop, maxCalls);
+    await processAddressTxs(store, router, config, address, batch, hackers, hop, maxCalls);
     if (limited) budget.consume();
   }
 
@@ -719,6 +853,9 @@ interface ExpandPayload {
   newestTxid?: string;
   newestBlockHeight?: number | null;
   pagesFetched?: number;
+  traceTxid?: string;
+  traceEdgeIndex?: number;
+  traceEdgesPending?: boolean;
 }
 
 /** Chunked expand: paginate address txs and process up to backfillTxsPerJob per job tick. */
@@ -727,7 +864,7 @@ async function expandDownstream(
   router: ChainRouter,
   config: AppConfig,
   rawPayload: Record<string, unknown>,
-): Promise<void> {
+): Promise<JobRunStats | undefined> {
   const address = rawPayload.address as string;
   let pendingTxids = (rawPayload.pendingTxids as string[] | undefined) ?? [];
   let processedIndex = (rawPayload.processedIndex as number | undefined) ?? 0;
@@ -736,6 +873,9 @@ async function expandDownstream(
   let newestTxid = rawPayload.newestTxid as string | undefined;
   let newestBlockHeight = (rawPayload.newestBlockHeight as number | null | undefined) ?? null;
   let pagesFetched = (rawPayload.pagesFetched as number | undefined) ?? 0;
+  let traceTxid = rawPayload.traceTxid as string | undefined;
+  let traceEdgeIndex = rawPayload.traceEdgeIndex as number | undefined;
+  let traceEdgesPending = rawPayload.traceEdgesPending as boolean | undefined;
 
   const addr = await store.getAddress(address);
   const hop = addr?.hopFromHacker ?? 0;
@@ -784,7 +924,7 @@ async function expandDownstream(
           nextPayload as unknown as Record<string, unknown>,
           JOB_PRIORITY.CRON_EXPAND,
         );
-        return;
+        return { continued: true };
       }
     }
   } else if (pagesFetched >= maxPages) {
@@ -795,24 +935,68 @@ async function expandDownstream(
     ? budget.processBatchLimit(config.backfillTxsPerJob)
     : config.backfillTxsPerJob;
   let processed = 0;
-  const batch: Array<{ txid: string }> = [];
   while (
     processedIndex < pendingTxids.length &&
     processed < processLimit &&
     budget.canCall()
   ) {
-    batch.push({ txid: pendingTxids[processedIndex]! });
-    processedIndex++;
+    const txid = pendingTxids[processedIndex]!;
+    const traceActive = traceEdgesPending && traceTxid === txid;
+    if (!traceActive && (await store.getTransaction(txid))) {
+      processedIndex++;
+      continue;
+    }
+    const tx = await router.withProvider((p) => p.getTx(txid));
+    budget.consume();
     processed++;
-  }
-  if (batch.length > 0) {
-    const maxCalls = limited ? 1 : undefined;
-    await processAddressTxs(store, router, address, batch, hackers, hop, maxCalls);
-    if (limited) budget.consume();
+    if (!traceActive && !txInvolvesSpend(tx, address)) {
+      processedIndex++;
+      traceTxid = undefined;
+      traceEdgeIndex = undefined;
+      traceEdgesPending = undefined;
+      continue;
+    }
+    const traceResult = await processTxForHackTrace(
+      store,
+      router,
+      txid,
+      hackers,
+      traceProcessOptions(
+        config,
+        { traceTxid, traceEdgeIndex, traceEdgesPending },
+        txid,
+        { tx, spendingAddress: address, spendingHop: hop },
+      ),
+    );
+    if (!traceResult.traceComplete) {
+      await store.enqueueJob(
+        "expand_downstream",
+        {
+          address,
+          chainCursor,
+          pendingTxids,
+          processedIndex,
+          pagesExhausted,
+          newestTxid,
+          newestBlockHeight,
+          pagesFetched,
+          traceTxid: txid,
+          traceEdgeIndex: traceResult.nextEdgeIndex,
+          traceEdgesPending: true,
+        } as unknown as Record<string, unknown>,
+        JOB_PRIORITY.CRON_EXPAND,
+      );
+      return jobStatsFromTrace(traceResult, true);
+    }
+    processedIndex++;
+    traceTxid = undefined;
+    traceEdgeIndex = undefined;
+    traceEdgesPending = undefined;
+    if (limited && budget.exhausted()) break;
   }
 
   const hasPending = processedIndex < pendingTxids.length;
-  const needsMore = hasPending || !pagesExhausted;
+  const needsMore = hasPending || !pagesExhausted || traceEdgesPending === true;
 
   const nextPayload: ExpandPayload = {
     address,
@@ -823,6 +1007,9 @@ async function expandDownstream(
     newestTxid,
     newestBlockHeight,
     pagesFetched,
+    traceTxid,
+    traceEdgeIndex,
+    traceEdgesPending,
   };
 
   if (needsMore) {
@@ -831,7 +1018,7 @@ async function expandDownstream(
       nextPayload as unknown as Record<string, unknown>,
       JOB_PRIORITY.CRON_EXPAND,
     );
-    return;
+    return { continued: true };
   }
 
   await store.setExpandStatus(address, "expanded");
@@ -850,6 +1037,7 @@ async function expandDownstream(
       });
     }
   }
+  return { continued: false };
 }
 
 async function refreshBalance(store: Store, router: ChainRouter, address: string): Promise<void> {
@@ -863,14 +1051,45 @@ async function refreshBalance(store: Store, router: ChainRouter, address: string
   });
 }
 
-async function syncColdcardwatch(store: Store, config: AppConfig): Promise<void> {
+async function syncColdcardwatch(
+  store: Store,
+  config: AppConfig,
+  payload: Record<string, unknown>,
+  budget?: SubrequestBudget,
+): Promise<void> {
+  if (payload.collectors != null || payload.victims != null || payload.downstream != null) {
+    await applyColdcardWatchSyncBatch(store, payload as unknown as Parameters<typeof applyColdcardWatchSyncBatch>[1]);
+    return;
+  }
+  if (budget && budget.limit() > 0) budget.consume(1);
   const data = await fetchColdcardWatch(config.coldcardwatchBase);
   const prev = await store.getSourceSync("coldcardwatch");
   if (prev?.lastContentHash === data.contentHash) return;
-  await applyColdcardWatchSync(store, data);
+  await enqueueColdcardWatchBatchJobs(store, data, config.syncAddressesPerJob);
 }
 
-async function syncVercelTrackers(store: Store, config: AppConfig): Promise<void> {
+async function syncVercelTrackers(
+  store: Store,
+  config: AppConfig,
+  payload: Record<string, unknown>,
+  budget?: SubrequestBudget,
+): Promise<void> {
+  if (payload.source === "coldcard_hack_tracker" && payload.addresses != null) {
+    await applyColdcardHackTrackerSyncBatch(
+      store,
+      payload as unknown as Parameters<typeof applyColdcardHackTrackerSyncBatch>[1],
+    );
+    return;
+  }
+  if (payload.source === "coldcard_sweep_watch" && (payload.collectors != null || payload.vaults != null)) {
+    await applyColdcardSweepWatchSyncBatch(
+      store,
+      payload as unknown as Parameters<typeof applyColdcardSweepWatchSyncBatch>[1],
+    );
+    return;
+  }
+
+  if (budget && budget.limit() > 0) budget.consume(2);
   const [hackData, sweepData] = await Promise.all([
     fetchColdcardHackTracker(config.coldcardHackTrackerBase),
     fetchColdcardSweepWatch(config.coldcardSweepWatchBase),
@@ -882,8 +1101,8 @@ async function syncVercelTrackers(store: Store, config: AppConfig): Promise<void
   const sweepUnchanged = prevSweep?.lastContentHash === sweepData.contentHash;
   if (hackUnchanged && sweepUnchanged) return;
 
-  if (!hackUnchanged) await applyColdcardHackTrackerSync(store, hackData);
-  if (!sweepUnchanged) await applyColdcardSweepWatchSync(store, sweepData);
+  if (!hackUnchanged) await enqueueColdcardHackTrackerBatchJobs(store, hackData, config.syncAddressesPerJob);
+  if (!sweepUnchanged) await enqueueColdcardSweepWatchBatchJobs(store, sweepData, config.syncAddressesPerJob);
 }
 
 export async function processJob(
@@ -891,12 +1110,11 @@ export async function processJob(
   router: ChainRouter,
   config: AppConfig,
   job: Job,
-): Promise<void> {
+): Promise<JobRunStats | undefined> {
   const payload = JSON.parse(job.payloadJson) as Record<string, unknown>;
   switch (job.type) {
     case "backfill_hacker_address":
-      await backfillHacker(store, router, config, payload);
-      break;
+      return backfillHacker(store, router, config, payload);
     case "audit_hacker_backfill":
       await auditHackerBackfill(store, router, config, payload.address as string);
       break;
@@ -907,8 +1125,7 @@ export async function processJob(
       await pollDownstream(store, router, config, payload);
       break;
     case "expand_downstream":
-      await expandDownstream(store, router, config, payload);
-      break;
+      return expandDownstream(store, router, config, payload);
     case "refresh_live_balance":
       await refreshBalance(store, router, payload.address as string);
       break;
@@ -918,14 +1135,19 @@ export async function processJob(
       break;
     }
     case "sync_coldcardwatch":
-      await syncColdcardwatch(store, config);
+      await syncColdcardwatch(store, config, payload);
       break;
     case "sync_vercel_trackers":
-      await syncVercelTrackers(store, config);
+      await syncVercelTrackers(store, config, payload);
       break;
-    case "process_tx":
-      await processTxForHackTrace(store, router, payload.txid as string, await getHackerAddressSet(store));
+    case "process_tx": {
+      const hackers = await getHackerAddressSet(store);
+      await processTxForHackTrace(store, router, payload.txid as string, hackers, {
+        maxGraphEdgesPerTx: config.maxGraphEdgesPerTx > 0 ? config.maxGraphEdgesPerTx : undefined,
+        maxEdgesPerJob: config.maxEdgesPerJob > 0 ? config.maxEdgesPerJob : undefined,
+      });
       break;
+    }
     default:
       throw new Error(`Unknown job type: ${job.type}`);
   }
@@ -987,35 +1209,83 @@ export async function processJobs(
   store: Store,
   router: ChainRouter,
   config: AppConfig,
-  opts?: { deadlineMs?: number; jobDetails?: boolean; logColor?: boolean },
-): Promise<number> {
+  opts?: {
+    deadlineMs?: number;
+    jobDetails?: boolean;
+    logColor?: boolean;
+    subrequestBudget?: SubrequestBudget;
+  },
+): Promise<ProcessJobsResult> {
   const jobDetails = opts?.jobDetails ?? false;
   const logColor = opts?.logColor ?? false;
+  const budget = opts?.subrequestBudget;
   let processed = 0;
+  let stopReason: TickStopReason = "jobs_cap";
   for (let i = 0; i < config.jobsPerTick; i++) {
-    if (opts?.deadlineMs != null && Date.now() >= opts.deadlineMs) break;
+    if (opts?.deadlineMs != null && Date.now() >= opts.deadlineMs) {
+      stopReason = "deadline";
+      break;
+    }
+    if (budget && budget.limit() > 0) {
+      const reserve = config.scheduleSubrequestReserve;
+      if (budget.remaining() <= reserve + 2) {
+        stopReason = "subreq";
+        break;
+      }
+    }
+    if (!store.canUseSubrequests(1)) {
+      stopReason = "subreq";
+      break;
+    }
     const job =
       (await store.claimNextIngestJob({ preferContinuation: true })) ?? (await store.claimNextJob());
-    if (!job) break;
+    if (!job) {
+      stopReason = "idle";
+      break;
+    }
     if (jobDetails) {
       logJobStart(job, { color: logColor });
     }
+    const subreqBefore = budget?.used() ?? 0;
     try {
+      let runStats: JobRunStats | undefined;
       if (job.type === "sync_coldcardwatch") {
-        await syncColdcardwatch(store, config);
+        await syncColdcardwatch(
+          store,
+          config,
+          JSON.parse(job.payloadJson) as Record<string, unknown>,
+          budget,
+        );
       } else if (job.type === "sync_vercel_trackers") {
-        await syncVercelTrackers(store, config);
+        await syncVercelTrackers(
+          store,
+          config,
+          JSON.parse(job.payloadJson) as Record<string, unknown>,
+          budget,
+        );
       } else {
-        await processJob(store, router, config, job);
+        runStats = await processJob(store, router, config, job);
       }
       await store.completeJob(job.id);
       await store.maybeClearQueueSchedulingPause();
       processed++;
+      const workSubreq = (budget?.used() ?? 0) - subreqBefore;
       const queueDepth = await store.getQueueDepth();
-      logJobDone(job, formatJobDurationMs(jobDurationMs(job)), queueDepth, { color: logColor });
+      logJobDone(job, formatJobDurationMs(jobDurationMs(job)), queueDepth, {
+        color: logColor,
+        runStats,
+        workSubreq: budget && budget.limit() > 0 ? workSubreq : undefined,
+      });
+      if (budget && budget.limit() > 0 && budget.remaining() <= config.scheduleSubrequestReserve + 2) {
+        stopReason = "subreq";
+        break;
+      }
     } catch (err) {
-      if (await handleJobFailure(store, config, job, err, logColor)) break;
+      if (await handleJobFailure(store, config, job, err, logColor)) {
+        stopReason = "subreq";
+        break;
+      }
     }
   }
-  return processed;
+  return { processed, stopReason };
 }

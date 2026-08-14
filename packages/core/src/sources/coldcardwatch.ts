@@ -65,6 +65,134 @@ export async function fetchColdcardWatch(base: string): Promise<ColdcardWatchDat
   };
 }
 
+export interface ColdcardWatchBatchPayload {
+  contentHash: string;
+  collectors?: string[];
+  victims?: string[];
+  downstream?: string[];
+  finalize?: boolean;
+  lastAddressCount?: number;
+}
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += Math.max(1, size)) {
+    out.push(items.slice(i, i + size));
+  }
+  return out;
+}
+
+export async function enqueueColdcardWatchBatchJobs(
+  store: Store,
+  data: ColdcardWatchData,
+  perJob: number,
+): Promise<void> {
+  const jobs: ColdcardWatchBatchPayload[] = [];
+  for (const chunk of chunkArray(data.collectors, perJob)) {
+    jobs.push({ contentHash: data.contentHash, collectors: chunk });
+  }
+  for (const chunk of chunkArray(data.victims, perJob)) {
+    jobs.push({ contentHash: data.contentHash, victims: chunk });
+  }
+  for (const chunk of chunkArray(data.downstream, perJob)) {
+    jobs.push({ contentHash: data.contentHash, downstream: chunk });
+  }
+  if (jobs.length === 0) {
+    await store.upsertSourceSync("coldcardwatch", {
+      lastAddressCount: data.collectors.length + data.victims.length,
+      lastContentHash: data.contentHash,
+    });
+    return;
+  }
+  const last = jobs[jobs.length - 1]!;
+  last.finalize = true;
+  last.lastAddressCount = data.collectors.length + data.victims.length;
+  for (const payload of jobs) {
+    await store.enqueueJob(
+      "sync_coldcardwatch",
+      payload as unknown as Record<string, unknown>,
+      JOB_PRIORITY.SYNC_COLDCARDWATCH,
+    );
+  }
+}
+
+export async function applyColdcardWatchSyncBatch(
+  store: Store,
+  payload: ColdcardWatchBatchPayload,
+): Promise<void> {
+  for (const address of payload.collectors ?? []) {
+    const inserted = await store.insertAddressIfMissing({
+      address,
+      role: "hacker",
+      isFlaggedHacker: true,
+      source: "coldcardwatch",
+      hopFromHacker: 0,
+      expandStatus: "pending",
+    });
+    if (!inserted) {
+      await store.upsertAddress({
+        address,
+        role: "hacker",
+        isFlaggedHacker: true,
+        source: "coldcardwatch",
+        hopFromHacker: 0,
+      });
+    }
+    if (inserted) {
+      await store.enqueueJobIfAbsent(
+        "backfill_hacker_address",
+        { address },
+        JOB_PRIORITY.BACKFILL_HACKER,
+        undefined,
+        { address },
+      );
+    } else {
+      await store.enqueueJobIfAbsent(
+        "poll_hacker_address",
+        { address },
+        JOB_PRIORITY.POLL_HACKER,
+        undefined,
+        { address },
+      );
+    }
+  }
+
+  if ((payload.victims?.length ?? 0) > 0) {
+    await store.upsertAddressesBatch(
+      (payload.victims ?? []).map((address) => ({
+        address,
+        role: "victim",
+        source: "coldcardwatch",
+      })),
+    );
+  }
+
+  for (const address of payload.downstream ?? []) {
+    const inserted = await store.insertAddressIfMissing({
+      address,
+      role: "downstream",
+      source: "coldcardwatch",
+      expandStatus: "pending",
+    });
+    if (inserted) {
+      await store.enqueueJobIfAbsent(
+        "expand_downstream",
+        { address, cron: true },
+        JOB_PRIORITY.CRON_EXPAND,
+        undefined,
+        { address },
+      );
+    }
+  }
+
+  if (payload.finalize) {
+    await store.upsertSourceSync("coldcardwatch", {
+      lastAddressCount: payload.lastAddressCount ?? 0,
+      lastContentHash: payload.contentHash,
+    });
+  }
+}
+
 export async function applyColdcardWatchSync(store: Store, data: ColdcardWatchData): Promise<void> {
   for (const address of data.collectors) {
     const inserted = await store.insertAddressIfMissing({

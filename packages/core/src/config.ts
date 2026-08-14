@@ -95,6 +95,22 @@ export interface AppConfig {
   jobDeferAfterAttempts: number;
   /** How long deferred ingest jobs stay out of the claim queue (seconds). */
   jobDeferSec: number;
+  /** Cloudflare subrequests per Worker invocation (0 = unlimited). */
+  subrequestLimitPerInvocation: number;
+  /** Reserve subrequests for schedule phase + tick overhead. */
+  scheduleSubrequestReserve: number;
+  /** Extra schedule reserve on hacker maintenance ticks. */
+  scheduleReserveMaintExtra: number;
+  /** Stop a job after this many subrequests; continue next tick. */
+  maxSubrequestsPerJob: number;
+  /** Max graph edges applied per job chunk. */
+  maxEdgesPerJob: number;
+  /** CPU guard: cap edges computed per tx. */
+  maxGraphEdgesPerTx: number;
+  /** Max D1 statements per batch() call. */
+  d1BatchSize: number;
+  /** Source sync addresses processed per job chunk. */
+  syncAddressesPerJob: number;
 }
 
 let envFileLoaded = false;
@@ -198,6 +214,14 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     indexerLogColor: env.INDEXER_LOG_COLOR === "1",
     jobDeferAfterAttempts: Number(env.JOB_DEFER_AFTER_ATTEMPTS ?? 20),
     jobDeferSec: Number(env.JOB_DEFER_SEC ?? 86400),
+    subrequestLimitPerInvocation: Number(env.SUBREQUEST_LIMIT_PER_INVOCATION ?? 0),
+    scheduleSubrequestReserve: Number(env.SCHEDULE_SUBREQUEST_RESERVE ?? 38),
+    scheduleReserveMaintExtra: Number(env.SCHEDULE_RESERVE_MAINT_EXTRA ?? 10),
+    maxSubrequestsPerJob: Number(env.MAX_SUBREQUESTS_PER_JOB ?? 0),
+    maxEdgesPerJob: Number(env.MAX_EDGES_PER_JOB ?? 0),
+    maxGraphEdgesPerTx: Number(env.MAX_GRAPH_EDGES_PER_TX ?? 0),
+    d1BatchSize: Number(env.D1_BATCH_SIZE ?? 8),
+    syncAddressesPerJob: Number(env.SYNC_ADDRESSES_PER_JOB ?? 5),
   };
 }
 

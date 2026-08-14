@@ -140,8 +140,20 @@ export function summarizeJobPayload(type: string, payload: Record<string, unknow
     }
     case "refresh_live_balance":
       return { address: payload.address };
-    case "expand_downstream":
-      return { address: payload.address, cron: payload.cron === true };
+    case "expand_downstream": {
+      const pendingTxids = payload.pendingTxids;
+      return {
+        address: payload.address,
+        cron: payload.cron === true,
+        continuation: isIngestContinuation(JSON.stringify(payload)),
+        pendingTxidsCount: Array.isArray(pendingTxids) ? pendingTxids.length : 0,
+        processedIndex: payload.processedIndex ?? null,
+        chainCursor: payload.chainCursor ?? null,
+        pagesExhausted: payload.pagesExhausted ?? null,
+        traceEdgeIndex: payload.traceEdgeIndex ?? null,
+        traceEdgesPending: payload.traceEdgesPending === true,
+      };
+    }
     case "process_tx":
       return { txid: payload.txid };
     case "sync_coldcardwatch":

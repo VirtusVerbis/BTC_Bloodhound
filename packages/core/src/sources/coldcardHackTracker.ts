@@ -33,6 +33,83 @@ export async function fetchColdcardHackTracker(base: string): Promise<ColdcardHa
   return { addresses, contentHash };
 }
 
+export interface ColdcardHackTrackerBatchPayload {
+  contentHash: string;
+  addresses?: string[];
+  finalize?: boolean;
+  lastAddressCount?: number;
+}
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += Math.max(1, size)) {
+    out.push(items.slice(i, i + size));
+  }
+  return out;
+}
+
+export async function enqueueColdcardHackTrackerBatchJobs(
+  store: Store,
+  data: ColdcardHackTrackerData,
+  perJob: number,
+): Promise<void> {
+  const chunks = chunkArray(data.addresses, perJob);
+  if (chunks.length === 0) {
+    await store.upsertSourceSync("coldcard_hack_tracker", {
+      lastAddressCount: data.addresses.length,
+      lastContentHash: data.contentHash,
+    });
+    return;
+  }
+  for (let i = 0; i < chunks.length; i++) {
+    const finalize = i === chunks.length - 1;
+    await store.enqueueJob(
+      "sync_vercel_trackers",
+      {
+        source: "coldcard_hack_tracker",
+        contentHash: data.contentHash,
+        addresses: chunks[i],
+        finalize,
+        lastAddressCount: data.addresses.length,
+      },
+      JOB_PRIORITY.SYNC_VERCEL_TRACKERS,
+    );
+  }
+}
+
+export async function applyColdcardHackTrackerSyncBatch(
+  store: Store,
+  payload: ColdcardHackTrackerBatchPayload,
+): Promise<number> {
+  let inserted = 0;
+  for (const address of payload.addresses ?? []) {
+    const added = await insertAddressIfMissing(store, address, {
+      role: "hacker",
+      isFlaggedHacker: true,
+      source: "coldcard_hack_tracker",
+      hopFromHacker: 0,
+      expandStatus: "pending",
+    });
+    if (added) {
+      inserted++;
+      await store.enqueueJobIfAbsent(
+        "backfill_hacker_address",
+        { address },
+        JOB_PRIORITY.BACKFILL_HACKER,
+        undefined,
+        { address },
+      );
+    }
+  }
+  if (payload.finalize) {
+    await store.upsertSourceSync("coldcard_hack_tracker", {
+      lastAddressCount: payload.lastAddressCount ?? payload.addresses?.length ?? 0,
+      lastContentHash: payload.contentHash,
+    });
+  }
+  return inserted;
+}
+
 export async function applyColdcardHackTrackerSync(store: Store, data: ColdcardHackTrackerData): Promise<number> {
   let inserted = 0;
   for (const address of data.addresses) {

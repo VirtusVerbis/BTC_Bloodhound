@@ -42,7 +42,10 @@ function envMap(env: WorkerEnv): EnvMap {
 function build(env: WorkerEnv) {
   const config = loadConfig(envMap(env));
   assertProductionSecrets(config);
-  const store = createD1Store(env.DB, { maxQueueDepth: config.maxQueueDepth });
+  const store = createD1Store(env.DB, {
+    maxQueueDepth: config.maxQueueDepth,
+    d1BatchSize: config.d1BatchSize,
+  });
   const router = new ChainRouter(config.esploraBase, config.mempoolBase, store, config.rateLimitMs, {
     sleepOnRateLimit: false,
     backoff: {

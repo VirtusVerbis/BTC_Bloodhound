@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const addresses = sqliteTable("addresses", {
   address: text("address").primaryKey(),
@@ -18,16 +18,20 @@ export const addresses = sqliteTable("addresses", {
   liveBalanceAt: text("live_balance_at"),
 });
 
-export const edges = sqliteTable("edges", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  fromAddress: text("from_address").notNull(),
-  toAddress: text("to_address").notNull(),
-  txid: text("txid").notNull(),
-  amountSats: integer("amount_sats").notNull(),
-  blockTime: text("block_time"),
-  hopFromHacker: integer("hop_from_hacker"),
-  direction: text("direction").notNull(),
-});
+export const edges = sqliteTable(
+  "edges",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    fromAddress: text("from_address").notNull(),
+    toAddress: text("to_address").notNull(),
+    txid: text("txid").notNull(),
+    amountSats: integer("amount_sats").notNull(),
+    blockTime: text("block_time"),
+    hopFromHacker: integer("hop_from_hacker"),
+    direction: text("direction").notNull(),
+  },
+  (table) => [uniqueIndex("edges_from_to_txid_uq").on(table.fromAddress, table.toAddress, table.txid)],
+);
 
 export const transactions = sqliteTable("transactions", {
   txid: text("txid").primaryKey(),

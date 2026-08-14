@@ -48,6 +48,16 @@ export function runMigrations(sqlite: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_address);
     CREATE INDEX IF NOT EXISTS idx_edges_txid ON edges(txid);
 
+    DELETE FROM edges
+    WHERE id NOT IN (
+      SELECT MIN(id)
+      FROM edges
+      GROUP BY from_address, to_address, txid
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS edges_from_to_txid_uq
+      ON edges (from_address, to_address, txid);
+
     CREATE TABLE IF NOT EXISTS transactions (
       txid TEXT PRIMARY KEY,
       block_height INTEGER,

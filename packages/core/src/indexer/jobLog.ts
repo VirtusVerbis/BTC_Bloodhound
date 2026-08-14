@@ -2,6 +2,7 @@ import type { Job } from "@cointrace/db";
 import { RateLimitNotReadyError } from "../chain/router.js";
 import { summarizeJobPayload } from "../ops/queue.js";
 import { colorizeIndexerLogLine } from "./logColor.js";
+import { formatJobRunStatsSuffix, type JobRunStats } from "./tickStats.js";
 
 export interface JobLogOpts {
   color?: boolean;
@@ -41,6 +42,10 @@ function formatProgressSuffix(details: Record<string, unknown>): string {
   const cursor = abbreviateCursor(details.chainCursor);
   if (cursor != null) parts.push(`chainCursor=${cursor}`);
   if (details.pagesExhausted != null) parts.push(`pagesExhausted=${details.pagesExhausted}`);
+  if (details.traceEdgesPending === true) parts.push("traceEdgesPending=true");
+  if (typeof details.traceEdgeIndex === "number") {
+    parts.push(`traceEdgeIndex=${details.traceEdgeIndex}`);
+  }
   return parts.length > 0 ? ` ${parts.join(" ")}` : "";
 }
 
@@ -54,16 +59,31 @@ export function formatJobStartLine(job: Job): string {
   return `[job] start id=${job.id} type=${job.type} attempts=${job.attempts}${formatDetailSuffix(details)}${formatProgressSuffix(details)}`;
 }
 
-export function formatJobDoneLine(job: Job, duration: string, queueDepth: number): string {
-  return `[job] done id=${job.id} type=${job.type} duration=${duration} queue=${queueDepth}`;
+export function formatJobDoneLine(
+  job: Job,
+  duration: string,
+  queueDepth: number,
+  runStats?: JobRunStats,
+  workSubreq?: number,
+): string {
+  return `[job] done id=${job.id} type=${job.type} duration=${duration} queue=${queueDepth}${formatJobRunStatsSuffix(runStats, workSubreq)}`;
 }
 
 export function logJobStart(job: Job, opts?: JobLogOpts): void {
   emitLog(console.log, formatJobStartLine(job), opts?.color ?? false);
 }
 
-export function logJobDone(job: Job, duration: string, queueDepth: number, opts?: JobLogOpts): void {
-  emitLog(console.log, formatJobDoneLine(job, duration, queueDepth), opts?.color ?? false);
+export function logJobDone(
+  job: Job,
+  duration: string,
+  queueDepth: number,
+  opts?: JobLogOpts & { runStats?: JobRunStats; workSubreq?: number },
+): void {
+  emitLog(
+    console.log,
+    formatJobDoneLine(job, duration, queueDepth, opts?.runStats, opts?.workSubreq),
+    opts?.color ?? false,
+  );
 }
 
 export function logCronDetail(enabled: boolean, message: string, color = false): void {

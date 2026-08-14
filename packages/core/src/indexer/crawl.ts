@@ -1,11 +1,32 @@
 import type { Store } from "@cointrace/db";
 import type { AppConfig } from "../config.js";
 import { JOB_PRIORITY } from "../config.js";
+import type { ChainRouter } from "../chain/router.js";
 import { fetchMempoolBtcUsd } from "../price/mempoolPrices.js";
 import { buildBackfillJobPayload } from "./processor.js";
 import { isRebuildActive } from "./rebuildMode.js";
+import type { SubrequestBudget } from "./subrequestBudget.js";
+import type { BtcScheduleMode, ScheduleTickStats } from "./tickStats.js";
 
 const BACKFILL_DEDUPE_TYPES = ["backfill_hacker_address", "audit_hacker_backfill"] as const;
+
+export interface ScheduleEnqueueCache {
+  queueSchedulingPaused: boolean;
+  queueDepth: number;
+}
+
+async function loadScheduleEnqueueCache(store: Store): Promise<ScheduleEnqueueCache> {
+  const state = await store.getSchedulerState();
+  return {
+    queueSchedulingPaused: (state?.queueSchedulingPaused ?? 0) !== 0,
+    queueDepth: await store.getQueueDepth(),
+  };
+}
+
+function scheduleBudgetLow(budget: SubrequestBudget, reserve: number, minJobBudget = 5): boolean {
+  if (budget.limit() <= 0) return false;
+  return budget.remaining() <= reserve + minJobBudget;
+}
 
 async function enqueueBackfillResume(store: Store, address: string): Promise<void> {
   await store.enqueueJobIfAbsent(
@@ -75,41 +96,73 @@ export async function maintainOneHacker(
   }
 }
 
-export async function scheduleBtcUsdPriceRefresh(store: Store, config: AppConfig): Promise<void> {
+export async function scheduleBtcUsdPriceRefresh(
+  store: Store,
+  _router: ChainRouter,
+  config: AppConfig,
+  budget: SubrequestBudget,
+  reserve: number,
+): Promise<BtcScheduleMode> {
   const ts = Date.now();
   const intervalMs = config.btcUsdPriceRefreshIntervalSec * 1000;
   const price = await store.getBtcUsdPrice();
   const lastSuccessAt = price?.at ? new Date(price.at).getTime() : 0;
-  if (price && ts - lastSuccessAt < intervalMs) return;
+  if (price && ts - lastSuccessAt < intervalMs) return "fresh";
 
   const scheduler = await store.getSchedulerState();
   const lastAttemptAt = scheduler?.btcUsdRefreshAttemptAt
     ? new Date(scheduler.btcUsdRefreshAttemptAt).getTime()
     : 0;
-  if (lastAttemptAt > 0 && ts - lastAttemptAt < intervalMs) return;
+  if (lastAttemptAt > 0 && ts - lastAttemptAt < intervalMs) return "skip";
+
+  if (scheduleBudgetLow(budget, reserve)) {
+    await store.enqueueJobIfAbsent("refresh_btc_usd_price", {}, JOB_PRIORITY.REFRESH_BTC_USD);
+    return "queued";
+  }
 
   await store.setBtcUsdRefreshAttemptAt(new Date(ts).toISOString());
 
   try {
+    if (budget.limit() > 0) budget.consume(1);
     const { usd, at } = await fetchMempoolBtcUsd(config.mempoolBase);
     await store.setBtcUsdPrice(usd, at);
+    return "inline";
   } catch (err) {
     console.warn(
       "BTC/USD inline refresh failed:",
       err instanceof Error ? err.message : err,
     );
+    return "skip";
   }
 }
 
-export async function scheduleDownstreamCrawl(store: Store, config: AppConfig): Promise<void> {
-  if (await isRebuildActive(store, config)) return;
+export async function scheduleDownstreamCrawl(
+  store: Store,
+  config: AppConfig,
+  budget: SubrequestBudget,
+  reserve: number,
+): Promise<Omit<ScheduleTickStats, "btc">> {
+  const emptyStats = {
+    skipNonCritical: false,
+    crawlEnqueued: 0,
+    pollEnqueued: 0,
+    maintTick: false,
+  };
+
+  if (await isRebuildActive(store, config)) return emptyStats;
 
   const ts = Date.now();
+  const enqueueCache = await loadScheduleEnqueueCache(store);
+  const skipNonCritical = scheduleBudgetLow(budget, reserve);
+  let crawlEnqueued = 0;
+  let pollEnqueued = 0;
 
   const cwSync = await store.getSourceSync("coldcardwatch");
   const cwLast = cwSync?.lastSyncAt ? new Date(cwSync.lastSyncAt).getTime() : 0;
-  if (ts - cwLast >= config.coldcardwatchSyncIntervalSec * 1000) {
-    await store.enqueueJobIfAbsent("sync_coldcardwatch", {}, JOB_PRIORITY.SYNC_COLDCARDWATCH);
+  if (!skipNonCritical && ts - cwLast >= config.coldcardwatchSyncIntervalSec * 1000) {
+    if (!enqueueCache.queueSchedulingPaused && enqueueCache.queueDepth < config.maxQueueDepth) {
+      await store.enqueueJobIfAbsent("sync_coldcardwatch", {}, JOB_PRIORITY.SYNC_COLDCARDWATCH);
+    }
   }
 
   const htSync = await store.getSourceSync("coldcard_hack_tracker");
@@ -117,17 +170,26 @@ export async function scheduleDownstreamCrawl(store: Store, config: AppConfig): 
   const htLast = htSync?.lastSyncAt ? new Date(htSync.lastSyncAt).getTime() : 0;
   const swLast = swSync?.lastSyncAt ? new Date(swSync.lastSyncAt).getTime() : 0;
   const vtLast = Math.max(htLast, swLast);
-  if (ts - vtLast >= config.vercelTrackersSyncIntervalSec * 1000) {
-    await store.enqueueJobIfAbsent("sync_vercel_trackers", {}, JOB_PRIORITY.SYNC_VERCEL_TRACKERS);
+  if (!skipNonCritical && ts - vtLast >= config.vercelTrackersSyncIntervalSec * 1000) {
+    if (!enqueueCache.queueSchedulingPaused && enqueueCache.queueDepth < config.maxQueueDepth) {
+      await store.enqueueJobIfAbsent("sync_vercel_trackers", {}, JOB_PRIORITY.SYNC_VERCEL_TRACKERS);
+    }
   }
 
   const tick = await store.incrementMaintenanceCronCounter();
-  if (tick % config.hackerMaintenanceEveryNCrons === 0) {
+  const isMaintTick =
+    config.hackerMaintenanceEveryNCrons > 0 &&
+    tick % config.hackerMaintenanceEveryNCrons === 0;
+  if (isMaintTick && !scheduleBudgetLow(budget, reserve, 8)) {
     const hackers = await store.listHackers();
     if (hackers.length > 0) {
       const idx = await store.claimNextHackerPollIndex(hackers.length);
       await maintainOneHacker(store, config, hackers[idx]!, ts);
     }
+  }
+
+  if (skipNonCritical) {
+    return { ...emptyStats, skipNonCritical, maintTick: isMaintTick };
   }
 
   const frontier = await store.getDownstreamFrontier(config.crawlEnqueuePerCron, config.maxCrawlDepth);
@@ -140,6 +202,7 @@ export async function scheduleDownstreamCrawl(store: Store, config: AppConfig): 
       { address: row.address },
     );
     if (jobId != null) {
+      crawlEnqueued++;
       await store.setExpandStatus(row.address, "queued");
     }
   }
@@ -150,12 +213,20 @@ export async function scheduleDownstreamCrawl(store: Store, config: AppConfig): 
     config.downstreamPollIntervalSec,
   );
   for (const row of pollCandidates) {
-    await store.enqueueJobIfAbsent(
+    const jobId = await store.enqueueJobIfAbsent(
       "poll_downstream_address",
       { address: row.address },
       JOB_PRIORITY.POLL_DOWNSTREAM,
       undefined,
       { address: row.address },
     );
+    if (jobId != null) pollEnqueued++;
   }
+
+  return {
+    skipNonCritical,
+    crawlEnqueued,
+    pollEnqueued,
+    maintTick: isMaintTick,
+  };
 }

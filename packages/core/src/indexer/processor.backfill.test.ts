@@ -70,6 +70,14 @@ function baseConfig(): AppConfig {
     indexerLogColor: false,
     jobDeferAfterAttempts: 20,
     jobDeferSec: 86400,
+    subrequestLimitPerInvocation: 0,
+    scheduleSubrequestReserve: 38,
+    scheduleReserveMaintExtra: 10,
+    maxSubrequestsPerJob: 0,
+    maxEdgesPerJob: 0,
+    maxGraphEdgesPerTx: 0,
+    d1BatchSize: 8,
+    syncAddressesPerJob: 5,
   };
 }
 

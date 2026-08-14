@@ -1,5 +1,7 @@
 import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
+import { SQLiteAsyncDialect } from "drizzle-orm/sqlite-core";
+import type { D1Binding } from "./d1.js";
 import * as schema from "./schema.js";
 import {
   addresses,
@@ -49,6 +51,10 @@ function isIngestContinuation(payloadJson: string): boolean {
     if (payload.chainCursor != null) return true;
   }
 
+  if (payload.traceEdgesPending === true) return true;
+  const traceEdgeIndex = payload.traceEdgeIndex;
+  if (typeof traceEdgeIndex === "number" && traceEdgeIndex > 0) return true;
+
   return false;
 }
 
@@ -86,6 +92,16 @@ export type AddressUpsertData = {
   liveBalanceAt?: string | null;
 };
 
+export type EdgeUpsertData = {
+  fromAddress: string;
+  toAddress: string;
+  txid: string;
+  amountSats: number;
+  blockTime?: string | null;
+  hopFromHacker?: number | null;
+  direction: string;
+};
+
 export type ChainApiProviderId = "esplora" | "mempool";
 
 export interface ChainApiStatus {
@@ -100,6 +116,9 @@ export interface ChainApiStatus {
 
 export interface StoreOptions {
   maxQueueDepth?: number;
+  d1BatchSize?: number;
+  d1?: D1Binding;
+  subrequestBudget?: { canConsume(n: number): boolean; consume(n: number): void };
 }
 
 export type EnqueueJobOptions = {
@@ -140,12 +159,31 @@ function ingestContinuationExempt(type: string, payloadJson: string): boolean {
 
 export class Store {
   private maxQueueDepth: number;
+  private d1BatchSize: number;
+  private d1?: D1Binding;
+  private subrequestBudget?: StoreOptions["subrequestBudget"];
 
   constructor(
     public db: Db,
     options?: StoreOptions,
   ) {
     this.maxQueueDepth = options?.maxQueueDepth ?? 360;
+    this.d1BatchSize = options?.d1BatchSize ?? 8;
+    this.d1 = options?.d1;
+    this.subrequestBudget = options?.subrequestBudget;
+  }
+
+  private trackSubrequest(count = 1): void {
+    this.subrequestBudget?.consume(count);
+  }
+
+  canUseSubrequests(count = 1): boolean {
+    if (!this.subrequestBudget) return true;
+    return this.subrequestBudget.canConsume(count);
+  }
+
+  setSubrequestBudget(budget?: StoreOptions["subrequestBudget"]): void {
+    this.subrequestBudget = budget;
   }
 
   private async shouldAllowEnqueue(
@@ -321,42 +359,134 @@ export class Store {
       .all();
   }
 
-  async upsertEdge(data: {
-    fromAddress: string;
-    toAddress: string;
-    txid: string;
-    amountSats: number;
-    blockTime?: string | null;
-    hopFromHacker?: number | null;
-    direction: string;
-  }) {
-    const existing = await this.db
-      .select()
-      .from(edges)
-      .where(
-        and(
-          eq(edges.fromAddress, data.fromAddress),
-          eq(edges.toAddress, data.toAddress),
-          eq(edges.txid, data.txid),
-        ),
-      )
-      .get();
-    if (existing) {
-      await this.db
-        .update(edges)
-        .set({
-          amountSats: data.amountSats,
-          blockTime: data.blockTime ?? existing.blockTime,
-          hopFromHacker: data.hopFromHacker ?? existing.hopFromHacker,
-          direction: data.direction,
-        })
-        .where(eq(edges.id, existing.id))
-        .run();
-    } else {
-      await this.db.insert(edges).values(data).run();
+  private async executeSqlBatch(statements: ReturnType<typeof sql>[]): Promise<void> {
+    if (statements.length === 0) return;
+    this.trackSubrequest(1);
+    const d1 = this.d1;
+    const d1Batch = d1?.batch;
+    if (d1 && d1Batch) {
+      const dialect = new SQLiteAsyncDialect();
+      const prepared = statements.map((statement) => {
+        const query = dialect.sqlToQuery(statement);
+        const stmt = d1.prepare(query.sql) as {
+          bind(...values: unknown[]): { run(): Promise<unknown> };
+        };
+        return stmt.bind(...query.params);
+      });
+      await d1Batch.call(d1, prepared);
+      return;
     }
-    if (data.direction === "in_to_hacker") {
-      await this.recalcTotalReceived(data.toAddress);
+    for (const statement of statements) {
+      await this.db.run(statement);
+    }
+  }
+
+  async upsertAddressesBatch(rows: AddressUpsertData[]): Promise<void> {
+    if (rows.length === 0) return;
+    const ts = now();
+    for (let i = 0; i < rows.length; i += this.d1BatchSize) {
+      const chunk = rows.slice(i, i + this.d1BatchSize);
+      const statements = chunk.map((data) => {
+        const role = data.role ?? "unknown";
+        const label = data.label !== undefined ? data.label : null;
+        const source = data.source ?? "derived";
+        const isFlaggedHacker = data.isFlaggedHacker ?? false;
+        const hopFromHacker = data.hopFromHacker !== undefined ? data.hopFromHacker : null;
+        const expandStatus = data.expandStatus ?? "pending";
+        const totalReceivedSats = data.totalReceivedSats ?? 0;
+        const liveBalanceSats = data.liveBalanceSats !== undefined ? data.liveBalanceSats : null;
+        const liveBalanceAt = data.liveBalanceAt !== undefined ? data.liveBalanceAt : null;
+        const roleProvided = data.role !== undefined ? 1 : 0;
+        const labelProvided = data.label !== undefined ? 1 : 0;
+        const sourceProvided = data.source !== undefined ? 1 : 0;
+        const isFlaggedHackerProvided = data.isFlaggedHacker !== undefined ? 1 : 0;
+        const hopProvided = data.hopFromHacker !== undefined ? 1 : 0;
+        const expandStatusProvided = data.expandStatus !== undefined ? 1 : 0;
+        const totalReceivedProvided = data.totalReceivedSats !== undefined ? 1 : 0;
+        const liveBalanceSatsProvided = data.liveBalanceSats !== undefined ? 1 : 0;
+        const liveBalanceAtProvided = data.liveBalanceAt !== undefined ? 1 : 0;
+        return sql`
+          INSERT INTO addresses (
+            address, role, label, source, is_flagged_hacker, created_at, first_seen_at, last_seen_at,
+            hop_from_hacker, expand_status, total_received_sats, live_balance_sats, live_balance_at
+          ) VALUES (
+            ${data.address}, ${role}, ${label}, ${source}, ${isFlaggedHacker ? 1 : 0},
+            ${ts}, ${ts}, ${ts}, ${hopFromHacker}, ${expandStatus}, ${totalReceivedSats},
+            ${liveBalanceSats}, ${liveBalanceAt}
+          )
+          ON CONFLICT(address) DO UPDATE SET
+            role = CASE
+              WHEN addresses.role = 'hacker' AND excluded.role = 'victim' THEN addresses.role
+              WHEN ${roleProvided} = 1 THEN excluded.role
+              ELSE addresses.role END,
+            label = CASE WHEN ${labelProvided} = 1 THEN excluded.label ELSE addresses.label END,
+            source = CASE WHEN ${sourceProvided} = 1 THEN excluded.source ELSE addresses.source END,
+            is_flagged_hacker = CASE
+              WHEN ${isFlaggedHackerProvided} = 1 THEN excluded.is_flagged_hacker
+              ELSE addresses.is_flagged_hacker END,
+            hop_from_hacker = CASE
+              WHEN ${hopProvided} = 1 THEN excluded.hop_from_hacker
+              ELSE addresses.hop_from_hacker END,
+            expand_status = CASE
+              WHEN ${expandStatusProvided} = 1 THEN excluded.expand_status
+              ELSE addresses.expand_status END,
+            total_received_sats = CASE
+              WHEN ${totalReceivedProvided} = 1 THEN excluded.total_received_sats
+              ELSE addresses.total_received_sats END,
+            live_balance_sats = CASE
+              WHEN ${liveBalanceSatsProvided} = 1 THEN excluded.live_balance_sats
+              ELSE addresses.live_balance_sats END,
+            live_balance_at = CASE
+              WHEN ${liveBalanceAtProvided} = 1 THEN excluded.live_balance_at
+              ELSE addresses.live_balance_at END,
+            last_seen_at = ${ts}
+        `;
+      });
+      await this.executeSqlBatch(statements);
+    }
+  }
+
+  async upsertEdgesBatch(rows: EdgeUpsertData[]): Promise<string[]> {
+    if (rows.length === 0) return [];
+    const hackersToRecalc = new Set<string>();
+    for (let i = 0; i < rows.length; i += this.d1BatchSize) {
+      const chunk = rows.slice(i, i + this.d1BatchSize);
+      const statements = chunk.map((data) =>
+        sql`
+          INSERT INTO edges (
+            from_address, to_address, txid, amount_sats, block_time, hop_from_hacker, direction
+          ) VALUES (
+            ${data.fromAddress}, ${data.toAddress}, ${data.txid}, ${data.amountSats},
+            ${data.blockTime ?? null}, ${data.hopFromHacker ?? null}, ${data.direction}
+          )
+          ON CONFLICT(from_address, to_address, txid) DO UPDATE SET
+            amount_sats = excluded.amount_sats,
+            block_time = COALESCE(excluded.block_time, edges.block_time),
+            hop_from_hacker = COALESCE(excluded.hop_from_hacker, edges.hop_from_hacker),
+            direction = excluded.direction
+        `,
+      );
+      await this.executeSqlBatch(statements);
+      for (const row of chunk) {
+        if (row.direction === "in_to_hacker") hackersToRecalc.add(row.toAddress);
+      }
+    }
+    return [...hackersToRecalc];
+  }
+
+  async recalcTotalReceivedFor(hackerAddresses: string[]): Promise<void> {
+    const unique = [...new Set(hackerAddresses)];
+    if (unique.length === 0) return;
+    this.trackSubrequest(unique.length * 2);
+    for (const hackerAddress of unique) {
+      await this.recalcTotalReceived(hackerAddress);
+    }
+  }
+
+  async upsertEdge(data: EdgeUpsertData) {
+    const hackers = await this.upsertEdgesBatch([data]);
+    if (hackers.length > 0) {
+      await this.recalcTotalReceivedFor(hackers);
     }
   }
 

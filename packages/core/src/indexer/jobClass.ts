@@ -56,5 +56,9 @@ export function isIngestContinuation(payloadJson: string): boolean {
     if (payload.chainCursor != null) return true;
   }
 
+  if (payload.traceEdgesPending === true) return true;
+  const traceEdgeIndex = payload.traceEdgeIndex;
+  if (typeof traceEdgeIndex === "number" && traceEdgeIndex > 0) return true;
+
   return false;
 }

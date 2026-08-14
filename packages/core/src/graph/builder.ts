@@ -355,7 +355,7 @@ function splitProportionally(total: number, weights: number[]): number[] {
 export function computeHackTraceEdges(
   tx: ChainTxDetail,
   hackerAddresses: Set<string>,
-  options?: HackTraceOptions,
+  options?: HackTraceOptions & { maxEdges?: number },
 ): HackTraceEdges {
   const victimInputs = aggregateInputsByAddress(tx, hackerAddresses);
   const hackerOutputs = aggregateHackerOutputs(tx, hackerAddresses);
@@ -398,9 +398,12 @@ export function computeHackTraceEdges(
   }
 
   const spenders = collectSpenders(inputAddresses, hackerAddresses, options);
-  for (const { address: inAddr, hop } of spenders) {
+  const maxEdges = options?.maxEdges ?? Number.POSITIVE_INFINITY;
+  let edgeCount = inToHacker.length;
+  outer: for (const { address: inAddr, hop } of spenders) {
     for (const [outAddr, amount] of outputAddresses) {
       if (outAddr === inAddr || amount <= 0) continue;
+      if (edgeCount >= maxEdges) break outer;
       outFromHacker.push({
         fromAddress: inAddr,
         toAddress: outAddr,
@@ -408,6 +411,7 @@ export function computeHackTraceEdges(
         hopFromHacker: hop + 1,
         direction: "out_from_hacker",
       });
+      edgeCount++;
     }
   }
 
@@ -443,13 +447,130 @@ export function collectSpenders(
   return spenders;
 }
 
+export interface HackTraceApplyMeta {
+  txid: string;
+  blockTime: string | null;
+}
+
+export interface HackTraceApplyChunkOptions {
+  startEdgeIndex?: number;
+  maxEdges?: number;
+}
+
+export interface HackTraceApplyChunkResult {
+  complete: boolean;
+  nextEdgeIndex: number;
+  edgesApplied: number;
+  traceEdgeTotal: number;
+}
+
+function flattenHackTraceEdges(edges: HackTraceEdges): HackTraceEdgeDraft[] {
+  return [...edges.inToHacker, ...edges.outFromHacker];
+}
+
+export async function applyHackTraceEdgesChunk(
+  store: Store,
+  meta: HackTraceApplyMeta,
+  computed: HackTraceEdges,
+  opts?: HackTraceApplyChunkOptions,
+): Promise<HackTraceApplyChunkResult> {
+  const startEdgeIndex = opts?.startEdgeIndex ?? 0;
+  const maxEdges = opts?.maxEdges ?? Number.POSITIVE_INFINITY;
+  const flat = flattenHackTraceEdges(computed);
+  const totalEdges = flat.length;
+
+  if (startEdgeIndex === 0 && computed.victimAddresses.length > 0) {
+    await store.upsertAddressesBatch(
+      computed.victimAddresses.map((address) => ({
+        address,
+        role: "victim",
+        source: "derived",
+      })),
+    );
+  }
+
+  const endIndex = Math.min(totalEdges, startEdgeIndex + maxEdges);
+  const slice = flat.slice(startEdgeIndex, endIndex);
+  const downstreamRows: Array<{
+    address: string;
+    role: string;
+    source: string;
+    hopFromHacker: number;
+    expandStatus: string;
+  }> = [];
+  const edgeRows: Array<{
+    fromAddress: string;
+    toAddress: string;
+    txid: string;
+    amountSats: number;
+    blockTime: string | null;
+    hopFromHacker: number;
+    direction: string;
+  }> = [];
+
+  for (const edge of slice) {
+    if (edge.direction === "out_from_hacker") {
+      downstreamRows.push({
+        address: edge.toAddress,
+        role: "downstream",
+        source: "derived",
+        hopFromHacker: edge.hopFromHacker,
+        expandStatus: "pending",
+      });
+    }
+    edgeRows.push({
+      fromAddress: edge.fromAddress,
+      toAddress: edge.toAddress,
+      txid: meta.txid,
+      amountSats: edge.amountSats,
+      blockTime: meta.blockTime,
+      hopFromHacker: edge.hopFromHacker,
+      direction: edge.direction,
+    });
+  }
+
+  if (downstreamRows.length > 0) {
+    await store.upsertAddressesBatch(
+      downstreamRows.map((row) => ({
+        address: row.address,
+        role: row.role,
+        source: row.source,
+        hopFromHacker: row.hopFromHacker,
+        expandStatus: row.expandStatus,
+      })),
+    );
+  }
+
+  const hackersToRecalc = edgeRows.length > 0 ? await store.upsertEdgesBatch(edgeRows) : [];
+  if (hackersToRecalc.length > 0) {
+    await store.recalcTotalReceivedFor(hackersToRecalc);
+  }
+
+  const nextEdgeIndex = endIndex;
+  return {
+    complete: nextEdgeIndex >= totalEdges,
+    nextEdgeIndex,
+    edgesApplied: slice.length,
+    traceEdgeTotal: totalEdges,
+  };
+}
+
 export async function processTxForHackTrace(
   store: Store,
   router: ChainRouter,
   txid: string,
   hackerAddresses: Set<string>,
-  options: HackTraceOptions = {},
-): Promise<void> {
+  options: HackTraceOptions & {
+    maxGraphEdgesPerTx?: number;
+    maxEdgesPerJob?: number;
+    traceEdgeIndex?: number;
+  } = {},
+): Promise<{
+  traceComplete: boolean;
+  nextEdgeIndex: number;
+  edgesApplied: number;
+  traceEdgeTotal: number;
+}> {
   const tx = options.tx ?? (await router.withProvider((p) => p.getTx(txid)));
   const blockTime = blockTimeIso(tx);
   await store.upsertTransaction({
@@ -459,42 +580,33 @@ export async function processTxForHackTrace(
     feeSats: tx.fee ?? null,
   });
 
-  const { inToHacker, outFromHacker, victimAddresses } = computeHackTraceEdges(tx, hackerAddresses, options);
+  const maxGraphEdges =
+    options.maxGraphEdgesPerTx && options.maxGraphEdgesPerTx > 0
+      ? options.maxGraphEdgesPerTx
+      : Number.POSITIVE_INFINITY;
+  const computed = computeHackTraceEdges(tx, hackerAddresses, {
+    ...options,
+    maxEdges: maxGraphEdges,
+  });
 
-  for (const victim of victimAddresses) {
-    await store.upsertAddress({ address: victim, role: "victim", source: "derived" });
-  }
+  const maxEdgesPerJob =
+    options.maxEdgesPerJob && options.maxEdgesPerJob > 0
+      ? options.maxEdgesPerJob
+      : Number.POSITIVE_INFINITY;
 
-  for (const edge of inToHacker) {
-    await store.upsertEdge({
-      fromAddress: edge.fromAddress,
-      toAddress: edge.toAddress,
-      txid,
-      amountSats: edge.amountSats,
-      blockTime,
-      hopFromHacker: edge.hopFromHacker,
-      direction: edge.direction,
-    });
-  }
+  const result = await applyHackTraceEdgesChunk(
+    store,
+    { txid, blockTime },
+    computed,
+    { startEdgeIndex: options.traceEdgeIndex ?? 0, maxEdges: maxEdgesPerJob },
+  );
 
-  for (const edge of outFromHacker) {
-    await store.upsertAddress({
-      address: edge.toAddress,
-      role: "downstream",
-      source: "derived",
-      hopFromHacker: edge.hopFromHacker,
-      expandStatus: "pending",
-    });
-    await store.upsertEdge({
-      fromAddress: edge.fromAddress,
-      toAddress: edge.toAddress,
-      txid,
-      amountSats: edge.amountSats,
-      blockTime,
-      hopFromHacker: edge.hopFromHacker,
-      direction: edge.direction,
-    });
-  }
+  return {
+    traceComplete: result.complete,
+    nextEdgeIndex: result.nextEdgeIndex,
+    edgesApplied: result.edgesApplied,
+    traceEdgeTotal: result.traceEdgeTotal,
+  };
 }
 
 export async function getHackerAddressSet(store: Store): Promise<Set<string>> {

@@ -46,6 +46,34 @@ describe("colorizeIndexerLogLine", () => {
     expect(out).toContain("\x1b[94mqueue=");
   });
 
+  it("colors cron tick and subrequest labels", () => {
+    const out = colorizeIndexerLogLine(
+      "[cron] tick done processed=1 ms=5149 subreq=18/50 sched=6 work=12 rem=32 queue=294 stop=subreq",
+      true,
+    );
+    expect(out).toMatch(/^\x1b\[38;5;117m\[cron\] tick done\x1b\[0m/);
+    expect(out).toContain("\x1b[38;5;208msubreq=");
+    expect(out).toContain("\x1b[38;5;141msched=");
+    expect(out).toContain("\x1b[38;5;51mwork=");
+    expect(out).toContain("\x1b[38;5;118mrem=");
+    expect(out).toContain("\x1b[38;5;203mstop=");
+    expect(out).toContain("\x1b[38;5;147mprocessed=");
+    expect(out).toContain("\x1b[90mms=");
+  });
+
+  it("colors schedule done labels", () => {
+    const out = colorizeIndexerLogLine(
+      "[cron] schedule done subreq=6/50 sched=6 skipNonCritical=false crawlEnq=1 pollEnq=0 maint=false btc=inline",
+      true,
+    );
+    expect(out).toMatch(/^\x1b\[38;5;214m\[cron\] schedule done\x1b\[0m/);
+    expect(out).toContain("\x1b[38;5;220mskipNonCritical=");
+    expect(out).toContain("\x1b[38;5;30mcrawlEnq=");
+    expect(out).toContain("\x1b[38;5;39mpollEnq=");
+    expect(out).toContain("\x1b[38;5;218mmaint=");
+    expect(out).toContain("\x1b[38;5;229mbtc=");
+  });
+
   it("colors progress and cursor labels on job start lines", () => {
     const out = colorizeIndexerLogLine(
       "[job] start id=1 type=backfill_hacker_address attempts=0 pendingTxidsCount=25 processedIndex=18 chainCursor=abc123def456 pagesExhausted=false",

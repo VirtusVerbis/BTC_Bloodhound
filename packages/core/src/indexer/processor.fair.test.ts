@@ -60,6 +60,14 @@ function baseConfig(): AppConfig {
     indexerLogColor: false,
     jobDeferAfterAttempts: 20,
     jobDeferSec: 86400,
+    subrequestLimitPerInvocation: 0,
+    scheduleSubrequestReserve: 38,
+    scheduleReserveMaintExtra: 10,
+    maxSubrequestsPerJob: 0,
+    maxEdgesPerJob: 0,
+    maxGraphEdgesPerTx: 0,
+    d1BatchSize: 8,
+    syncAddressesPerJob: 5,
   };
 }
 
@@ -102,6 +110,7 @@ describe("processJobs fair scheduling", () => {
       completeJob,
       maybeClearQueueSchedulingPause: vi.fn(),
       getQueueDepth: vi.fn().mockResolvedValue(0),
+      canUseSubrequests: vi.fn().mockReturnValue(true),
       countIndexedTxsForHacker: vi.fn().mockResolvedValue(100),
       updateBackfillAudit: vi.fn(),
       upsertBackfillState: vi.fn(),
@@ -118,7 +127,7 @@ describe("processJobs fair scheduling", () => {
       ),
     } as unknown as ChainRouter;
 
-    const n = await processJobs(store, router, baseConfig());
+    const { processed: n } = await processJobs(store, router, baseConfig());
 
     expect(n).toBe(1);
     expect(claimNextIngestJob).toHaveBeenCalledWith({ preferContinuation: true });
@@ -144,6 +153,7 @@ describe("processJobs fair scheduling", () => {
       completeJob,
       maybeClearQueueSchedulingPause: vi.fn(),
       getQueueDepth: vi.fn().mockResolvedValue(0),
+      canUseSubrequests: vi.fn().mockReturnValue(true),
       getSyncState: vi.fn().mockResolvedValue(null),
       listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack" }]),
       touchSyncPoll: vi.fn(),
@@ -155,7 +165,7 @@ describe("processJobs fair scheduling", () => {
       ),
     } as unknown as ChainRouter;
 
-    const n = await processJobs(store, router, baseConfig());
+    const { processed: n } = await processJobs(store, router, baseConfig());
 
     expect(n).toBe(1);
     expect(claimNextJob).toHaveBeenCalled();
@@ -169,12 +179,14 @@ describe("processJobs fair scheduling", () => {
     const store = {
       claimNextIngestJob,
       claimNextJob,
+      canUseSubrequests: vi.fn().mockReturnValue(true),
     } as unknown as Store;
     const router = {} as unknown as ChainRouter;
 
-    const n = await processJobs(store, router, { ...baseConfig(), jobsPerTick: 5 }, { deadlineMs: Date.now() - 1 });
+    const { processed: n, stopReason } = await processJobs(store, router, { ...baseConfig(), jobsPerTick: 5 }, { deadlineMs: Date.now() - 1 });
 
     expect(n).toBe(0);
+    expect(stopReason).toBe("deadline");
     expect(claimNextIngestJob).not.toHaveBeenCalled();
     expect(claimNextJob).not.toHaveBeenCalled();
   });
@@ -197,6 +209,7 @@ describe("processJobs fair scheduling", () => {
       failJob,
       maybeClearQueueSchedulingPause: vi.fn(),
       getQueueDepth: vi.fn().mockResolvedValue(1),
+      canUseSubrequests: vi.fn().mockReturnValue(true),
       earliestProviderRetryAt: vi.fn().mockResolvedValue(providerRetryAt),
       getSyncState: vi.fn().mockResolvedValue(null),
       listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack" }]),
@@ -207,7 +220,7 @@ describe("processJobs fair scheduling", () => {
       withProvider: vi.fn().mockRejectedValue(new RateLimitHttpError("429 Too Many Requests", 300)),
     } as unknown as ChainRouter;
 
-    const n = await processJobs(store, router, baseConfig());
+    const { processed: n } = await processJobs(store, router, baseConfig());
 
     expect(n).toBe(0);
     expect(failJob).toHaveBeenCalledWith(pollJob.id, "429 Too Many Requests", providerRetryAt);
