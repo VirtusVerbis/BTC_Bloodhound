@@ -59,7 +59,7 @@ describe("formatCronTickDoneLine", () => {
       stop: "subreq",
     });
     expect(line).toBe(
-      "[cron] tick done processed=1 ms=5149 subreq=18/50 sched=6 work=12 rem=32 queue=294 stop=subreq",
+      "[cron] tick done processed=1 ms=5149 subreq=18/50 sched=6 work=12 rem=32 stop=subreq queue=294",
     );
   });
 
@@ -75,7 +75,7 @@ describe("formatCronTickDoneLine", () => {
       queue: 10,
       stop: "idle",
     });
-    expect(line).toBe("[cron] tick done processed=0 ms=42 queue=10 stop=idle");
+    expect(line).toBe("[cron] tick done processed=0 ms=42 stop=idle queue=10");
   });
 });
 

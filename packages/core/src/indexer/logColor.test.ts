@@ -48,7 +48,7 @@ describe("colorizeIndexerLogLine", () => {
 
   it("colors cron tick and subrequest labels", () => {
     const out = colorizeIndexerLogLine(
-      "[cron] tick done processed=1 ms=5149 subreq=18/50 sched=6 work=12 rem=32 queue=294 stop=subreq",
+      "[cron] tick done processed=1 ms=5149 subreq=18/50 sched=6 work=12 rem=32 stop=subreq queue=294",
       true,
     );
     expect(out).toMatch(/^\x1b\[38;5;117m\[cron\] tick done\x1b\[0m/);

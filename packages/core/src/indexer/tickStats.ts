@@ -53,7 +53,7 @@ export function formatCronTickDoneLine(stats: TickDoneStats): string {
     stats.subreqLimit > 0
       ? ` subreq=${stats.subreqUsed}/${stats.subreqLimit} sched=${stats.schedSubreq} work=${stats.workSubreq} rem=${stats.subreqRem}`
       : "";
-  return `[cron] tick done processed=${stats.processed} ms=${stats.elapsedMs}${subreqPart} queue=${stats.queue} stop=${stats.stop}`;
+  return `[cron] tick done processed=${stats.processed} ms=${stats.elapsedMs}${subreqPart} stop=${stats.stop} queue=${stats.queue}`;
 }
 
 export function formatJobRunStatsSuffix(stats?: JobRunStats, workSubreq?: number): string {
