@@ -128,4 +128,84 @@ describe("Store batch reads", () => {
     expect(rows[0]?.toAddress).toBe("bc1qd2");
     expect(rows[0]?.amountSats).toBe(2000);
   });
+
+  it("countOutEdgesFromAddress and keyset pagination", async () => {
+    await store.upsertAddressesBatch([
+      { address: "bc1qh1", role: "hacker", source: "admin", isFlaggedHacker: true },
+      { address: "bc1qd1", role: "downstream", source: "derived" },
+      { address: "bc1qd2", role: "downstream", source: "derived" },
+      { address: "bc1qd3", role: "downstream", source: "derived" },
+    ]);
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "bc1qh1",
+        toAddress: "bc1qd1",
+        txid: "tx1",
+        amountSats: 3000,
+        direction: "out_from_hacker",
+      },
+      {
+        fromAddress: "bc1qh1",
+        toAddress: "bc1qd2",
+        txid: "tx2",
+        amountSats: 2000,
+        direction: "out_from_hacker",
+      },
+      {
+        fromAddress: "bc1qh1",
+        toAddress: "bc1qd3",
+        txid: "tx3",
+        amountSats: 1000,
+        direction: "out_from_hacker",
+      },
+    ]);
+    expect(await store.countOutEdgesFromAddress("bc1qh1", { minEdgeSats: 1500 })).toBe(2);
+
+    const page1 = await store.getOutEdgesFromAddress("bc1qh1", { minEdgeSats: 0, limit: 2 });
+    expect(page1.map((e) => e.toAddress)).toEqual(["bc1qd1", "bc1qd2"]);
+
+    const page2 = await store.getOutEdgesFromAddress("bc1qh1", {
+      minEdgeSats: 0,
+      limit: 2,
+      after: { amountSats: page1[1]!.amountSats, toAddress: page1[1]!.toAddress },
+    });
+    expect(page2.map((e) => e.toAddress)).toEqual(["bc1qd3"]);
+  });
+
+  it("getOutEdgesFromParents paginates across parents", async () => {
+    await store.upsertAddressesBatch([
+      { address: "bc1qp1", role: "downstream", source: "derived" },
+      { address: "bc1qp2", role: "downstream", source: "derived" },
+      { address: "bc1qc1", role: "downstream", source: "derived" },
+      { address: "bc1qc2", role: "downstream", source: "derived" },
+    ]);
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "bc1qp1",
+        toAddress: "bc1qc1",
+        txid: "tx1",
+        amountSats: 1000,
+        direction: "out_from_hacker",
+      },
+      {
+        fromAddress: "bc1qp2",
+        toAddress: "bc1qc2",
+        txid: "tx2",
+        amountSats: 900,
+        direction: "out_from_hacker",
+      },
+    ]);
+    const first = await store.getOutEdgesFromParents(["bc1qp1", "bc1qp2"], { limit: 1 });
+    expect(first.edges).toHaveLength(1);
+    expect(first.edges[0]?.toAddress).toBe("bc1qc1");
+    expect(first.nextAfter).not.toBeNull();
+
+    const second = await store.getOutEdgesFromParents(["bc1qp1", "bc1qp2"], {
+      limit: 2,
+      after: first.nextAfter!,
+    });
+    expect(second.edges).toHaveLength(1);
+    expect(second.edges[0]?.toAddress).toBe("bc1qc2");
+    expect(second.nextAfter).toBeNull();
+  });
 });

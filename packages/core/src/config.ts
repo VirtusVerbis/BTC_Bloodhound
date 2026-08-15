@@ -83,6 +83,9 @@ export interface AppConfig {
   getRateWindowSec: number;
   graphRateLimit: number;
   graphRateWindowSec: number;
+  graphContinuationRateLimit: number;
+  graphPageSizeDefault: number;
+  graphPageSizeMax: number;
   maxGraphVictims: number;
   maxGraphDownstream: number;
   /** Hours for recent victim/downstream counts on hacker list. */
@@ -229,6 +232,9 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     getRateWindowSec: Number(env.GET_RATE_WINDOW_SEC ?? 60),
     graphRateLimit: Number(env.GRAPH_RATE_LIMIT ?? 30),
     graphRateWindowSec: Number(env.GRAPH_RATE_WINDOW_SEC ?? 60),
+    graphContinuationRateLimit: Number(env.GRAPH_CONTINUATION_RATE_LIMIT ?? 120),
+    graphPageSizeDefault: Number(env.GRAPH_PAGE_SIZE_DEFAULT ?? 500),
+    graphPageSizeMax: Number(env.GRAPH_PAGE_SIZE_MAX ?? 1000),
     maxGraphVictims: Number(env.MAX_GRAPH_VICTIMS ?? 10000),
     maxGraphDownstream: Number(env.MAX_GRAPH_DOWNSTREAM ?? 10000),
     graphActivityWindowHours: Number(env.GRAPH_ACTIVITY_WINDOW_HOURS ?? 168),

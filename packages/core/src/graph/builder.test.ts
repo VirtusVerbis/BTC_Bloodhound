@@ -7,6 +7,7 @@ import {
   computeHackTraceEdges,
   processTxForHackTrace,
 } from "./builder.js";
+import { buildGraphL1Page, buildGraphL2Page } from "./graphPaged.js";
 import type { ChainTxDetail } from "../chain/types.js";
 import type { ChainRouter } from "../chain/router.js";
 import { openDatabase, runMigrations, Store } from "@cointrace/db";
@@ -401,6 +402,98 @@ describe("victim search graph filters", () => {
     expect(level2Nodes.length).toBeGreaterThan(0);
     expect(level2Nodes.length).toBeLessThan(hop2.length);
     expect(graph.nodes.some((n) => n.id === "hack1")).toBe(true);
+  });
+});
+
+describe("buildGraphL1Page pagination", () => {
+  it("paginates L1 downstream and emits l2Token", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    await store.upsertAddress({
+      address: "hack1",
+      role: "hacker",
+      isFlaggedHacker: true,
+      hopFromHacker: 0,
+    });
+    const downs = ["down1", "down2", "down3"];
+    await store.upsertAddressesBatch(
+      downs.map((address) => ({ address, role: "downstream", source: "derived", hopFromHacker: 1 })),
+    );
+    await store.upsertEdgesBatch(
+      downs.map((address, i) => ({
+        fromAddress: "hack1",
+        toAddress: address,
+        txid: `tx${i}`,
+        amountSats: 3000 - i * 1000,
+        direction: "out_from_hacker" as const,
+      })),
+    );
+
+    const page1 = await buildGraphL1Page(store, "hack1", {
+      limit: 2,
+      maxDownstream: 100,
+      minEdgeSats: 0,
+      maxGraphDepth: 2,
+      loadId: "test-load-id",
+    });
+    expect(page1.page.totalL1).toBe(3);
+    expect(page1.page.loadedL1).toBe(2);
+    expect(page1.page.done).toBe(false);
+    expect(page1.page.nextCursor).toBeTruthy();
+    expect(page1.l2Token).toBeTruthy();
+    expect(page1.nodes.some((n) => n.id === "hack1")).toBe(true);
+
+    const page2 = await buildGraphL1Page(store, "hack1", {
+      limit: 2,
+      cursor: page1.page.nextCursor,
+      loadedL1: page1.page.loadedL1,
+      maxDownstream: 100,
+      minEdgeSats: 0,
+      maxGraphDepth: 2,
+    });
+    expect(page2.page.done).toBe(true);
+    expect(page2.nodes.some((n) => n.id === "hack1")).toBe(false);
+    expect(page2.nodes.filter((n) => n.type === "downstream")).toHaveLength(1);
+  });
+
+  it("buildGraphL2Page returns hop-2 children for l2 token parents", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    await store.upsertAddressesBatch([
+      { address: "hack1", role: "hacker", isFlaggedHacker: true, hopFromHacker: 0 },
+      { address: "down1", role: "downstream", source: "derived", hopFromHacker: 1 },
+      { address: "child1", role: "downstream", source: "derived", hopFromHacker: 2 },
+    ]);
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "hack1",
+        toAddress: "down1",
+        txid: "tx1",
+        amountSats: 5000,
+        direction: "out_from_hacker",
+      },
+      {
+        fromAddress: "down1",
+        toAddress: "child1",
+        txid: "tx2",
+        amountSats: 4000,
+        direction: "out_from_hacker",
+      },
+    ]);
+
+    const l1 = await buildGraphL1Page(store, "hack1", {
+      limit: 10,
+      maxDownstream: 100,
+      minEdgeSats: 0,
+      maxGraphDepth: 2,
+    });
+    expect(l1.l2Token).toBeTruthy();
+
+    const l2 = await buildGraphL2Page(store, l1.l2Token!, { limit: 50 });
+    expect(l2.nodes.some((n) => n.id === "child1")).toBe(true);
+    expect(l2.edges.some((e) => e.source === "down1" && e.target === "child1")).toBe(true);
   });
 });
 

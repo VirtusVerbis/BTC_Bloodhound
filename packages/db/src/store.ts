@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { SQLiteAsyncDialect } from "drizzle-orm/sqlite-core";
 import type { D1Binding } from "./d1.js";
@@ -27,6 +27,20 @@ const INGEST_JOB_TYPES = [
 /** Cloudflare D1 allows max 100 bound params per query; reserve room for other binds. */
 const D1_IN_CLAUSE_CHUNK_SIZE = 80;
 const ADDRESS_DETAIL_TX_LIMIT = 50;
+
+export interface OutEdgeKeysetCursor {
+  amountSats: number;
+  toAddress: string;
+}
+
+function outEdgeKeysetAfter(cursor: OutEdgeKeysetCursor) {
+  const clause = or(
+    lt(edges.amountSats, cursor.amountSats),
+    and(eq(edges.amountSats, cursor.amountSats), gt(edges.toAddress, cursor.toAddress)),
+  );
+  if (!clause) throw new Error("invalid keyset cursor");
+  return clause;
+}
 
 function chunkArray<T>(items: T[], size: number): T[][] {
   if (size <= 0) return items.length > 0 ? [items] : [];
@@ -612,20 +626,80 @@ export class Store {
     return await this.db.select().from(edges).where(eq(edges.fromAddress, address)).all();
   }
 
+  async countOutEdgesFromAddress(
+    address: string,
+    opts: { minEdgeSats?: number } = {},
+  ): Promise<number> {
+    const conditions = [eq(edges.fromAddress, address), eq(edges.direction, "out_from_hacker")];
+    const minEdgeSats = opts.minEdgeSats ?? 0;
+    if (minEdgeSats > 0) conditions.push(gte(edges.amountSats, minEdgeSats));
+    const row = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(edges)
+      .where(and(...conditions))
+      .get();
+    return Number(row?.count ?? 0);
+  }
+
   async getOutEdgesFromAddress(
     address: string,
-    opts: { minEdgeSats?: number; limit: number },
+    opts: { minEdgeSats?: number; limit: number; after?: OutEdgeKeysetCursor },
   ): Promise<Edge[]> {
     const conditions = [eq(edges.fromAddress, address), eq(edges.direction, "out_from_hacker")];
     const minEdgeSats = opts.minEdgeSats ?? 0;
     if (minEdgeSats > 0) conditions.push(gte(edges.amountSats, minEdgeSats));
+    if (opts.after) conditions.push(outEdgeKeysetAfter(opts.after));
     return await this.db
       .select()
       .from(edges)
       .where(and(...conditions))
-      .orderBy(desc(edges.amountSats))
+      .orderBy(desc(edges.amountSats), asc(edges.toAddress))
       .limit(opts.limit)
       .all();
+  }
+
+  async getOutEdgesFromParents(
+    parents: string[],
+    opts: {
+      minEdgeSats?: number;
+      limit: number;
+      after?: { parentIndex: number; amountSats: number; toAddress: string };
+    },
+  ): Promise<{ edges: Edge[]; nextAfter: { parentIndex: number; amountSats: number; toAddress: string } | null }> {
+    const unique = [...new Set(parents)].filter(Boolean);
+    const result: Edge[] = [];
+    let parentIndex = opts.after?.parentIndex ?? 0;
+    let edgeAfter: OutEdgeKeysetCursor | undefined =
+      opts.after != null
+        ? { amountSats: opts.after.amountSats, toAddress: opts.after.toAddress }
+        : undefined;
+
+    while (parentIndex < unique.length && result.length < opts.limit) {
+      const parent = unique[parentIndex]!;
+      const remaining = opts.limit - result.length;
+      const rows = await this.getOutEdgesFromAddress(parent, {
+        minEdgeSats: opts.minEdgeSats,
+        limit: remaining,
+        after: edgeAfter,
+      });
+      result.push(...rows);
+      if (rows.length < remaining) {
+        parentIndex++;
+        edgeAfter = undefined;
+      } else {
+        const last = rows[rows.length - 1]!;
+        return {
+          edges: result,
+          nextAfter: {
+            parentIndex,
+            amountSats: last.amountSats,
+            toAddress: last.toAddress,
+          },
+        };
+      }
+    }
+
+    return { edges: result, nextAfter: null };
   }
 
   async getAddressesMap(addressList: string[]): Promise<Map<string, Address>> {

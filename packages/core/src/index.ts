@@ -4,6 +4,8 @@ export * from "./chain/router.js";
 export * from "./chain/esplora.js";
 export * from "./chain/types.js";
 export * from "./graph/builder.js";
+export * from "./graph/graphPaged.js";
+export * from "./graph/graphTokens.js";
 export * from "./indexer/jobClass.js";
 export * from "./indexer/jobLog.js";
 export * from "./indexer/processor.js";

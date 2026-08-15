@@ -52,12 +52,15 @@ interface AppConfig {
   statsPollMs?: number;
   maxGraphVictims?: number;
   maxGraphDownstream?: number;
+  graphPageSizeDefault?: number;
+  graphPageSizeMax?: number;
   graphActivityWindowHours?: number;
   hackersPollMs?: number;
 }
 
 const DEFAULT_STATS_POLL_MS = 900_000;
 const DEFAULT_HACKERS_POLL_MS = 3_600_000;
+const DEFAULT_GRAPH_PAGE_SIZE = 500;
 const SYNC_POLL_MS = 15_000;
 const DEFER_SECONDARY_POLLS_MS = 3_000;
 
@@ -97,6 +100,7 @@ export default function App() {
   const [configMinEdgeSats, setConfigMinEdgeSats] = useState(DEFAULT_MIN_EDGE_SATS);
   const [graphMaxVictims, setGraphMaxVictims] = useState(DEFAULT_MAX_GRAPH_NODE_CAP);
   const [graphMaxDownstream, setGraphMaxDownstream] = useState(DEFAULT_MAX_GRAPH_NODE_CAP);
+  const [graphPageSize, setGraphPageSize] = useState(DEFAULT_GRAPH_PAGE_SIZE);
   const [victimSearchInput, setVictimSearchInput] = useState("");
   const [activeVictimSearch, setActiveVictimSearch] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<AppTab>("tracker");
@@ -193,6 +197,13 @@ export default function App() {
             : DEFAULT_MAX_GRAPH_NODE_CAP;
         setGraphMaxVictims(victimsCap);
         setGraphMaxDownstream(downstreamCap);
+        if (
+          cfg.graphPageSizeDefault != null &&
+          Number.isFinite(cfg.graphPageSizeDefault) &&
+          cfg.graphPageSizeDefault >= 1
+        ) {
+          setGraphPageSize(Math.floor(cfg.graphPageSizeDefault));
+        }
         setMaxVictimNodes((n) => clampGraphNodeCount(n, victimsCap));
         setMaxVictimDraft((d) => String(clampGraphNodeCount(Number(d) || DEFAULT_MAX_VICTIM_NODES, victimsCap)));
         setMaxDownstreamNodes((n) => clampGraphNodeCount(n, downstreamCap));
@@ -572,6 +583,7 @@ export default function App() {
             minEdgeSats={minEdgeSats}
             maxVictimNodes={maxVictimNodes}
             maxDownstreamNodes={maxDownstreamNodes}
+            graphPageSize={graphPageSize}
             victimSearch={activeVictimSearch}
             onNodeClick={setDrawerAddr}
             onCollapseVictims={() => setExpandVictims(false)}

@@ -4,6 +4,8 @@ import type { Store } from "@cointrace/db";
 import type { AppConfig } from "@cointrace/core";
 import {
   buildGraph,
+  buildGraphL1Page,
+  buildGraphL2Page,
   buildVictimGraph,
   isRebuildActive,
   normalizeBitcoinAddress,
@@ -28,6 +30,13 @@ function parsePositiveInt(raw: string | undefined, fallback: number) {
     return Math.floor(Number(raw));
   }
   return fallback;
+}
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isValidLoadId(loadId: string | undefined): loadId is string {
+  return loadId != null && UUID_RE.test(loadId);
 }
 
 async function applyRateLimit(
@@ -84,12 +93,21 @@ export function createApp(store: Store, config: AppConfig) {
 
     const ip = clientIp(c);
     if (path === "/api/graph") {
+      const loadId = c.req.query("load_id")?.trim();
+      const graphKey =
+        isValidLoadId(loadId) && c.req.query("paginated") === "1"
+          ? `get:graph:load:${loadId}`
+          : `get:graph:${ip}`;
+      const graphLimit =
+        isValidLoadId(loadId) && c.req.query("paginated") === "1"
+          ? config.graphContinuationRateLimit
+          : config.graphRateLimit;
       const denied = await applyRateLimit(
         c,
         store,
         config,
-        `get:graph:${ip}`,
-        config.graphRateLimit,
+        graphKey,
+        graphLimit,
         config.graphRateWindowSec,
       );
       if (denied) return denied;
@@ -113,6 +131,8 @@ export function createApp(store: Store, config: AppConfig) {
       statsPollMs: config.btcUsdPriceRefreshIntervalSec * 1000,
       maxGraphVictims: config.maxGraphVictims,
       maxGraphDownstream: config.maxGraphDownstream,
+      graphPageSizeDefault: config.graphPageSizeDefault,
+      graphPageSizeMax: config.graphPageSizeMax,
       graphActivityWindowHours: config.graphActivityWindowHours,
       hackersPollMs: config.hackersPollMs,
     }),
@@ -189,6 +209,72 @@ export function createApp(store: Store, config: AppConfig) {
     }
 
     if (!hacker) return c.json({ error: "hacker query required" }, 400);
+
+    const paginated = c.req.query("paginated") === "1";
+    if (paginated) {
+      const phase = c.req.query("phase") === "l2" ? "l2" : "l1";
+      const limitRaw = parsePositiveInt(c.req.query("limit"), config.graphPageSizeDefault);
+      const limit = clampInt(limitRaw, 1, config.graphPageSizeMax);
+      const cursor = c.req.query("cursor")?.trim() || null;
+      const loadIdParam = c.req.query("load_id")?.trim();
+      const maxDownstream = clampInt(maxOutputsRaw, 1, config.maxGraphDownstream);
+
+      if (phase === "l2") {
+        const l2Token = c.req.query("l2_token")?.trim();
+        if (!l2Token) return c.json({ error: "l2_token required for phase=l2" }, 400);
+        const loadedL2Raw = c.req.query("loaded_l2");
+        const loadedL2 =
+          loadedL2Raw != null && Number.isFinite(Number(loadedL2Raw))
+            ? Math.max(0, Math.floor(Number(loadedL2Raw)))
+            : 0;
+        try {
+          return c.json(
+            await buildGraphL2Page(store, l2Token, {
+              limit,
+              cursor,
+              loadedL2,
+            }),
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (message.includes("invalid")) return c.json({ error: message }, 400);
+          throw err;
+        }
+      }
+
+      const loadedL1Raw = c.req.query("loaded_l1");
+      const loadedL1 =
+        loadedL1Raw != null && Number.isFinite(Number(loadedL1Raw))
+          ? Math.max(0, Math.floor(Number(loadedL1Raw)))
+          : 0;
+      const loadId = cursor ? loadIdParam : crypto.randomUUID();
+      if (cursor && !isValidLoadId(loadIdParam)) {
+        return c.json({ error: "load_id required for continuation" }, 400);
+      }
+      try {
+        const result = await buildGraphL1Page(store, hacker, {
+          limit,
+          cursor,
+          loadedL1,
+          maxDownstream,
+          minEdgeSats,
+          expandVictims,
+          maxVictims: clampInt(maxVictimsRaw, 1, config.maxGraphVictims),
+          graphBundleMinEdges: config.graphBundleMinEdges,
+          maxGraphDepth: config.maxGraphDepth,
+          loadId: loadId ?? undefined,
+        });
+        if (!cursor && result.page.loadId == null && loadId) {
+          result.page.loadId = loadId;
+        }
+        return c.json(result);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.includes("invalid")) return c.json({ error: message }, 400);
+        throw err;
+      }
+    }
+
     return c.json(await buildGraph(store, hacker, graphOpts));
   });
 

@@ -19,63 +19,17 @@ import {
   graphCacheKey,
   setCachedGraph,
 } from "../lib/graphCache";
+import {
+  loadHackerGraphPaginated,
+  type ApiGraphEdge,
+  type ApiGraphNode,
+  type ApiGraphResponse,
+  type GraphLoadProgress,
+} from "../lib/graphLoader";
 import { layoutGraph, type VictimSortOption } from "../lib/layoutGraph";
 import { nodeTypes, type GraphNodeData } from "./nodes/GraphNodes";
 
-interface ApiGraphNode {
-  id: string;
-  type: string;
-  label: string;
-  role: string;
-  address?: string;
-  childCount?: number;
-  totalSats?: number;
-  totalReceivedSats?: number;
-  liveBalanceSats?: number | null;
-  liveBalanceAt?: string | null;
-  hopFromHacker?: number | null;
-  incomingSats?: number;
-  latestTxTime?: string | null;
-  earliestTxTime?: string | null;
-  expandProfile?: "sweep_relay" | "spend_fanout" | null;
-  relayMeta?: {
-    receiveTxCount: number;
-    spendTxCount: number;
-    primarySweepTarget?: string;
-    totalReceivedSats?: number;
-  };
-  fanoutMeta?: {
-    outputCount: number;
-    totalOutSats: number;
-    txid: string;
-    topOutputs?: Array<{ address: string; sats: number }>;
-  };
-}
-
-interface ApiGraphEdge {
-  id: string;
-  source: string;
-  target: string;
-  txid: string;
-  amount: number;
-  time: string | null;
-  edgeKind?: "default" | "peel_relay" | "spend_fanout";
-  bundled?: boolean;
-  edgeCount?: number;
-  txids?: string[];
-  totalAmount?: number;
-  outputCount?: number;
-  topOutputs?: Array<{ address: string; sats: number }>;
-}
-
 type GraphMode = "hacker" | "victim-filtered" | "victim-centric";
-
-interface ApiGraphResponse {
-  nodes: ApiGraphNode[];
-  edges: ApiGraphEdge[];
-  mode?: GraphMode;
-  matchedHackers?: string[];
-}
 
 const PEEL_EDGE_COLOR = "#4caf50";
 const FANOUT_EDGE_COLOR = "#ff00ff";
@@ -199,6 +153,7 @@ export function HackGraph({
   minEdgeSats,
   maxVictimNodes,
   maxDownstreamNodes,
+  graphPageSize,
   victimSearch,
   onNodeClick,
   onCollapseVictims,
@@ -209,6 +164,7 @@ export function HackGraph({
   minEdgeSats: number;
   maxVictimNodes: number;
   maxDownstreamNodes: number;
+  graphPageSize: number;
   victimSearch: string | null;
   onNodeClick: (address: string) => void;
   onCollapseVictims?: () => void;
@@ -235,6 +191,7 @@ export function HackGraph({
   const [nodesInteractive, setNodesInteractive] = useState(false);
   const [graphError, setGraphError] = useState<string | null>(null);
   const [graphLoading, setGraphLoading] = useState(false);
+  const [graphLoadProgress, setGraphLoadProgress] = useState<GraphLoadProgress | null>(null);
 
   const flowKey = useMemo(
     () =>
@@ -254,6 +211,7 @@ export function HackGraph({
     setEdges([]);
     setGraphError(null);
     setGraphLoading(false);
+    setGraphLoadProgress(null);
   }, [flowKey, setNodes, setEdges]);
 
   useEffect(() => {
@@ -361,7 +319,6 @@ export function HackGraph({
       const needsClear = keyChanged || opts?.skipCache === true;
 
       const params = new URLSearchParams({
-        depth: "2",
         min_edge_sats: String(minEdgeSats),
         max_victims: String(maxVictimNodes),
         max_downstream: String(maxDownstreamNodes),
@@ -369,6 +326,7 @@ export function HackGraph({
 
       if (victimSearch) {
         params.set("victim", victimSearch);
+        params.set("depth", "2");
       } else {
         params.set("hacker", hacker);
         if (expanded) params.set("expand_victims", "1");
@@ -382,21 +340,48 @@ export function HackGraph({
             lastGraphKeyRef.current = key;
           }
           setGraphLoading(false);
+          setGraphLoadProgress(null);
           return;
         }
       }
 
       setGraphLoading(true);
+      setGraphLoadProgress({ phase: "l1", loaded: 0, total: null, percent: 0, message: "Loading" });
 
       let graph: ApiGraphResponse;
       try {
-        graph = await fetchGraphDeduped(
-          key,
-          () => api<ApiGraphResponse>(`/api/graph?${params}`),
-          { force: opts?.skipCache === true },
-        );
+        if (victimSearch) {
+          graph = await fetchGraphDeduped(
+            key,
+            () => api<ApiGraphResponse>(`/api/graph?${params}`),
+            { force: opts?.skipCache === true },
+          );
+        } else {
+          graph = await loadHackerGraphPaginated(
+            {
+              hacker,
+              minEdgeSats,
+              maxDownstream: maxDownstreamNodes,
+              maxVictims: maxVictimNodes,
+              expandVictims: expanded,
+              pageSize: graphPageSize,
+            },
+            {
+              onProgress: (progress) => {
+                if (generation === loadGenerationRef.current) {
+                  setGraphLoadProgress(progress);
+                }
+              },
+              signal: {
+                generation,
+                current: () => loadGenerationRef.current,
+              },
+            },
+          );
+        }
       } catch (e) {
         if (generation !== loadGenerationRef.current) return;
+        if (e instanceof Error && e.message === "aborted") return;
         if (victimSearch) {
           window.dispatchEvent(
             new CustomEvent("cointrace-toast", { detail: "Address not found in hack data" }),
@@ -410,6 +395,7 @@ export function HackGraph({
           );
         }
         setGraphLoading(false);
+        setGraphLoadProgress(null);
         return;
       }
 
@@ -419,6 +405,7 @@ export function HackGraph({
       applyApiGraph(graph);
       lastGraphKeyRef.current = key;
       setGraphLoading(false);
+      setGraphLoadProgress(null);
     },
     [
       hacker,
@@ -426,6 +413,7 @@ export function HackGraph({
       minEdgeSats,
       maxVictimNodes,
       maxDownstreamNodes,
+      graphPageSize,
       victimSearch,
       applyApiGraph,
     ],
@@ -486,7 +474,7 @@ export function HackGraph({
     <div className="graph-canvas">
       {graphLoading && nodes.length === 0 && !graphError && (
         <div className="graph-status-overlay" role="status">
-          <p>Loading graph…</p>
+          <p>Loading graph…{graphLoadProgress ? ` ${graphLoadProgress.percent}%` : ""}</p>
         </div>
       )}
       {graphError && nodes.length === 0 && (
@@ -524,6 +512,13 @@ export function HackGraph({
           style={{ background: "#000" }}
         >
           <Background color="#222" gap={20} />
+          {graphLoading && graphLoadProgress && (
+            <Panel position="top-right">
+              <div className="graph-load-progress" role="status" aria-live="polite">
+                Loading… {graphLoadProgress.percent}%
+              </div>
+            </Panel>
+          )}
           <Panel position="top-left">
             <div className="graph-panel-controls">
               <div className="graph-panel-controls-stack">
