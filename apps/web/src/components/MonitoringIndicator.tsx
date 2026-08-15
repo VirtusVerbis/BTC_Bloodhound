@@ -97,14 +97,12 @@ function monitoringTooltip(sync: MonitoringSyncStatus) {
 interface MonitoringIndicatorProps {
   sync: MonitoringSyncStatus | null;
   onNavigateMonitoring: () => void;
-  rateLimitSecondsLeft?: number | null;
   apiThresholdSecondsLeft?: number | null;
 }
 
 export function MonitoringIndicator({
   sync,
   onNavigateMonitoring,
-  rateLimitSecondsLeft = null,
   apiThresholdSecondsLeft = null,
 }: MonitoringIndicatorProps) {
   const active = sync?.monitoringActive !== false;
@@ -115,7 +113,6 @@ export function MonitoringIndicator({
       ? apiThresholdSecondsLeft
       : sync?.apiThresholdSecondsLeft ?? 0;
   const showThresholdCountdown = thresholdExceeded && thresholdCountdown > 0;
-  const showRateLimit = rateLimitSecondsLeft != null && rateLimitSecondsLeft > 0;
   const queueDraining = sync?.queueSchedulingPaused === true;
 
   return (
@@ -155,11 +152,6 @@ export function MonitoringIndicator({
       <div className="monitoring-updated">
         {sync ? formatLastCompletedJob(sync) : "Last Job Completed: —  Duration: —"}
       </div>
-      {showRateLimit && (
-        <div className="rate-limit-banner" role="status">
-          Rate limit active — too many requests. Try again in {rateLimitSecondsLeft}s.
-        </div>
-      )}
     </div>
   );
 }

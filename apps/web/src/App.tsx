@@ -365,7 +365,6 @@ export default function App() {
         <MonitoringIndicator
           sync={sync}
           onNavigateMonitoring={navigateToMonitoring}
-          rateLimitSecondsLeft={rateLimitSecondsLeft}
           apiThresholdSecondsLeft={apiThresholdSecondsLeft}
         />
         <div className="app-header-title-row">
@@ -413,6 +412,11 @@ export default function App() {
                 )}
               </span>
             </>
+          )}
+          {rateLimitActive && (
+            <div className="rate-limit-banner" role="status">
+              Rate limit active — too many requests. Try again in {rateLimitSecondsLeft}s.
+            </div>
           )}
           {sync && (
             <span className="sync-stats">

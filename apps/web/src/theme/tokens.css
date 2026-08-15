@@ -192,11 +192,8 @@ body {
 }
 
 .rate-limit-banner {
-  margin-top: 0.35rem;
-  margin-left: auto;
-  max-width: 18rem;
   color: var(--color-node-border);
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   font-weight: 600;
   line-height: 1.3;
 }
@@ -536,11 +533,6 @@ button.primary {
     white-space: normal;
   }
 
-  .rate-limit-banner {
-    margin-left: 0;
-    max-width: 100%;
-  }
-
   .sync-stats {
     position: static;
     text-align: left;
@@ -704,6 +696,15 @@ button.primary {
 }
 
 @media (min-width: 768px) {
+  .rate-limit-banner {
+    position: absolute;
+    left: 60%;
+    bottom: 1rem;
+    transform: translateX(-50%);
+    text-align: center;
+    white-space: nowrap;
+  }
+
   .sync-stats {
     position: absolute;
     right: 1.5rem;
