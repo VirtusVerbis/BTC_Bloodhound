@@ -6,8 +6,10 @@ import {
   logCronError,
   runIndexerTick,
   TICK_LEASE_SKEW_MS,
+  type AppConfig,
   type EnvMap,
 } from "@cointrace/core";
+import type { Store } from "@cointrace/db";
 import { createApp } from "./app.js";
 
 export interface WorkerEnv {
@@ -39,7 +41,11 @@ function envMap(env: WorkerEnv): EnvMap {
   return map;
 }
 
-function build(env: WorkerEnv) {
+function buildIndexer(env: WorkerEnv): {
+  config: AppConfig;
+  store: Store;
+  router: ChainRouter;
+} {
   const config = loadConfig(envMap(env));
   assertProductionSecrets(config);
   const store = createD1Store(env.DB, {
@@ -54,6 +60,11 @@ function build(env: WorkerEnv) {
       apiThresholdMaxSec: config.apiThresholdMaxSec,
     },
   });
+  return { config, store, router };
+}
+
+function buildApp(env: WorkerEnv) {
+  const { config, store, router } = buildIndexer(env);
   const app = createApp(store, config);
   return { config, store, router, app };
 }
@@ -103,7 +114,7 @@ function withSecurityHeaders(res: Response): Response {
 
 const worker = {
   async fetch(request: Request, env: WorkerEnv): Promise<Response> {
-    const { app } = build(env);
+    const { app } = buildApp(env);
     const url = new URL(request.url);
     if (url.pathname.startsWith("/api")) {
       return app.fetch(request);
@@ -115,14 +126,14 @@ const worker = {
   },
 
   async scheduled(_event: unknown, env: WorkerEnv): Promise<void> {
-    const { store, router, config } = build(env);
+    const { store, router, config } = buildIndexer(env);
     const leaseMs = config.tickBudgetMs + TICK_LEASE_SKEW_MS;
     const acquired = await store.tryAcquireTickLease(leaseMs);
     if (!acquired) return;
     try {
       await store.resetRunningJobs(config.runningJobStaleMs, {
         jobReclaimDeferAfter: config.jobReclaimDeferAfter,
-        jobDeferSec: config.jobDeferSec,
+        jobReclaimDeferSec: config.jobReclaimDeferSec,
       });
       await runIndexerTick(store, router, config, {
         schedule: true,

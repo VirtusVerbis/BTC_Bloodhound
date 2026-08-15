@@ -279,7 +279,7 @@ async function main() {
     const logColor = argv.includes("--log-color") || config.indexerLogColor;
     const { reclaimed } = await store.resetRunningJobs(config.runningJobStaleMs, {
       jobReclaimDeferAfter: config.jobReclaimDeferAfter,
-      jobDeferSec: config.jobDeferSec,
+      jobReclaimDeferSec: config.jobReclaimDeferSec,
     });
     if (reclaimed > 0) {
       console.log(`Reclaimed ${reclaimed} orphaned running job(s) to pending`);

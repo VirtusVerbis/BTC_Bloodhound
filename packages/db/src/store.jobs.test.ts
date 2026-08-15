@@ -57,6 +57,135 @@ describe("resetRunningJobs", () => {
     expect((await store.getJob(fresh!.id))?.status).toBe("running");
     expect((await store.getJob(staleId))?.status).toBe("pending");
   });
+
+  it("defers after N unchanged stale reclaims", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const id = await store.enqueueJob(
+      "backfill_hacker_address",
+      { address: "bc1qtest", chainCursor: "abc", processedIndex: 2 },
+      10,
+    );
+    sqlite
+      .prepare(
+        "UPDATE jobs SET status = 'running', started_at = ?, reclaim_count = 0, reclaim_progress_json = ? WHERE id = ?",
+      )
+      .run(new Date(Date.now() - 60_000).toISOString(), '{"processedIndex":2,"headTxid":null,"chainCursor":"abc"}', id);
+
+    const before = Date.now();
+    const { reclaimed, deferred } = await store.resetRunningJobs(30_000, {
+      jobReclaimDeferAfter: 1,
+      jobReclaimDeferSec: 300,
+    });
+    expect(reclaimed).toBe(0);
+    expect(deferred).toBe(1);
+    const job = await store.getJob(id);
+    expect(job?.status).toBe("pending");
+    expect(job?.lastError).toBe("deferred: reclaimed without progress");
+    const runAfterMs = new Date(job!.runAfter).getTime();
+    expect(runAfterMs - before).toBeGreaterThanOrEqual(299_000);
+    expect(runAfterMs - before).toBeLessThan(310_000);
+  });
+
+  it("reclaims when progress changed since last reclaim", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const id = await store.enqueueJob(
+      "backfill_hacker_address",
+      { address: "bc1qtest", chainCursor: "abc", processedIndex: 5 },
+      10,
+    );
+    sqlite
+      .prepare(
+        "UPDATE jobs SET status = 'running', started_at = ?, reclaim_count = 1, reclaim_progress_json = ? WHERE id = ?",
+      )
+      .run(
+        new Date(Date.now() - 60_000).toISOString(),
+        '{"processedIndex":2,"headTxid":null,"chainCursor":"abc"}',
+        id,
+      );
+
+    const { reclaimed, deferred } = await store.resetRunningJobs(30_000, {
+      jobReclaimDeferAfter: 1,
+      jobReclaimDeferSec: 300,
+    });
+    expect(deferred).toBe(0);
+    expect(reclaimed).toBe(1);
+    const job = await store.getJob(id);
+    expect(job?.status).toBe("pending");
+    expect(job?.reclaimCount).toBe(2);
+    expect(job?.lastError).toBe("reclaimed: stale running");
+  });
+});
+
+describe("claimNextIngestJob", () => {
+  it("prefers unreclaimed ingest job over reclaimed continuation", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const reclaimedId = await store.enqueueJob(
+      "backfill_hacker_address",
+      { address: "bc1qbackfill", chainCursor: "abc", processedIndex: 2 },
+      10,
+    );
+    sqlite.prepare("UPDATE jobs SET reclaim_count = 1 WHERE id = ?").run(reclaimedId);
+
+    const expandId = await store.enqueueJob(
+      "expand_downstream",
+      { address: "bc1qexpand", cron: true },
+      8,
+    );
+
+    const claimed = await store.claimNextIngestJob({ preferContinuation: true });
+    expect(claimed?.id).toBe(expandId);
+  });
+
+  it("claims reclaimed continuation when no alternatives", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const reclaimedId = await store.enqueueJob(
+      "backfill_hacker_address",
+      { address: "bc1qbackfill", chainCursor: "abc", processedIndex: 2 },
+      10,
+    );
+    sqlite.prepare("UPDATE jobs SET reclaim_count = 1 WHERE id = ?").run(reclaimedId);
+
+    const claimed = await store.claimNextIngestJob({ preferContinuation: true });
+    expect(claimed?.id).toBe(reclaimedId);
+  });
+});
+
+describe("hasPendingIngestContinuation", () => {
+  it("returns true for pending continuation ingest jobs", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.enqueueJob("poll_hacker_address", { address: "bc1qpoll" }, 6);
+    await store.enqueueJob(
+      "backfill_hacker_address",
+      { address: "bc1qbackfill", chainCursor: "abc" },
+      10,
+    );
+
+    expect(await store.hasPendingIngestContinuation()).toBe(true);
+  });
+
+  it("returns false when no continuation ingest jobs", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.enqueueJob("expand_downstream", { address: "bc1qexpand", cron: true }, 8);
+    expect(await store.hasPendingIngestContinuation()).toBe(false);
+  });
 });
 
 describe("tick lease", () => {

@@ -81,6 +81,9 @@ MAX_QUEUE_DEPTH = "360"
 
 INDEXER_JOB_DETAILS = "1"
 INDEXER_LOG_COLOR = "1"
+JOB_RECLAIM_DEFER_AFTER = "1"
+JOB_RECLAIM_DEFER_SEC = "300"
+BACKFILL_SKIP_RECEIVES_PER_JOB = "25"
 
 # Local wrangler dev: copy .dev.vars.example → .dev.vars
 # Ops (add/remove hacker, clear-queue) use indexer CLI with --remote against D1 — no admin HTTP API.

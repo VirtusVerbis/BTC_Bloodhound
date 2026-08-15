@@ -35,6 +35,33 @@ function attachSubrequestBudget(store: Store, config: AppConfig): SubrequestBudg
   return budget;
 }
 
+async function runSchedulePhase(
+  store: Store,
+  router: ChainRouter,
+  config: AppConfig,
+  budget: SubrequestBudget,
+  jobDetails: boolean,
+  logColor: boolean,
+): Promise<number> {
+  const maintCounter = (await store.getSchedulerState())?.maintenanceCronCounter ?? 0;
+  const reserve = scheduleSubrequestReserve({
+    scheduleSubrequestReserve: config.scheduleSubrequestReserve,
+    scheduleReserveMaintExtra: config.scheduleReserveMaintExtra,
+    hackerMaintenanceEveryNCrons: config.hackerMaintenanceEveryNCrons,
+    maintenanceCronCounter: maintCounter + 1,
+  });
+  const schedBefore = budget.used();
+  const btc = await scheduleBtcUsdPriceRefresh(store, router, config, budget, reserve);
+  const crawlStats = await scheduleDownstreamCrawl(store, config, budget, reserve);
+  const schedSubreq = budget.used() - schedBefore;
+  logCronDetail(
+    jobDetails,
+    formatCronScheduleDoneLine({ ...crawlStats, btc }, budget, schedSubreq),
+    logColor,
+  );
+  return schedSubreq;
+}
+
 /**
  * One indexer cron tick: optional schedule enqueue + process up to jobsPerTick jobs
  * (or until tickBudgetMs wall deadline).
@@ -57,33 +84,37 @@ export async function runIndexerTick(
 
   logCronDetail(jobDetails, "[cron] tick start", logColor);
   try {
-    if (schedule) {
-      const maintCounter = (await store.getSchedulerState())?.maintenanceCronCounter ?? 0;
-      const reserve = scheduleSubrequestReserve({
-        scheduleSubrequestReserve: config.scheduleSubrequestReserve,
-        scheduleReserveMaintExtra: config.scheduleReserveMaintExtra,
-        hackerMaintenanceEveryNCrons: config.hackerMaintenanceEveryNCrons,
-        maintenanceCronCounter: maintCounter + 1,
-      });
-      const schedBefore = budget.used();
-      const btc = await scheduleBtcUsdPriceRefresh(store, router, config, budget, reserve);
-      const crawlStats = await scheduleDownstreamCrawl(store, config, budget, reserve);
-      schedSubreq = budget.used() - schedBefore;
-      logCronDetail(
-        jobDetails,
-        formatCronScheduleDoneLine({ ...crawlStats, btc }, budget, schedSubreq),
-        logColor,
-      );
-    }
+    const continuationPending = schedule ? await store.hasPendingIngestContinuation() : false;
     const deadlineMs = Date.now() + config.tickBudgetMs;
-    const jobResult = await processJobs(store, router, config, {
+    const jobOpts = {
       deadlineMs,
       jobDetails,
       logColor,
       subrequestBudget: budget,
-    });
-    jobsProcessed = jobResult.processed;
-    tickStop = jobResult.stopReason;
+    };
+
+    if (schedule && continuationPending) {
+      const jobResult = await processJobs(store, router, config, jobOpts);
+      jobsProcessed = jobResult.processed;
+      tickStop = jobResult.stopReason;
+
+      if (budget.remaining() > config.scheduleSubrequestReserve) {
+        schedSubreq = await runSchedulePhase(store, router, config, budget, jobDetails, logColor);
+      } else {
+        logCronDetail(
+          jobDetails,
+          "[cron] schedule skipped continuation=true budget=low",
+          logColor,
+        );
+      }
+    } else {
+      if (schedule) {
+        schedSubreq = await runSchedulePhase(store, router, config, budget, jobDetails, logColor);
+      }
+      const jobResult = await processJobs(store, router, config, jobOpts);
+      jobsProcessed = jobResult.processed;
+      tickStop = jobResult.stopReason;
+    }
     return { scheduled: schedule, jobsProcessed };
   } finally {
     store.setSubrequestBudget(undefined);

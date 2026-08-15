@@ -119,6 +119,10 @@ export interface AppConfig {
   graphBundleMinEdges: number;
   /** Reclaim poison pill after N stale reclaims without progress. */
   jobReclaimDeferAfter: number;
+  /** How long reclaimed-without-progress ingest jobs stay deferred (seconds). */
+  jobReclaimDeferSec: number;
+  /** Max classified receive txs skipped per backfill job tick (no D1 per tx). */
+  backfillSkipReceivesPerJob: number;
   /** Skip getTx when receive-only tx has more than this many outputs. */
   maxVoutCountSkipGetTx: number;
   /** Max D1 statements per batch() call. */
@@ -242,6 +246,8 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     spendFanoutTopK: Number(env.SPEND_FANOUT_TOP_K ?? 5),
     graphBundleMinEdges: Number(env.GRAPH_BUNDLE_MIN_EDGES ?? 2),
     jobReclaimDeferAfter: Number(env.JOB_RECLAIM_DEFER_AFTER ?? 3),
+    jobReclaimDeferSec: Number(env.JOB_RECLAIM_DEFER_SEC ?? 86400),
+    backfillSkipReceivesPerJob: Number(env.BACKFILL_SKIP_RECEIVES_PER_JOB ?? 25),
     maxVoutCountSkipGetTx: Number(env.MAX_VOUT_COUNT_SKIP_GET_TX ?? 20),
     d1BatchSize: Number(env.D1_BATCH_SIZE ?? 8),
     syncAddressesPerJob: Number(env.SYNC_ADDRESSES_PER_JOB ?? 5),

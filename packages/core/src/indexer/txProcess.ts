@@ -60,6 +60,17 @@ export async function processClassifiedPendingTx(
     traceEdgesPending: undefined,
   };
 
+  if (
+    !traceActive &&
+    entry.isSpend === false &&
+    shouldSkipGetTx(entry, address, config, {
+      expandProfile: opts?.expandProfile,
+      pageEntry: entry.pageEntry,
+    })
+  ) {
+    return { traceState: nextState, continued: false, chainCallsUsed: 0 };
+  }
+
   if (!traceActive && opts?.skipIfIndexed !== false && (await store.getTransaction(txid))) {
     return { traceState: nextState, continued: false, chainCallsUsed: 0 };
   }

@@ -85,6 +85,8 @@ function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     spendFanoutTopK: 5,
     graphBundleMinEdges: 2,
     jobReclaimDeferAfter: 3,
+    jobReclaimDeferSec: 86400,
+    backfillSkipReceivesPerJob: 25,
     maxVoutCountSkipGetTx: 20,
     d1BatchSize: 8,
     syncAddressesPerJob: 5,
@@ -211,6 +213,59 @@ describe("single chain call per job", () => {
       ADDRESS,
       expect.objectContaining({ processedIndex: 1, pendingTxids: ["tx1", "tx2"] }),
       false,
+    );
+  });
+
+  it("backfill bulk-skips classified receives without trace calls", async () => {
+    const fetchAddressTxPage = vi.fn();
+    const upsertBackfillState = vi.fn();
+    const enqueueJob = vi.fn();
+    const pendingTxs = ["tx0", "tx1", "tx2", "tx3", "tx4"].map((txid) => ({
+      txid,
+      isSpend: false,
+      voutCount: 1,
+      outputAddressCount: 1,
+    }));
+    const store = {
+      getBackfillState: vi.fn().mockResolvedValue(null),
+      setExpandStatus: vi.fn(),
+      getAddress: vi.fn().mockResolvedValue(null),
+      upsertBackfillState,
+      enqueueJob,
+      getTransaction: vi.fn(),
+    } as unknown as Store;
+    const router = { fetchAddressTxPage } as unknown as ChainRouter;
+
+    await processJob(
+      store,
+      router,
+      baseConfig({ backfillTxsPerJob: 1, maxChainCallsPerJob: 0 }),
+      makeJob("backfill_hacker_address", {
+        address: ADDRESS,
+        pendingTxs,
+        pendingTxids: pendingTxs.map((p) => p.txid),
+        processedIndex: 0,
+        pagesExhausted: false,
+      }),
+    );
+
+    expect(fetchAddressTxPage).not.toHaveBeenCalled();
+    expect(processTxForHackTraceMock).not.toHaveBeenCalled();
+    expect(store.getTransaction).not.toHaveBeenCalled();
+    expect(upsertBackfillState).toHaveBeenCalledWith(
+      ADDRESS,
+      expect.objectContaining({
+        processedIndex: 0,
+        pendingTxids: [],
+        pendingTxs: [],
+        pagesExhausted: false,
+      }),
+      false,
+    );
+    expect(enqueueJob).toHaveBeenCalledWith(
+      "backfill_hacker_address",
+      expect.objectContaining({ pendingTxids: [], pagesExhausted: false }),
+      JOB_PRIORITY.BACKFILL_HACKER,
     );
   });
 

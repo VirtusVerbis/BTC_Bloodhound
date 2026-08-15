@@ -1050,6 +1050,14 @@ export class Store {
       if (cont) pick = cont;
     }
 
+    if (
+      (pick.reclaimCount ?? 0) > 0 &&
+      isIngestContinuation(pick.payloadJson)
+    ) {
+      const alt = candidates.find((j) => (j.reclaimCount ?? 0) === 0);
+      if (alt) pick = alt;
+    }
+
     const claimed = await this.db
       .update(jobs)
       .set({ status: "running", startedAt: ts, completedAt: null })
@@ -1059,6 +1067,24 @@ export class Store {
       return null;
     }
     return { ...pick, status: "running" as const, startedAt: ts, completedAt: null };
+  }
+
+  /** True when a runnable pending ingest job has saved continuation state. */
+  async hasPendingIngestContinuation(): Promise<boolean> {
+    const ts = now();
+    const rows = await this.db
+      .select({ payloadJson: jobs.payloadJson })
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.status, "pending"),
+          lte(jobs.runAfter, ts),
+          inArray(jobs.type, [...INGEST_JOB_TYPES]),
+        ),
+      )
+      .limit(32)
+      .all();
+    return rows.some((row) => isIngestContinuation(row.payloadJson));
   }
 
   async completeJob(id: number) {
@@ -1120,7 +1146,7 @@ export class Store {
    */
   async resetRunningJobs(
     staleMs = 0,
-    opts?: { jobReclaimDeferAfter?: number; jobDeferSec?: number },
+    opts?: { jobReclaimDeferAfter?: number; jobReclaimDeferSec?: number },
   ): Promise<{ reclaimed: number; deferred: number }> {
     const cutoff = new Date(Date.now() - Math.max(0, staleMs)).toISOString();
     const staleCondition =
@@ -1132,7 +1158,7 @@ export class Store {
     if (staleJobs.length === 0) return { reclaimed: 0, deferred: 0 };
 
     const deferAfter = opts?.jobReclaimDeferAfter ?? 0;
-    const deferSec = opts?.jobDeferSec ?? 86400;
+    const deferSec = opts?.jobReclaimDeferSec ?? 86400;
     let reclaimed = 0;
     let deferred = 0;
 

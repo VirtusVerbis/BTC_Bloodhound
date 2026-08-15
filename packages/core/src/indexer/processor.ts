@@ -440,6 +440,7 @@ async function backfillHacker(
   let traceEdgesPending = payload.traceEdgesPending;
   const addrRow = await store.getAddress(address);
   const expandProfile = addrRow?.expandProfile ?? null;
+  let skippedReceives = 0;
   while (
     processedIndex < pending.length &&
     processed < processLimit &&
@@ -447,6 +448,17 @@ async function backfillHacker(
     (!jobSubreq || jobSubreq.canUse())
   ) {
     const entry = pending[processedIndex]!;
+    const traceActiveOnEntry = traceEdgesPending === true && traceTxid === entry.txid;
+    if (
+      !traceActiveOnEntry &&
+      entry.isSpend === false &&
+      skippedReceives < config.backfillSkipReceivesPerJob
+    ) {
+      processedIndex++;
+      skippedReceives++;
+      continue;
+    }
+
     const result = await processClassifiedPendingTx(
       store,
       router,
