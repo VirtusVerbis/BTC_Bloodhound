@@ -12,7 +12,7 @@ import {
   useReactFlow,
   MarkerType,
 } from "@xyflow/react";
-import { api, satsToBtc, txUrl } from "../lib/api";
+import { api, satsToBtc, txUrl, ApiError } from "../lib/api";
 import {
   fetchGraphDeduped,
   getCachedGraph,
@@ -233,6 +233,8 @@ export function HackGraph({
   const [victimSort, setVictimSort] = useState<VictimSortOption>("btc-desc");
   const [showEdgeLabels, setShowEdgeLabels] = useState(false);
   const [nodesInteractive, setNodesInteractive] = useState(false);
+  const [graphError, setGraphError] = useState<string | null>(null);
+  const [graphLoading, setGraphLoading] = useState(false);
 
   const flowKey = useMemo(
     () =>
@@ -250,6 +252,8 @@ export function HackGraph({
   useLayoutEffect(() => {
     setNodes([]);
     setEdges([]);
+    setGraphError(null);
+    setGraphLoading(false);
   }, [flowKey, setNodes, setEdges]);
 
   useEffect(() => {
@@ -351,6 +355,7 @@ export function HackGraph({
         expandVictims: expanded,
       });
       const generation = ++loadGenerationRef.current;
+      setGraphError(null);
 
       const keyChanged = key !== lastGraphKeyRef.current;
       const needsClear = keyChanged || opts?.skipCache === true;
@@ -376,9 +381,12 @@ export function HackGraph({
             applyApiGraph(cached);
             lastGraphKeyRef.current = key;
           }
+          setGraphLoading(false);
           return;
         }
       }
+
+      setGraphLoading(true);
 
       let graph: ApiGraphResponse;
       try {
@@ -388,12 +396,21 @@ export function HackGraph({
           { force: opts?.skipCache === true },
         );
       } catch (e) {
+        if (generation !== loadGenerationRef.current) return;
         if (victimSearch) {
           window.dispatchEvent(
             new CustomEvent("cointrace-toast", { detail: "Address not found in hack data" }),
           );
+        } else {
+          const message =
+            e instanceof ApiError && e.message ? e.message : "Graph failed to load. Try again.";
+          setGraphError(message);
+          window.dispatchEvent(
+            new CustomEvent("cointrace-toast", { detail: "Graph failed to load. Try again." }),
+          );
         }
-        throw e;
+        setGraphLoading(false);
+        return;
       }
 
       if (generation !== loadGenerationRef.current) return;
@@ -401,6 +418,7 @@ export function HackGraph({
       setCachedGraph(key, graph);
       applyApiGraph(graph);
       lastGraphKeyRef.current = key;
+      setGraphLoading(false);
     },
     [
       hacker,
@@ -466,6 +484,22 @@ export function HackGraph({
 
   return (
     <div className="graph-canvas">
+      {graphLoading && nodes.length === 0 && !graphError && (
+        <div className="graph-status-overlay" role="status">
+          <p>Loading graph…</p>
+        </div>
+      )}
+      {graphError && nodes.length === 0 && (
+        <div className="graph-error-overlay" role="alert">
+          <p>{graphError}</p>
+          <button
+            type="button"
+            onClick={() => loadGraph({ skipCache: true }).catch(console.error)}
+          >
+            Retry
+          </button>
+        </div>
+      )}
       <div style={{ width: "100%", height: "100%" }}>
         <ReactFlow
           nodes={nodes}

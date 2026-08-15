@@ -5,7 +5,7 @@ import { HackGraph } from "./components/HackGraph";
 import { AddressDetailDrawer } from "./components/AddressDetailDrawer";
 import { MonitoringIndicator, type MonitoringSyncStatus } from "./components/MonitoringIndicator";
 import { BtcUsdProvider } from "./context/BtcUsdContext";
-import { api, formatBtcSpotUsd, formatUsd, satsToBtc, satsToUsd } from "./lib/api";
+import { api, formatBtcSpotUsd, formatUsd, satsToBtc, satsToUsd, ApiError } from "./lib/api";
 import {
   clampGraphNodeCount,
   commitGraphNodeDraft,
@@ -59,6 +59,7 @@ interface AppConfig {
 const DEFAULT_STATS_POLL_MS = 900_000;
 const DEFAULT_HACKERS_POLL_MS = 3_600_000;
 const SYNC_POLL_MS = 15_000;
+const DEFER_SECONDARY_POLLS_MS = 3_000;
 
 function isTypingTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
@@ -103,24 +104,39 @@ export default function App() {
     getHackerLastViewedMap(),
   );
   const [hackersPollMs, setHackersPollMs] = useState(DEFAULT_HACKERS_POLL_MS);
+  const [hackersLoading, setHackersLoading] = useState(false);
+  const [hackersError, setHackersError] = useState<string | null>(null);
   const prevApiThresholdRef = useRef(false);
   const minAmountFocusedRef = useRef(false);
 
   const loadHackers = useCallback(async (q?: string) => {
-    const params = q ? `?q=${encodeURIComponent(q)}` : "";
-    const res = await api<{ hackers: Hacker[] }>(`/api/hackers${params}`);
-    if (!hasHackerLastViewedState()) {
-      seedLastViewedFromHackers(res.hackers);
-    } else {
-      syncNewHackersLastViewed(res.hackers);
-    }
-    setLastViewedMap(getHackerLastViewedMap());
-    setHackers(res.hackers);
-    const visible = groupHackersForDropdown(res.hackers, getHackerLastViewedMap()).flatMap(
-      (g) => g.items,
-    );
-    if (!selected || !visible.some((h) => h.address === selected)) {
-      setSelected(visible[0]?.address ?? "");
+    setHackersLoading(true);
+    setHackersError(null);
+    try {
+      const params = q ? `?q=${encodeURIComponent(q)}` : "";
+      const res = await api<{ hackers: Hacker[] }>(`/api/hackers${params}`);
+      if (!hasHackerLastViewedState()) {
+        seedLastViewedFromHackers(res.hackers);
+      } else {
+        syncNewHackersLastViewed(res.hackers);
+      }
+      setLastViewedMap(getHackerLastViewedMap());
+      setHackers(res.hackers);
+      const visible = groupHackersForDropdown(res.hackers, getHackerLastViewedMap()).flatMap(
+        (g) => g.items,
+      );
+      if (!selected || !visible.some((h) => h.address === selected)) {
+        setSelected(visible[0]?.address ?? "");
+      }
+    } catch (e) {
+      const message =
+        e instanceof ApiError && e.message ? e.message : "Failed to load hackers. Try again.";
+      setHackersError(message);
+      window.dispatchEvent(
+        new CustomEvent("cointrace-toast", { detail: "Failed to load hackers. Try again." }),
+      );
+    } finally {
+      setHackersLoading(false);
     }
   }, [selected]);
 
@@ -189,9 +205,12 @@ export default function App() {
 
   useEffect(() => {
     const loadStats = () => api<Stats>("/api/stats").then(setStats).catch(console.error);
-    loadStats();
+    const initial = setTimeout(loadStats, DEFER_SECONDARY_POLLS_MS);
     const iv = setInterval(loadStats, statsPollMs);
-    return () => clearInterval(iv);
+    return () => {
+      clearTimeout(initial);
+      clearInterval(iv);
+    };
   }, [statsPollMs]);
 
   useEffect(() => {
@@ -214,9 +233,12 @@ export default function App() {
         })
         .catch(console.error);
     };
-    loadSync();
+    const initial = setTimeout(loadSync, DEFER_SECONDARY_POLLS_MS);
     const iv = setInterval(loadSync, SYNC_POLL_MS);
-    return () => clearInterval(iv);
+    return () => {
+      clearTimeout(initial);
+      clearInterval(iv);
+    };
   }, []);
 
   useEffect(() => {
@@ -424,7 +446,11 @@ export default function App() {
         <div className="controls-row">
           <label>
             Hacker address{" "}
-            <select value={selected} onChange={(e) => setSelected(e.target.value)}>
+            <select
+              value={selected}
+              onChange={(e) => setSelected(e.target.value)}
+              disabled={hackersLoading && hackers.length === 0}
+            >
               {hackerDropdownGroups.map((group) => (
                 <optgroup
                   key={group.source}
@@ -440,6 +466,19 @@ export default function App() {
               ))}
             </select>
           </label>
+          {hackersLoading && hackers.length === 0 && (
+            <span className="inline-status" role="status">
+              Loading hackers…
+            </span>
+          )}
+          {hackersError && (
+            <span className="inline-error" role="alert">
+              {hackersError}{" "}
+              <button type="button" onClick={() => loadHackers(filter)}>
+                Retry
+              </button>
+            </span>
+          )}
           <input
             placeholder="Search hackers…"
             value={filter}

@@ -121,37 +121,18 @@ export function createApp(store: Store, config: AppConfig) {
   app.get("/api/hackers", async (c) => {
     const q = c.req.query("q");
     const hackers = await store.listHackers(q, true);
-    const sinceIso = new Date(
-      Date.now() - config.graphActivityWindowHours * 60 * 60 * 1000,
-    ).toISOString();
-    const addresses = hackers.map((h) => h.address);
-    let activitySummary = new Map<
-      string,
-      { recentVictimCount: number; recentDownstreamCount: number }
-    >();
-    try {
-      activitySummary = await store.getHackerActivitySummary(addresses, sinceIso);
-    } catch (err) {
-      console.error("getHackerActivitySummary failed", err);
-    }
     return c.json({
-      hackers: hackers.map((h) => {
-        const summary = activitySummary.get(h.address) ?? {
-          recentVictimCount: 0,
-          recentDownstreamCount: 0,
-        };
-        return {
-          address: h.address,
-          label: h.label,
-          source: h.source,
-          totalReceivedSats: h.totalReceivedSats,
-          liveBalanceSats: h.liveBalanceSats,
-          liveBalanceAt: h.liveBalanceAt,
-          lastGraphActivityAt: h.lastGraphActivityAt ?? null,
-          recentVictimCount: summary.recentVictimCount,
-          recentDownstreamCount: summary.recentDownstreamCount,
-        };
-      }),
+      hackers: hackers.map((h) => ({
+        address: h.address,
+        label: h.label,
+        source: h.source,
+        totalReceivedSats: h.totalReceivedSats,
+        liveBalanceSats: h.liveBalanceSats,
+        liveBalanceAt: h.liveBalanceAt,
+        lastGraphActivityAt: h.lastGraphActivityAt ?? null,
+        recentVictimCount: 0,
+        recentDownstreamCount: 0,
+      })),
     });
   });
 
@@ -224,17 +205,88 @@ export function createApp(store: Store, config: AppConfig) {
   });
 
   app.get("/api/sync/status", async (c) => {
-    const scheduler = await store.getSchedulerState();
-    const crawl = await store.getCrawlStats();
-    const monitor = await store.getDownstreamMonitorStats(config.maxCrawlDepth, config.downstreamPollIntervalSec);
-    const monitoring = await store.getMonitoringStatus(config.monitoringStaleSec, config.apiThresholdCooldownSec);
+    let scheduler: Awaited<ReturnType<Store["getSchedulerState"]>>;
+    try {
+      scheduler = await store.getSchedulerState();
+    } catch (err) {
+      console.error("sync/status getSchedulerState failed", err);
+      scheduler = undefined;
+    }
+
+    let crawl = { crawlPendingCount: 0, crawlExpandedCount: 0, crawlMaxHopReached: 0 };
+    try {
+      crawl = await store.getCrawlStats();
+    } catch (err) {
+      console.error("sync/status getCrawlStats failed", err);
+    }
+
+    let monitor = { treeNodeCount: 0, downstreamPollDueCount: 0 };
+    try {
+      monitor = await store.getDownstreamMonitorStats(
+        config.maxCrawlDepth,
+        config.downstreamPollIntervalSec,
+      );
+    } catch (err) {
+      console.error("sync/status getDownstreamMonitorStats failed", err);
+    }
+
+    let monitoring: Awaited<ReturnType<Store["getMonitoringStatus"]>>;
+    try {
+      monitoring = await store.getMonitoringStatus(
+        config.monitoringStaleSec,
+        config.apiThresholdCooldownSec,
+      );
+    } catch (err) {
+      console.error("sync/status getMonitoringStatus failed", err);
+      monitoring = {
+        lastChainApiAt: null,
+        lastExternalSyncAt: null,
+        lastJobAt: null,
+        lastCompletedJobType: null,
+        lastCompletedJobDurationMs: null,
+        lastCompletedJobAt: null,
+        lastActivityAt: null,
+        monitoringActive: false,
+        apiThresholdExceeded: false,
+        lastApiThresholdAt: null,
+        apiThresholdCount: 0,
+        apiThresholdCooldownSec: config.apiThresholdCooldownSec,
+        apiThresholdSecondsLeft: 0,
+        chainApis: [],
+        queueSchedulingPaused: false,
+        maxQueueDepth: config.maxQueueDepth,
+        externalSources: [],
+      };
+    }
+
+    let queueDepth = 0;
+    try {
+      queueDepth = await store.getQueueDepth();
+    } catch (err) {
+      console.error("sync/status getQueueDepth failed", err);
+    }
+
+    let rebuildActive = false;
+    try {
+      rebuildActive = await isRebuildActive(store, config);
+    } catch (err) {
+      console.error("sync/status isRebuildActive failed", err);
+    }
+
+    let pendingProcessTx = 0;
+    try {
+      pendingProcessTx = await store.countActiveJobs("process_tx");
+    } catch (err) {
+      console.error("sync/status countActiveJobs failed", err);
+    }
+
     return c.json({
-      queueDepth: await store.getQueueDepth(),
+      queueDepth,
       nextApiCallAt: scheduler?.nextProviderCallAt ?? null,
       rateLimitMs: scheduler?.rateLimitMs ?? config.rateLimitMs,
       lastProviderUsed: scheduler?.lastProviderUsed ?? null,
-      rebuildActive: await isRebuildActive(store, config),
-      pendingProcessTx: await store.countActiveJobs("process_tx"),
+      rebuildActive,
+      pendingProcessTx,
       ...crawl,
       ...monitor,
       ...monitoring,

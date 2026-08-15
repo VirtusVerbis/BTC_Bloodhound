@@ -26,11 +26,89 @@ body {
 }
 
 .graph-canvas {
+  position: relative;
   touch-action: none;
   min-height: 50vh;
   height: 70vh;
   border: 1px solid #222;
   border-radius: 8px;
+}
+
+.graph-error-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 1.5rem;
+  background: rgba(0, 0, 0, 0.82);
+  text-align: center;
+  color: var(--color-text);
+}
+
+.graph-error-overlay p {
+  margin: 0;
+  max-width: 28rem;
+  color: var(--color-text-muted);
+}
+
+.graph-error-overlay button {
+  border: 1px solid var(--color-node-border);
+  background: var(--color-input-bg);
+  color: var(--color-text);
+  border-radius: 6px;
+  padding: 0.4rem 0.9rem;
+  cursor: pointer;
+}
+
+.graph-error-overlay button:hover {
+  border-color: var(--color-edge);
+}
+
+.graph-status-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: rgba(0, 0, 0, 0.72);
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.graph-status-overlay p {
+  margin: 0;
+}
+
+.inline-status {
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+}
+
+.inline-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+}
+
+.inline-error button {
+  border: 1px solid var(--color-node-border);
+  background: var(--color-input-bg);
+  color: var(--color-text);
+  border-radius: 6px;
+  padding: 0.25rem 0.6rem;
+  cursor: pointer;
+}
+
+.inline-error button:hover {
+  border-color: var(--color-edge);
 }
 
 .graph-panel-controls {

@@ -321,6 +321,87 @@ describe("victim search graph filters", () => {
     expect(withoutMin.nodes.some((n) => n.id === "tiny-victim")).toBe(true);
     expect(withoutMin.matchedHackers?.sort()).toEqual(["hack1", "hack2"]);
   });
+
+  it("buildGraph depth=2 includes hop-2 downstream nodes via batched reads", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    await store.upsertAddressesBatch([
+      { address: "hack1", role: "hacker", source: "admin", isFlaggedHacker: true, hopFromHacker: 0 },
+      { address: "down1", role: "downstream", source: "derived", hopFromHacker: 1 },
+      { address: "down2", role: "downstream", source: "derived", hopFromHacker: 1 },
+      { address: "down3", role: "downstream", source: "derived", hopFromHacker: 1 },
+      { address: "down4", role: "downstream", source: "derived", hopFromHacker: 1 },
+      { address: "down5", role: "downstream", source: "derived", hopFromHacker: 1 },
+      { address: "child1", role: "downstream", source: "derived", hopFromHacker: 2 },
+      { address: "child2", role: "downstream", source: "derived", hopFromHacker: 2 },
+    ]);
+    await store.upsertEdgesBatch([
+      { fromAddress: "hack1", toAddress: "down1", txid: "tx1", amountSats: 5000, direction: "out_from_hacker" },
+      { fromAddress: "hack1", toAddress: "down2", txid: "tx2", amountSats: 4000, direction: "out_from_hacker" },
+      { fromAddress: "hack1", toAddress: "down3", txid: "tx3", amountSats: 3000, direction: "out_from_hacker" },
+      { fromAddress: "hack1", toAddress: "down4", txid: "tx4", amountSats: 2000, direction: "out_from_hacker" },
+      { fromAddress: "hack1", toAddress: "down5", txid: "tx5", amountSats: 1000, direction: "out_from_hacker" },
+      { fromAddress: "down1", toAddress: "child1", txid: "tx6", amountSats: 500, direction: "out_from_hacker" },
+      { fromAddress: "down2", toAddress: "child2", txid: "tx7", amountSats: 400, direction: "out_from_hacker" },
+    ]);
+
+    const graph = await buildGraph(store, "hack1", { depth: 2, minEdgeSats: 100 });
+    const downstreamIds = graph.nodes.filter((n) => n.type === "downstream").map((n) => n.id);
+    expect(downstreamIds).toEqual(expect.arrayContaining(["down1", "down2", "down3", "down4", "down5", "child1", "child2"]));
+    expect(graph.edges.some((e) => e.source === "down1" && e.target === "child1")).toBe(true);
+    expect(graph.edges.some((e) => e.source === "down2" && e.target === "child2")).toBe(true);
+  });
+
+  it("buildGraph caps level-2 address lookups under heavy fan-out", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    const hop1: string[] = [];
+    const hop2: string[] = [];
+    const addressRows = [
+      { address: "hack1", role: "hacker" as const, source: "admin" as const, isFlaggedHacker: true, hopFromHacker: 0 },
+    ];
+    const edgeRows: Array<{
+      fromAddress: string;
+      toAddress: string;
+      txid: string;
+      amountSats: number;
+      direction: "out_from_hacker";
+    }> = [];
+    for (let i = 0; i < 10; i++) {
+      const down = `bc1qdown${String(i).padStart(2, "0")}`;
+      hop1.push(down);
+      addressRows.push({ address: down, role: "downstream", source: "derived", hopFromHacker: 1 });
+      edgeRows.push({
+        fromAddress: "hack1",
+        toAddress: down,
+        txid: `txh${i}`,
+        amountSats: 10_000 - i,
+        direction: "out_from_hacker",
+      });
+      for (let j = 0; j < 50; j++) {
+        const child = `bc1qchild${String(i).padStart(2, "0")}${String(j).padStart(2, "0")}`;
+        hop2.push(child);
+        addressRows.push({ address: child, role: "downstream", source: "derived", hopFromHacker: 2 });
+        edgeRows.push({
+          fromAddress: down,
+          toAddress: child,
+          txid: `txc${i}${j}`,
+          amountSats: 1000 - j,
+          direction: "out_from_hacker",
+        });
+      }
+    }
+    await store.upsertAddressesBatch(addressRows);
+    await store.upsertEdgesBatch(edgeRows);
+
+    const graph = await buildGraph(store, "hack1", { depth: 2, minEdgeSats: 100, maxOutputs: 10 });
+    const level2Nodes = graph.nodes.filter((n) => n.type === "downstream" && hop2.includes(n.id));
+    expect(level2Nodes.length).toBeGreaterThan(0);
+    expect(level2Nodes.length).toBeLessThan(hop2.length);
+    expect(graph.nodes.some((n) => n.id === "hack1")).toBe(true);
+  });
 });
 
 describe("applyHackTraceEdgesChunk graph activity", () => {

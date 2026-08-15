@@ -34,6 +34,9 @@ MAX_GRAPH_DOWNSTREAM = "10000"
 
 # Production deploy: `pnpm cf:deploy` → wrangler deploy --env production
 # Worker name: cointrace-production. Bindings (vars/D1/assets) are non-inheritable.
+[env.production]
+workers_dev = false
+
 [env.production.assets]
 directory = "apps/web/dist"
 binding = "ASSETS"

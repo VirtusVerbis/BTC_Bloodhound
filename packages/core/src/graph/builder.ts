@@ -66,6 +66,9 @@ export interface GraphEdge {
 
 export type GraphMode = "hacker" | "victim-filtered" | "victim-centric";
 
+/** Max unique addresses fetched via getAddressesMap per graph build (5 chunks × 80). */
+const MAX_GRAPH_ADDRESS_LOOKUPS = 400;
+
 export interface GraphResult {
   nodes: GraphNode[];
   edges: GraphEdge[];
@@ -196,35 +199,67 @@ export async function buildGraph(
     }
   }
 
-  const outEdges = (await store.getEdgesFromAddress(hacker))
-    .filter((e) => e.direction === "out_from_hacker" && e.amountSats >= minEdgeSats)
-    .sort((a, b) => b.amountSats - a.amountSats)
-    .slice(0, maxOutputs);
+  const outEdges = await store.getOutEdgesFromAddress(hacker, {
+    minEdgeSats,
+    limit: maxOutputs,
+  });
 
   const hackerOutGraphEdges = outEdges.map((e) =>
     mapDbEdgeToGraph(hackerId, e.toAddress, e),
   );
   const bundledHackerOut = bundleParallelEdges(hackerOutGraphEdges, graphBundleMinEdges);
 
+  const level1Ids = bundledHackerOut.map((ge) => ge.target);
+  const level1AddrMap = await store.getAddressesMap(level1Ids);
+
+  const childBundleByParent = new Map<string, ReturnType<typeof bundleParallelEdges>>();
+  const level2Ids: string[] = [];
+  const addressLookupBudget = () => MAX_GRAPH_ADDRESS_LOOKUPS - level1Ids.length - level2Ids.length;
+
+  if (depth > 1) {
+    const expandableParents = level1Ids.filter((id) => {
+      const row = level1AddrMap.get(id);
+      return (row?.hopFromHacker ?? 1) < depth;
+    });
+    const edgesByParent = await store.getEdgesFromAddressesMap(expandableParents);
+    for (const parentId of expandableParents) {
+      if (addressLookupBudget() <= 0) break;
+      const childEdges = (edgesByParent.get(parentId) ?? [])
+        .filter((ce) => ce.direction === "out_from_hacker" && ce.amountSats >= minEdgeSats)
+        .sort((a, b) => b.amountSats - a.amountSats)
+        .slice(0, maxOutputs);
+      const childGraphEdges = childEdges.map((ce) => mapDbEdgeToGraph(parentId, ce.toAddress, ce));
+      const bundledChild = bundleParallelEdges(childGraphEdges, graphBundleMinEdges);
+      childBundleByParent.set(parentId, bundledChild);
+      for (const cge of bundledChild) {
+        if (level2Ids.includes(cge.target)) continue;
+        if (addressLookupBudget() <= 0) break;
+        level2Ids.push(cge.target);
+      }
+    }
+  }
+
+  const addrMap = level1AddrMap;
+  if (level2Ids.length > 0) {
+    const level2AddrMap = await store.getAddressesMap(level2Ids);
+    for (const [address, row] of level2AddrMap) addrMap.set(address, row);
+  }
+
   for (const ge of bundledHackerOut) {
     const id = ge.target;
-    const downstream = await store.getAddress(id);
+    const downstream = addrMap.get(id);
     if (!seen.has(id)) {
       nodes.push(downstreamNodeFromAddress(id, downstream, ge.amount));
       seen.add(id);
     }
     edges.push(ge);
 
-    if (depth > 1 && (downstream?.hopFromHacker ?? 1) < depth) {
-      const childEdges = (await store.getEdgesFromAddress(id))
-        .filter((ce) => ce.direction === "out_from_hacker" && ce.amountSats >= minEdgeSats)
-        .sort((a, b) => b.amountSats - a.amountSats)
-        .slice(0, maxOutputs);
-      const childGraphEdges = childEdges.map((ce) => mapDbEdgeToGraph(id, ce.toAddress, ce));
-      const bundledChild = bundleParallelEdges(childGraphEdges, graphBundleMinEdges);
+    if (depth > 1) {
+      const bundledChild = childBundleByParent.get(id);
+      if (!bundledChild) continue;
       for (const cge of bundledChild) {
         const cid = cge.target;
-        const child = await store.getAddress(cid);
+        const child = addrMap.get(cid);
         if (!seen.has(cid)) {
           nodes.push(downstreamNodeFromAddress(cid, child, cge.amount));
           seen.add(cid);
@@ -309,8 +344,10 @@ export async function buildVictimGraph(
     incomingSats: totalPaid,
   });
 
+  const hackerAddrMap = await store.getAddressesMap(hackers.map((h) => h.address));
+
   for (const h of hackers) {
-    const hackerAddr = await store.getAddress(h.address);
+    const hackerAddr = hackerAddrMap.get(h.address);
     nodes.push({
       id: h.address,
       type: "hacker",

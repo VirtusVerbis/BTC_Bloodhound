@@ -12,6 +12,8 @@ import {
   sourceSyncState,
   syncState,
   transactions,
+  type Address,
+  type Edge,
   type Job,
   type Transaction,
 } from "./schema.js";
@@ -22,7 +24,6 @@ const INGEST_JOB_TYPES = [
   "expand_downstream",
 ] as const;
 
-const TXID_BATCH_SIZE = 200;
 /** Cloudflare D1 allows max 100 bound params per query; reserve room for other binds. */
 const D1_IN_CLAUSE_CHUNK_SIZE = 80;
 const ADDRESS_DETAIL_TX_LIMIT = 50;
@@ -611,6 +612,48 @@ export class Store {
     return await this.db.select().from(edges).where(eq(edges.fromAddress, address)).all();
   }
 
+  async getOutEdgesFromAddress(
+    address: string,
+    opts: { minEdgeSats?: number; limit: number },
+  ): Promise<Edge[]> {
+    const conditions = [eq(edges.fromAddress, address), eq(edges.direction, "out_from_hacker")];
+    const minEdgeSats = opts.minEdgeSats ?? 0;
+    if (minEdgeSats > 0) conditions.push(gte(edges.amountSats, minEdgeSats));
+    return await this.db
+      .select()
+      .from(edges)
+      .where(and(...conditions))
+      .orderBy(desc(edges.amountSats))
+      .limit(opts.limit)
+      .all();
+  }
+
+  async getAddressesMap(addressList: string[]): Promise<Map<string, Address>> {
+    const unique = [...new Set(addressList)].filter(Boolean);
+    const result = new Map<string, Address>();
+    if (unique.length === 0) return result;
+    for (const chunk of chunkArray(unique, D1_IN_CLAUSE_CHUNK_SIZE)) {
+      const rows = await this.db.select().from(addresses).where(inArray(addresses.address, chunk)).all();
+      for (const row of rows) result.set(row.address, row);
+    }
+    return result;
+  }
+
+  async getEdgesFromAddressesMap(fromAddresses: string[]): Promise<Map<string, Edge[]>> {
+    const unique = [...new Set(fromAddresses)].filter(Boolean);
+    const result = new Map<string, Edge[]>();
+    if (unique.length === 0) return result;
+    for (const addr of unique) result.set(addr, []);
+    for (const chunk of chunkArray(unique, D1_IN_CLAUSE_CHUNK_SIZE)) {
+      const rows = await this.db.select().from(edges).where(inArray(edges.fromAddress, chunk)).all();
+      for (const row of rows) {
+        const bucket = result.get(row.fromAddress);
+        if (bucket) bucket.push(row);
+      }
+    }
+    return result;
+  }
+
   async getTransaction(txid: string) {
     return await this.db.select().from(transactions).where(eq(transactions.txid, txid)).get();
   }
@@ -620,12 +663,12 @@ export class Store {
     const txById = new Map<string, Transaction>();
     if (unique.length === 0) return txById;
 
-    for (let i = 0; i < unique.length; i += TXID_BATCH_SIZE) {
-      const chunk = unique.slice(i, i + TXID_BATCH_SIZE);
+    for (const chunk of chunkArray(unique, D1_IN_CLAUSE_CHUNK_SIZE)) {
+      const chunkRows = chunk;
       const rows = await this.db
         .select()
         .from(transactions)
-        .where(inArray(transactions.txid, chunk))
+        .where(inArray(transactions.txid, chunkRows))
         .all();
       for (const row of rows) {
         txById.set(row.txid, row);
@@ -1824,43 +1867,75 @@ export class Store {
   }
 
   async getStats() {
-    const victims = await this.db
-      .select({ count: sql<number>`count(*)` })
-      .from(addresses)
-      .where(eq(addresses.role, "victim"))
-      .get();
-    const hackers = await this.db
-      .select({ count: sql<number>`count(*)` })
-      .from(addresses)
-      .where(and(eq(addresses.isFlaggedHacker, true), gt(addresses.totalReceivedSats, 0)))
-      .get();
-    const totalIn = await this.db
-      .select({ total: sql<number>`coalesce(sum(${edges.amountSats}), 0)` })
-      .from(edges)
-      .where(eq(edges.direction, "in_to_hacker"))
-      .get();
-    const totalOut = await this.db
-      .select({ total: sql<number>`coalesce(sum(${edges.amountSats}), 0)` })
-      .from(edges)
-      .where(eq(edges.direction, "out_from_hacker"))
-      .get();
-    const lastJob = await this.db
-      .select()
-      .from(jobs)
-      .where(ne(jobs.status, "pending"))
-      .orderBy(desc(jobs.id))
-      .limit(1)
-      .get();
-    const scheduler = await this.getSchedulerState();
-    return {
-      victimCount: victims?.count ?? 0,
-      hackerCount: hackers?.count ?? 0,
-      totalInSats: totalIn?.total ?? 0,
-      totalOutSats: totalOut?.total ?? 0,
-      lastJobAt: lastJob?.createdAt ?? null,
-      btcUsdPrice: scheduler?.btcUsdPrice ?? null,
-      btcUsdPriceAt: scheduler?.btcUsdPriceAt ?? null,
+    const result = {
+      victimCount: 0,
+      hackerCount: 0,
+      totalInSats: 0,
+      totalOutSats: 0,
+      lastJobAt: null as string | null,
+      btcUsdPrice: null as number | null,
+      btcUsdPriceAt: null as string | null,
     };
+    try {
+      const victims = await this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(addresses)
+        .where(eq(addresses.role, "victim"))
+        .get();
+      result.victimCount = victims?.count ?? 0;
+    } catch (err) {
+      console.error("getStats victimCount failed", err);
+    }
+    try {
+      const hackers = await this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(addresses)
+        .where(and(eq(addresses.isFlaggedHacker, true), gt(addresses.totalReceivedSats, 0)))
+        .get();
+      result.hackerCount = hackers?.count ?? 0;
+    } catch (err) {
+      console.error("getStats hackerCount failed", err);
+    }
+    try {
+      const totalIn = await this.db
+        .select({ total: sql<number>`coalesce(sum(${edges.amountSats}), 0)` })
+        .from(edges)
+        .where(eq(edges.direction, "in_to_hacker"))
+        .get();
+      result.totalInSats = totalIn?.total ?? 0;
+    } catch (err) {
+      console.error("getStats totalInSats failed", err);
+    }
+    try {
+      const totalOut = await this.db
+        .select({ total: sql<number>`coalesce(sum(${edges.amountSats}), 0)` })
+        .from(edges)
+        .where(eq(edges.direction, "out_from_hacker"))
+        .get();
+      result.totalOutSats = totalOut?.total ?? 0;
+    } catch (err) {
+      console.error("getStats totalOutSats failed", err);
+    }
+    try {
+      const lastJob = await this.db
+        .select()
+        .from(jobs)
+        .where(ne(jobs.status, "pending"))
+        .orderBy(desc(jobs.id))
+        .limit(1)
+        .get();
+      result.lastJobAt = lastJob?.createdAt ?? null;
+    } catch (err) {
+      console.error("getStats lastJobAt failed", err);
+    }
+    try {
+      const scheduler = await this.getSchedulerState();
+      result.btcUsdPrice = scheduler?.btcUsdPrice ?? null;
+      result.btcUsdPriceAt = scheduler?.btcUsdPriceAt ?? null;
+    } catch (err) {
+      console.error("getStats btcUsdPrice failed", err);
+    }
+    return result;
   }
 
   /** Distinct victims with in_to_hacker edges into this hacker. */
@@ -1923,6 +1998,11 @@ export class Store {
     }
   }
 
+  /**
+   * Recent victim/downstream activity counts per hacker.
+   * Internal-only: uses an expensive recursive CTE on D1 — do not call from hot API read paths.
+   * Reserved for future cached/offline use; `/api/hackers` uses `lastGraphActivityAt` instead.
+   */
   async getHackerActivitySummary(
     hackerAddresses: string[],
     sinceIso: string,
