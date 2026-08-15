@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  applyHackTraceEdgesChunk,
   buildGraph,
   buildVictimGraph,
   collectSpenders,
@@ -319,5 +320,45 @@ describe("victim search graph filters", () => {
     expect(withoutMin.mode).toBe("victim-centric");
     expect(withoutMin.nodes.some((n) => n.id === "tiny-victim")).toBe(true);
     expect(withoutMin.matchedHackers?.sort()).toEqual(["hack1", "hack2"]);
+  });
+});
+
+describe("applyHackTraceEdgesChunk graph activity", () => {
+  it("bumps hacker when a new victim is indexed", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    await store.upsertAddress({
+      address: "hack1",
+      role: "hacker",
+      isFlaggedHacker: true,
+      hopFromHacker: 0,
+    });
+
+    const tx = makeTx([{ address: "v1", value: 10_000 }], [{ address: "hack1", value: 10_000 }]);
+    const computed = computeHackTraceEdges(tx, new Set(["hack1"]));
+    await applyHackTraceEdgesChunk(store, { txid: tx.txid, blockTime: "2026-01-01T00:00:00.000Z" }, computed);
+
+    expect((await store.getAddress("hack1"))?.lastGraphActivityAt).toBeTruthy();
+  });
+
+  it("does not bump hacker when victim already exists", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    await store.upsertAddress({
+      address: "hack1",
+      role: "hacker",
+      isFlaggedHacker: true,
+      hopFromHacker: 0,
+    });
+    await store.upsertAddress({ address: "v1", role: "victim", source: "derived" });
+    await store.bumpHackerGraphActivity(["hack1"], "2024-01-01T00:00:00.000Z");
+
+    const tx = makeTx([{ address: "v1", value: 10_000 }], [{ address: "hack1", value: 10_000 }]);
+    const computed = computeHackTraceEdges(tx, new Set(["hack1"]));
+    await applyHackTraceEdgesChunk(store, { txid: tx.txid, blockTime: "2026-01-01T00:00:00.000Z" }, computed);
+
+    expect((await store.getAddress("hack1"))?.lastGraphActivityAt).toBe("2024-01-01T00:00:00.000Z");
   });
 });

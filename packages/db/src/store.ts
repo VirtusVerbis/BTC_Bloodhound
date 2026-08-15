@@ -23,7 +23,18 @@ const INGEST_JOB_TYPES = [
 ] as const;
 
 const TXID_BATCH_SIZE = 200;
+/** Cloudflare D1 allows max 100 bound params per query; reserve room for other binds. */
+const D1_IN_CLAUSE_CHUNK_SIZE = 80;
 const ADDRESS_DETAIL_TX_LIMIT = 50;
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  if (size <= 0) return items.length > 0 ? [items] : [];
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
 
 function jobPayloadAddressEq(address: string) {
   return sql`json_extract(${jobs.payloadJson}, '$.address') = ${address}`;
@@ -1853,6 +1864,129 @@ export class Store {
   }
 
   /** Distinct victims with in_to_hacker edges into this hacker. */
+  async getExistingAddressSet(addressList: string[]): Promise<Set<string>> {
+    const unique = [...new Set(addressList)].filter(Boolean);
+    if (unique.length === 0) return new Set();
+    const rows = await this.db
+      .select({ address: addresses.address })
+      .from(addresses)
+      .where(inArray(addresses.address, unique))
+      .all();
+    return new Set(rows.map((r) => r.address));
+  }
+
+  /** Walk backward along out_from_hacker edges to root flagged hackers. */
+  async findRootHackersForSpender(address: string): Promise<string[]> {
+    const seen = new Set<string>();
+    const queue = [address];
+    const roots = new Set<string>();
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+      if (seen.has(cur)) continue;
+      seen.add(cur);
+      const row = await this.getAddress(cur);
+      if (row?.isFlaggedHacker) {
+        roots.add(cur);
+        continue;
+      }
+      const ins = await this.db
+        .select({ from: edges.fromAddress })
+        .from(edges)
+        .where(and(eq(edges.toAddress, cur), eq(edges.direction, "out_from_hacker")))
+        .all();
+      for (const inbound of ins) {
+        if (!seen.has(inbound.from)) queue.push(inbound.from);
+      }
+    }
+    return [...roots];
+  }
+
+  async bumpHackerGraphActivity(hackerAddresses: string[], at?: string): Promise<void> {
+    const ts = at ?? now();
+    const unique = [...new Set(hackerAddresses)].filter(Boolean);
+    if (unique.length === 0) return;
+    for (const hacker of unique) {
+      const row = await this.getAddress(hacker);
+      if (!row?.isFlaggedHacker) continue;
+      const existing = row.lastGraphActivityAt;
+      const next = existing != null && existing > ts ? existing : ts;
+      if (existing === next) continue;
+      await this.db
+        .update(addresses)
+        .set({ lastGraphActivityAt: next })
+        .where(eq(addresses.address, hacker))
+        .run();
+    }
+  }
+
+  async getHackerActivitySummary(
+    hackerAddresses: string[],
+    sinceIso: string,
+  ): Promise<Map<string, { recentVictimCount: number; recentDownstreamCount: number }>> {
+    const result = new Map<string, { recentVictimCount: number; recentDownstreamCount: number }>();
+    for (const hacker of hackerAddresses) {
+      result.set(hacker, { recentVictimCount: 0, recentDownstreamCount: 0 });
+    }
+    if (hackerAddresses.length === 0) return result;
+
+    for (const chunk of chunkArray(hackerAddresses, D1_IN_CLAUSE_CHUNK_SIZE)) {
+      const victimRows = await this.db
+        .select({
+          hacker: edges.toAddress,
+          count: sql<number>`count(distinct ${edges.fromAddress})`,
+        })
+        .from(edges)
+        .innerJoin(addresses, eq(edges.fromAddress, addresses.address))
+        .where(
+          and(
+            inArray(edges.toAddress, chunk),
+            eq(edges.direction, "in_to_hacker"),
+            eq(addresses.role, "victim"),
+            isNotNull(addresses.firstSeenAt),
+            gte(addresses.firstSeenAt, sinceIso),
+          ),
+        )
+        .groupBy(edges.toAddress)
+        .all();
+      for (const row of victimRows) {
+        const entry = result.get(row.hacker);
+        if (entry) entry.recentVictimCount = row.count ?? 0;
+      }
+    }
+
+    for (const chunk of chunkArray(hackerAddresses, D1_IN_CLAUSE_CHUNK_SIZE)) {
+      if (chunk.length === 0) continue;
+      const inList = sql.join(
+        chunk.map((address) => sql`${address}`),
+        sql`, `,
+      );
+      const downstreamRows = (await this.db.all(sql`
+        WITH RECURSIVE tree(hacker_root, addr) AS (
+          SELECT address, address FROM addresses WHERE address IN (${inList})
+          UNION ALL
+          SELECT t.hacker_root, e.to_address
+          FROM edges e
+          INNER JOIN tree t ON e.from_address = t.addr
+          WHERE e.direction = 'out_from_hacker'
+        )
+        SELECT t.hacker_root AS hacker, COUNT(*) AS count
+        FROM tree t
+        INNER JOIN addresses a ON a.address = t.addr
+        WHERE a.role = 'downstream'
+          AND a.first_seen_at IS NOT NULL
+          AND a.first_seen_at >= ${sinceIso}
+          AND t.addr != t.hacker_root
+        GROUP BY t.hacker_root
+      `)) as Array<{ hacker: string; count: number }>;
+      for (const row of downstreamRows) {
+        const entry = result.get(row.hacker);
+        if (entry) entry.recentDownstreamCount = Number(row.count) ?? 0;
+      }
+    }
+
+    return result;
+  }
+
   async listVictimAddressesForHacker(hacker: string): Promise<string[]> {
     const rows = await this.db
       .selectDistinct({ address: edges.fromAddress })

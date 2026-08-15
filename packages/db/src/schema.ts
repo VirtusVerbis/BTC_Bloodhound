@@ -19,6 +19,7 @@ export const addresses = sqliteTable("addresses", {
   totalReceivedSats: integer("total_received_sats").notNull().default(0),
   liveBalanceSats: integer("live_balance_sats"),
   liveBalanceAt: text("live_balance_at"),
+  lastGraphActivityAt: text("last_graph_activity_at"),
 });
 
 export const edges = sqliteTable(

@@ -113,21 +113,45 @@ export function createApp(store: Store, config: AppConfig) {
       statsPollMs: config.btcUsdPriceRefreshIntervalSec * 1000,
       maxGraphVictims: config.maxGraphVictims,
       maxGraphDownstream: config.maxGraphDownstream,
+      graphActivityWindowHours: config.graphActivityWindowHours,
+      hackersPollMs: config.hackersPollMs,
     }),
   );
 
   app.get("/api/hackers", async (c) => {
     const q = c.req.query("q");
     const hackers = await store.listHackers(q, true);
+    const sinceIso = new Date(
+      Date.now() - config.graphActivityWindowHours * 60 * 60 * 1000,
+    ).toISOString();
+    const addresses = hackers.map((h) => h.address);
+    let activitySummary = new Map<
+      string,
+      { recentVictimCount: number; recentDownstreamCount: number }
+    >();
+    try {
+      activitySummary = await store.getHackerActivitySummary(addresses, sinceIso);
+    } catch (err) {
+      console.error("getHackerActivitySummary failed", err);
+    }
     return c.json({
-      hackers: hackers.map((h) => ({
-        address: h.address,
-        label: h.label,
-        source: h.source,
-        totalReceivedSats: h.totalReceivedSats,
-        liveBalanceSats: h.liveBalanceSats,
-        liveBalanceAt: h.liveBalanceAt,
-      })),
+      hackers: hackers.map((h) => {
+        const summary = activitySummary.get(h.address) ?? {
+          recentVictimCount: 0,
+          recentDownstreamCount: 0,
+        };
+        return {
+          address: h.address,
+          label: h.label,
+          source: h.source,
+          totalReceivedSats: h.totalReceivedSats,
+          liveBalanceSats: h.liveBalanceSats,
+          liveBalanceAt: h.liveBalanceAt,
+          lastGraphActivityAt: h.lastGraphActivityAt ?? null,
+          recentVictimCount: summary.recentVictimCount,
+          recentDownstreamCount: summary.recentDownstreamCount,
+        };
+      }),
     });
   });
 

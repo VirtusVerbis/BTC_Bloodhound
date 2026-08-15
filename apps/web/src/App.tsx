@@ -19,7 +19,14 @@ import {
   MIN_BTC_INPUT_MAX_LENGTH,
   MIN_SATS_INPUT_MAX_LENGTH,
 } from "./lib/graphInputLimits";
-import { groupHackersBySource, type Hacker } from "./lib/hackerGroups";
+import { groupHackersForDropdown, formatHackerOptionLabel, isHackerUnread, type Hacker } from "./lib/hackerGroups";
+import {
+  getHackerLastViewedMap,
+  hasHackerLastViewedState,
+  markHackerViewed,
+  seedLastViewedFromHackers,
+  syncNewHackersLastViewed,
+} from "./lib/hackerLastViewed";
 
 type AppTab = "tracker" | "about";
 
@@ -45,9 +52,12 @@ interface AppConfig {
   statsPollMs?: number;
   maxGraphVictims?: number;
   maxGraphDownstream?: number;
+  graphActivityWindowHours?: number;
+  hackersPollMs?: number;
 }
 
 const DEFAULT_STATS_POLL_MS = 900_000;
+const DEFAULT_HACKERS_POLL_MS = 3_600_000;
 const SYNC_POLL_MS = 15_000;
 
 function isTypingTarget(target: EventTarget | null) {
@@ -89,28 +99,57 @@ export default function App() {
   const [victimSearchInput, setVictimSearchInput] = useState("");
   const [activeVictimSearch, setActiveVictimSearch] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<AppTab>("tracker");
+  const [lastViewedMap, setLastViewedMap] = useState<Record<string, string>>(() =>
+    getHackerLastViewedMap(),
+  );
+  const [hackersPollMs, setHackersPollMs] = useState(DEFAULT_HACKERS_POLL_MS);
   const prevApiThresholdRef = useRef(false);
   const minAmountFocusedRef = useRef(false);
 
   const loadHackers = useCallback(async (q?: string) => {
     const params = q ? `?q=${encodeURIComponent(q)}` : "";
     const res = await api<{ hackers: Hacker[] }>(`/api/hackers${params}`);
+    if (!hasHackerLastViewedState()) {
+      seedLastViewedFromHackers(res.hackers);
+    } else {
+      syncNewHackersLastViewed(res.hackers);
+    }
+    setLastViewedMap(getHackerLastViewedMap());
     setHackers(res.hackers);
-    const visible = groupHackersBySource(res.hackers).flatMap((g) => g.items);
+    const visible = groupHackersForDropdown(res.hackers, getHackerLastViewedMap()).flatMap(
+      (g) => g.items,
+    );
     if (!selected || !visible.some((h) => h.address === selected)) {
       setSelected(visible[0]?.address ?? "");
     }
   }, [selected]);
 
-  const hackerGroups = useMemo(() => groupHackersBySource(hackers), [hackers]);
+  const hackerDropdownGroups = useMemo(
+    () => groupHackersForDropdown(hackers, lastViewedMap),
+    [hackers, lastViewedMap],
+  );
   const sortedHackers = useMemo(
-    () => hackerGroups.flatMap((g) => g.items),
-    [hackerGroups],
+    () => hackerDropdownGroups.flatMap((g) => g.items),
+    [hackerDropdownGroups],
   );
 
   useEffect(() => {
     loadHackers(filter).catch(console.error);
   }, [filter, loadHackers]);
+
+  useEffect(() => {
+    const pollMs = Math.max(DEFAULT_HACKERS_POLL_MS, hackersPollMs);
+    const iv = setInterval(() => {
+      loadHackers(filter).catch(console.error);
+    }, pollMs);
+    return () => clearInterval(iv);
+  }, [filter, loadHackers, hackersPollMs]);
+
+  useEffect(() => {
+    if (!selected) return;
+    markHackerViewed(selected);
+    setLastViewedMap(getHackerLastViewedMap());
+  }, [selected]);
 
   useEffect(() => {
     api<AppConfig>("/api/config")
@@ -122,6 +161,9 @@ export default function App() {
         }
         if (cfg.statsPollMs != null && Number.isFinite(cfg.statsPollMs) && cfg.statsPollMs >= 1000) {
           setStatsPollMs(Math.floor(cfg.statsPollMs));
+        }
+        if (cfg.hackersPollMs != null && Number.isFinite(cfg.hackersPollMs) && cfg.hackersPollMs >= DEFAULT_HACKERS_POLL_MS) {
+          setHackersPollMs(Math.floor(cfg.hackersPollMs));
         }
         const victimsCap =
           cfg.maxGraphVictims != null && Number.isFinite(cfg.maxGraphVictims) && cfg.maxGraphVictims >= 1
@@ -383,11 +425,15 @@ export default function App() {
           <label>
             Hacker address{" "}
             <select value={selected} onChange={(e) => setSelected(e.target.value)}>
-              {hackerGroups.map((group) => (
-                <optgroup key={group.source} label={group.label}>
+              {hackerDropdownGroups.map((group) => (
+                <optgroup
+                  key={group.source}
+                  label={group.label}
+                  className={group.source === "__recent__" ? "hacker-optgroup-recent" : undefined}
+                >
                   {group.items.map((h) => (
                     <option key={h.address} value={h.address}>
-                      {(h.label ?? h.address.slice(0, 12)) + "…"} ({satsToBtc(h.totalReceivedSats)} BTC)
+                      {formatHackerOptionLabel(h, isHackerUnread(h, lastViewedMap[h.address]))}
                     </option>
                   ))}
                 </optgroup>

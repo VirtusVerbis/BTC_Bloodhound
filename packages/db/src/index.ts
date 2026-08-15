@@ -13,6 +13,58 @@ export function openDatabase(path: string): { sqlite: Database.Database; db: Db 
   return { sqlite, db };
 }
 
+function backfillHackerGraphActivity(sqlite: Database.Database): void {
+  sqlite.exec(`
+    UPDATE addresses AS h
+    SET last_graph_activity_at = (
+      SELECT MAX(v.first_seen_at)
+      FROM edges e
+      INNER JOIN addresses v ON v.address = e.from_address AND v.role = 'victim'
+      WHERE e.to_address = h.address
+        AND e.direction = 'in_to_hacker'
+        AND v.first_seen_at IS NOT NULL
+    )
+    WHERE h.is_flagged_hacker = 1
+      AND EXISTS (
+        SELECT 1
+        FROM edges e
+        INNER JOIN addresses v ON v.address = e.from_address AND v.role = 'victim'
+        WHERE e.to_address = h.address
+          AND e.direction = 'in_to_hacker'
+          AND v.first_seen_at IS NOT NULL
+      );
+  `);
+
+  const hackers = sqlite
+    .prepare("SELECT address FROM addresses WHERE is_flagged_hacker = 1;")
+    .all() as Array<{ address: string }>;
+  const maxDownstreamStmt = sqlite.prepare(`
+    WITH RECURSIVE tree(addr) AS (
+      SELECT ?
+      UNION
+      SELECT e.to_address
+      FROM edges e
+      INNER JOIN tree t ON e.from_address = t.addr
+      WHERE e.direction = 'out_from_hacker'
+    )
+    SELECT MAX(a.first_seen_at) AS max_seen
+    FROM addresses a
+    INNER JOIN tree ON a.address = tree.addr
+    WHERE a.role = 'downstream' AND a.first_seen_at IS NOT NULL;
+  `);
+  const mergeStmt = sqlite.prepare(`
+    UPDATE addresses
+    SET last_graph_activity_at = ?
+    WHERE address = ?
+      AND (last_graph_activity_at IS NULL OR last_graph_activity_at < ?);
+  `);
+  for (const { address } of hackers) {
+    const row = maxDownstreamStmt.get(address) as { max_seen: string | null } | undefined;
+    if (!row?.max_seen) continue;
+    mergeStmt.run(row.max_seen, address, row.max_seen);
+  }
+}
+
 export function runMigrations(sqlite: Database.Database): void {
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS addresses (
@@ -211,6 +263,15 @@ export function runMigrations(sqlite: Database.Database): void {
   }
   if (!addressCols.some((c) => c.name === "fanout_meta_json")) {
     sqlite.exec(`ALTER TABLE addresses ADD COLUMN fanout_meta_json TEXT`);
+  }
+  let addedGraphActivityCol = false;
+  if (!addressCols.some((c) => c.name === "last_graph_activity_at")) {
+    sqlite.exec(`ALTER TABLE addresses ADD COLUMN last_graph_activity_at TEXT`);
+    addedGraphActivityCol = true;
+  }
+
+  if (addedGraphActivityCol) {
+    backfillHackerGraphActivity(sqlite);
   }
 
   const edgeCols = sqlite.prepare("PRAGMA table_info(edges)").all() as Array<{ name: string }>;

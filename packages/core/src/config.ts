@@ -85,6 +85,10 @@ export interface AppConfig {
   graphRateWindowSec: number;
   maxGraphVictims: number;
   maxGraphDownstream: number;
+  /** Hours for recent victim/downstream counts on hacker list. */
+  graphActivityWindowHours: number;
+  /** Client poll interval for /api/hackers (ms). */
+  hackersPollMs: number;
   /** Pause cron/discovery enqueue when pending queue reaches this depth; resume when depth hits 0. */
   maxQueueDepth: number;
   /** Opt-in verbose cron/job console logging ([cron] tick start, [job] start, etc.). */
@@ -227,6 +231,8 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     graphRateWindowSec: Number(env.GRAPH_RATE_WINDOW_SEC ?? 60),
     maxGraphVictims: Number(env.MAX_GRAPH_VICTIMS ?? 10000),
     maxGraphDownstream: Number(env.MAX_GRAPH_DOWNSTREAM ?? 10000),
+    graphActivityWindowHours: Number(env.GRAPH_ACTIVITY_WINDOW_HOURS ?? 168),
+    hackersPollMs: Math.max(3_600_000, Number(env.HACKERS_POLL_MS ?? 3_600_000)),
     maxQueueDepth: Number(env.MAX_QUEUE_DEPTH ?? 360),
     indexerJobDetails: env.INDEXER_JOB_DETAILS === "1",
     indexerLogColor: env.INDEXER_LOG_COLOR === "1",

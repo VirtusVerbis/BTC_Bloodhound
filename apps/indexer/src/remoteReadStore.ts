@@ -49,6 +49,8 @@ function mapAddressRow(row: Row | undefined) {
     totalReceivedSats: num(row.total_received_sats),
     liveBalanceSats: row.live_balance_sats != null ? num(row.live_balance_sats) : null,
     liveBalanceAt: row.live_balance_at != null ? str(row.live_balance_at) : null,
+    lastGraphActivityAt:
+      row.last_graph_activity_at != null ? str(row.last_graph_activity_at) : null,
   };
 }
 

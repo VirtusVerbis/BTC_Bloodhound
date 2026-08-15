@@ -526,7 +526,10 @@ export async function applyHackTraceEdgesChunk(
   const flat = flattenHackTraceEdges(computed);
   const totalEdges = flat.length;
 
+  let newVictimAddresses = new Set<string>();
   if (startEdgeIndex === 0 && computed.victimAddresses.length > 0) {
+    const existingVictims = await store.getExistingAddressSet(computed.victimAddresses);
+    newVictimAddresses = new Set(computed.victimAddresses.filter((a) => !existingVictims.has(a)));
     await store.upsertAddressesBatch(
       computed.victimAddresses.map((address) => ({
         address,
@@ -576,6 +579,12 @@ export async function applyHackTraceEdgesChunk(
     });
   }
 
+  const downstreamAddresses = downstreamRows.map((row) => row.address);
+  const existingDownstream = await store.getExistingAddressSet(downstreamAddresses);
+  const newDownstreamAddresses = new Set(
+    downstreamAddresses.filter((address) => !existingDownstream.has(address)),
+  );
+
   if (downstreamRows.length > 0) {
     await store.upsertAddressesBatch(
       downstreamRows.map((row) => ({
@@ -591,6 +600,22 @@ export async function applyHackTraceEdgesChunk(
   const hackersToRecalc = edgeRows.length > 0 ? await store.upsertEdgesBatch(edgeRows) : [];
   if (hackersToRecalc.length > 0) {
     await store.recalcTotalReceivedFor(hackersToRecalc);
+  }
+
+  const hackersToBump = new Set<string>();
+  for (const edge of slice) {
+    if (edge.direction === "in_to_hacker" && newVictimAddresses.has(edge.fromAddress)) {
+      hackersToBump.add(edge.toAddress);
+    }
+  }
+  for (const edge of slice) {
+    if (edge.direction === "out_from_hacker" && newDownstreamAddresses.has(edge.toAddress)) {
+      const roots = await store.findRootHackersForSpender(edge.fromAddress);
+      for (const root of roots) hackersToBump.add(root);
+    }
+  }
+  if (hackersToBump.size > 0) {
+    await store.bumpHackerGraphActivity([...hackersToBump]);
   }
 
   const nextEdgeIndex = endIndex;

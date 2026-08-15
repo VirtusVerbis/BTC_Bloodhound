@@ -288,6 +288,10 @@ body {
   border-radius: 4px;
 }
 
+.controls-panel select optgroup.hacker-optgroup-recent {
+  font-weight: 600;
+}
+
 .controls-panel button {
   font-size: 0.75rem;
   padding: 0.3rem 0.5625rem;
