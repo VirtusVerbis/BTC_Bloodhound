@@ -236,6 +236,9 @@ export function HackGraph({
   const applyLayout = useCallback(
     (rfNodes: Node[], rfEdges: Edge[], mode: GraphMode, sort: VictimSortOption) => {
       const laid = layoutGraph(rfNodes, rfEdges, "LR", mode, sort);
+      for (const n of laid) {
+        if (n.type !== "victim") delete positionsRef.current[n.id];
+      }
       const merged = laid.map((n) => ({
         ...n,
         position: positionsRef.current[n.id] ?? n.position,
