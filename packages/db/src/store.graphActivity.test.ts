@@ -16,9 +16,11 @@ describe("graph activity", () => {
     await store.upsertAddressesBatch([
       { address: "bc1qknown", role: "victim", source: "derived" },
     ]);
-    const set = await store.getExistingAddressSet(["bc1qknown", "bc1qnew"]);
+    const unknowns = Array.from({ length: 90 }, (_, i) => `bc1qunknown${i}`);
+    const set = await store.getExistingAddressSet(["bc1qknown", ...unknowns]);
     expect(set.has("bc1qknown")).toBe(true);
-    expect(set.has("bc1qnew")).toBe(false);
+    expect(set.size).toBe(1);
+    expect(set.has("bc1qunknown0")).toBe(false);
   });
 
   it("bumpHackerGraphActivity keeps the latest timestamp", async () => {

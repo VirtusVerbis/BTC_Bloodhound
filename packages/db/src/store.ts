@@ -1867,12 +1867,16 @@ export class Store {
   async getExistingAddressSet(addressList: string[]): Promise<Set<string>> {
     const unique = [...new Set(addressList)].filter(Boolean);
     if (unique.length === 0) return new Set();
-    const rows = await this.db
-      .select({ address: addresses.address })
-      .from(addresses)
-      .where(inArray(addresses.address, unique))
-      .all();
-    return new Set(rows.map((r) => r.address));
+    const existing = new Set<string>();
+    for (const chunk of chunkArray(unique, D1_IN_CLAUSE_CHUNK_SIZE)) {
+      const rows = await this.db
+        .select({ address: addresses.address })
+        .from(addresses)
+        .where(inArray(addresses.address, chunk))
+        .all();
+      for (const row of rows) existing.add(row.address);
+    }
+    return existing;
   }
 
   /** Walk backward along out_from_hacker edges to root flagged hackers. */

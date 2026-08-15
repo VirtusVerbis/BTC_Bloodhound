@@ -81,6 +81,14 @@ export const hackCoverageLinks: ExternalLink[] = [
     label: "Wizardsardine — Coldcard: the technical autopsy of an entropy failure",
     url: "https://wizardsardine.com/blog/coldcard-vuln-deep-dive/",
   },
+  {
+    label: "Praveen Perera (X) — Inside Wave 1: tracing the Coldcard drain",
+    url: "https://x.com/PraveenPerera/status/2087936252230140278",
+  },
+  {
+    label: "Praveen Perera — Inside Wave 1: tracing the attacker’s steps through the Coldcard drain",
+    url: "https://praveenperera.com/blog/coldcard-mk3-weak-rng-wave1/",
+  },
 ];
 
 export const dataSourceLinks: ExternalLink[] = [
