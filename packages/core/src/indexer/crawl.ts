@@ -152,6 +152,7 @@ export async function scheduleDownstreamCrawl(
 
   const ts = Date.now();
   const enqueueCache = await loadScheduleEnqueueCache(store);
+  const throttled = enqueueCache.queueDepth >= config.queueSoftThrottleDepth;
   const skipNonCritical = scheduleBudgetLow(budget, reserve);
   let crawlEnqueued = 0;
   let pollEnqueued = 0;
@@ -188,7 +189,11 @@ export async function scheduleDownstreamCrawl(
   }
 
   if (skipNonCritical) {
-    return { ...emptyStats, skipNonCritical, maintTick: isMaintTick };
+    return { ...emptyStats, skipNonCritical, maintTick: isMaintTick, throttled };
+  }
+
+  if (throttled) {
+    return { ...emptyStats, skipNonCritical: false, maintTick: isMaintTick, throttled };
   }
 
   const frontier = await store.getDownstreamFrontier(config.crawlEnqueuePerCron, config.maxCrawlDepth);
@@ -227,5 +232,6 @@ export async function scheduleDownstreamCrawl(
     crawlEnqueued,
     pollEnqueued,
     maintTick: isMaintTick,
+    throttled: false,
   };
 }

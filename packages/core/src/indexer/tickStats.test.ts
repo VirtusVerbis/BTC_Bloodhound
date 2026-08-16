@@ -43,6 +43,23 @@ describe("formatCronScheduleDoneLine", () => {
       "[cron] schedule done skipNonCritical=true crawlEnq=0 pollEnq=0 maint=true btc=fresh",
     );
   });
+
+  it("includes throttled flag when soft backpressure is active", () => {
+    const budget = createSubrequestBudget(0);
+    const line = formatCronScheduleDoneLine(
+      {
+        skipNonCritical: false,
+        crawlEnqueued: 0,
+        pollEnqueued: 0,
+        maintTick: true,
+        btc: "skip",
+        throttled: true,
+      },
+      budget,
+      0,
+    );
+    expect(line).toContain("throttled=true");
+  });
 });
 
 describe("formatCronTickDoneLine", () => {
@@ -60,6 +77,25 @@ describe("formatCronTickDoneLine", () => {
     });
     expect(line).toBe(
       "[cron] tick done processed=1 ms=5149 subreq=18/50 sched=6 work=12 rem=32 stop=subreq queue=294",
+    );
+  });
+
+  it("includes order and jobsCap when provided", () => {
+    const line = formatCronTickDoneLine({
+      processed: 2,
+      elapsedMs: 100,
+      subreqUsed: 0,
+      subreqLimit: 0,
+      schedSubreq: 0,
+      workSubreq: 0,
+      subreqRem: 0,
+      queue: 45,
+      stop: "jobs_cap",
+      order: "drain",
+      jobsCap: 2,
+    });
+    expect(line).toBe(
+      "[cron] tick done processed=2 ms=100 order=drain jobsCap=2 stop=jobs_cap queue=45",
     );
   });
 

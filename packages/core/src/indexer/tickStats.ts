@@ -10,6 +10,7 @@ export interface ScheduleTickStats {
   pollEnqueued: number;
   maintTick: boolean;
   btc: BtcScheduleMode;
+  throttled?: boolean;
 }
 
 export interface TickDoneStats {
@@ -22,6 +23,8 @@ export interface TickDoneStats {
   subreqRem: number;
   queue: number;
   stop: TickStopReason;
+  order?: "drain" | "schedule-first";
+  jobsCap?: number;
 }
 
 export interface JobRunStats {
@@ -46,7 +49,8 @@ export function formatCronScheduleDoneLine(
   const used = budget.used();
   const limit = budget.limit();
   const subreqPart = formatSubreqFields(used, limit, schedSubreq);
-  return `[cron] schedule done${subreqPart} skipNonCritical=${stats.skipNonCritical} crawlEnq=${stats.crawlEnqueued} pollEnq=${stats.pollEnqueued} maint=${stats.maintTick} btc=${stats.btc}`;
+  const throttledPart = stats.throttled === true ? " throttled=true" : "";
+  return `[cron] schedule done${subreqPart}${throttledPart} skipNonCritical=${stats.skipNonCritical} crawlEnq=${stats.crawlEnqueued} pollEnq=${stats.pollEnqueued} maint=${stats.maintTick} btc=${stats.btc}`;
 }
 
 export function formatCronTickDoneLine(stats: TickDoneStats): string {
@@ -54,7 +58,9 @@ export function formatCronTickDoneLine(stats: TickDoneStats): string {
     stats.subreqLimit > 0
       ? ` subreq=${stats.subreqUsed}/${stats.subreqLimit} sched=${stats.schedSubreq} work=${stats.workSubreq} rem=${stats.subreqRem}`
       : "";
-  return `[cron] tick done processed=${stats.processed} ms=${stats.elapsedMs}${subreqPart} stop=${stats.stop} queue=${stats.queue}`;
+  const orderPart = stats.order ? ` order=${stats.order}` : "";
+  const jobsCapPart = stats.jobsCap != null ? ` jobsCap=${stats.jobsCap}` : "";
+  return `[cron] tick done processed=${stats.processed} ms=${stats.elapsedMs}${subreqPart}${orderPart}${jobsCapPart} stop=${stats.stop} queue=${stats.queue}`;
 }
 
 export function formatJobRunStatsSuffix(stats?: JobRunStats, workSubreq?: number): string {

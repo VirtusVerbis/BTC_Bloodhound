@@ -11,6 +11,7 @@ import {
   type SubrequestBudget,
 } from "./subrequestBudget.js";
 import { formatCronScheduleDoneLine, formatCronTickDoneLine, type TickStopReason } from "./tickStats.js";
+import { effectiveJobsPerTick, shouldDrainBeforeSchedule } from "./tickPolicy.js";
 
 export interface IndexerTickResult {
   scheduled: boolean;
@@ -80,30 +81,40 @@ export async function runIndexerTick(
   let jobsProcessed = 0;
   let tickStop: TickStopReason = "idle";
   let schedSubreq = 0;
+  let drainFirst = false;
+  let jobsCap = config.jobsPerTick;
   const budget = attachSubrequestBudget(store, config);
 
   logCronDetail(jobDetails, "[cron] tick start", logColor);
   try {
+    const queueDepth = await store.getQueueDepth();
     const continuationPending = schedule ? await store.hasPendingIngestContinuation() : false;
+    drainFirst = shouldDrainBeforeSchedule({
+      continuationPending,
+      queueDepth,
+      queueDrainFirstDepth: config.queueDrainFirstDepth,
+    });
+    jobsCap = effectiveJobsPerTick(config, queueDepth);
     const deadlineMs = Date.now() + config.tickBudgetMs;
     const jobOpts = {
       deadlineMs,
       jobDetails,
       logColor,
       subrequestBudget: budget,
+      jobsPerTick: jobsCap,
     };
 
-    if (schedule && continuationPending) {
+    if (drainFirst) {
       const jobResult = await processJobs(store, router, config, jobOpts);
       jobsProcessed = jobResult.processed;
       tickStop = jobResult.stopReason;
 
-      if (budget.remaining() > config.scheduleSubrequestReserve) {
+      if (schedule && budget.remaining() > config.scheduleSubrequestReserve) {
         schedSubreq = await runSchedulePhase(store, router, config, budget, jobDetails, logColor);
-      } else {
+      } else if (schedule) {
         logCronDetail(
           jobDetails,
-          "[cron] schedule skipped continuation=true budget=low",
+          `[cron] schedule skipped drainFirst=true budget=low`,
           logColor,
         );
       }
@@ -134,6 +145,8 @@ export async function runIndexerTick(
         subreqRem: subreqLimit > 0 ? budget.remaining() : 0,
         queue,
         stop: tickStop,
+        order: drainFirst ? "drain" : "schedule-first",
+        jobsCap,
       }),
       logColor,
     );

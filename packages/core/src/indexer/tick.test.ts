@@ -73,6 +73,10 @@ function baseConfig(): AppConfig {
     maxGraphVictims: 1000,
     maxGraphDownstream: 1000,
     maxQueueDepth: 360,
+    queueDrainFirstDepth: 1,
+    jobsPerTickMax: 3,
+    queueDepthPerExtraJob: 40,
+    queueSoftThrottleDepth: 80,
     indexerJobDetails: false,
     indexerLogColor: false,
     jobDeferAfterAttempts: 20,
@@ -99,7 +103,7 @@ function baseConfig(): AppConfig {
   };
 }
 
-describe("runIndexerTick continuation ordering", () => {
+describe("runIndexerTick ordering", () => {
   beforeEach(() => {
     processJobsMock.mockReset();
     scheduleBtcMock.mockReset();
@@ -149,7 +153,7 @@ describe("runIndexerTick continuation ordering", () => {
     expect(order.indexOf("jobs")).toBeLessThan(order.indexOf("schedule-btc"));
   });
 
-  it("runs schedule before jobs when no continuation", async () => {
+  it("runs schedule before jobs when queue is empty and no continuation", async () => {
     const order: string[] = [];
     processJobsMock.mockImplementation(async () => {
       order.push("jobs");
@@ -181,5 +185,59 @@ describe("runIndexerTick continuation ordering", () => {
 
     expect(order[0]).toBe("schedule-btc");
     expect(order.indexOf("schedule-btc")).toBeLessThan(order.indexOf("jobs"));
+  });
+
+  it("runs jobs before schedule when queue depth meets drain threshold", async () => {
+    const order: string[] = [];
+    processJobsMock.mockImplementation(async () => {
+      order.push("jobs");
+      return { processed: 1, stopReason: "jobs_cap" };
+    });
+    scheduleBtcMock.mockImplementation(async () => {
+      order.push("schedule-btc");
+      return "skip";
+    });
+    scheduleCrawlMock.mockImplementation(async () => {
+      order.push("schedule-crawl");
+      return {
+        skipNonCritical: false,
+        crawlEnqueued: 0,
+        pollEnqueued: 0,
+        maintTick: false,
+        throttled: false,
+      };
+    });
+
+    const store = {
+      setSubrequestBudget: vi.fn(),
+      getSchedulerState: vi.fn().mockResolvedValue({ maintenanceCronCounter: 0 }),
+      getQueueDepth: vi.fn().mockResolvedValue(12),
+      hasPendingIngestContinuation: vi.fn().mockResolvedValue(false),
+    } as unknown as Store;
+    const router = {} as ChainRouter;
+
+    await runIndexerTick(store, router, baseConfig(), { schedule: true });
+
+    expect(order[0]).toBe("jobs");
+    expect(order.indexOf("jobs")).toBeLessThan(order.indexOf("schedule-btc"));
+  });
+
+  it("passes effective jobsPerTick burst cap to processJobs", async () => {
+    const store = {
+      setSubrequestBudget: vi.fn(),
+      getSchedulerState: vi.fn().mockResolvedValue({ maintenanceCronCounter: 0 }),
+      getQueueDepth: vi.fn().mockResolvedValue(45),
+      hasPendingIngestContinuation: vi.fn().mockResolvedValue(false),
+    } as unknown as Store;
+    const router = {} as ChainRouter;
+
+    await runIndexerTick(store, router, baseConfig(), { schedule: true });
+
+    expect(processJobsMock).toHaveBeenCalledWith(
+      store,
+      router,
+      expect.anything(),
+      expect.objectContaining({ jobsPerTick: 2 }),
+    );
   });
 });

@@ -94,6 +94,14 @@ export interface AppConfig {
   hackersPollMs: number;
   /** Pause cron/discovery enqueue when pending queue reaches this depth; resume when depth hits 0. */
   maxQueueDepth: number;
+  /** Run jobs before schedule when queue depth is at or above this (default 1). */
+  queueDrainFirstDepth: number;
+  /** Burst ceiling for jobs processed per tick when queue is deep. */
+  jobsPerTickMax: number;
+  /** Add one extra job per tick for every N queue depth above base. */
+  queueDepthPerExtraJob: number;
+  /** Zero out crawl/poll schedule enqueue when queue depth reaches this (soft backpressure). */
+  queueSoftThrottleDepth: number;
   /** Opt-in verbose cron/job console logging ([cron] tick start, [job] start, etc.). */
   indexerJobDetails: boolean;
   /** ANSI-colorize indexer log prefixes and key labels in console output. */
@@ -244,6 +252,10 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     graphActivityWindowHours: Number(env.GRAPH_ACTIVITY_WINDOW_HOURS ?? 168),
     hackersPollMs: Math.max(3_600_000, Number(env.HACKERS_POLL_MS ?? 3_600_000)),
     maxQueueDepth: Number(env.MAX_QUEUE_DEPTH ?? 360),
+    queueDrainFirstDepth: Number(env.QUEUE_DRAIN_FIRST_DEPTH ?? 1),
+    jobsPerTickMax: Number(env.JOBS_PER_TICK_MAX ?? 3),
+    queueDepthPerExtraJob: Number(env.QUEUE_DEPTH_PER_EXTRA_JOB ?? 40),
+    queueSoftThrottleDepth: Number(env.QUEUE_SOFT_THROTTLE_DEPTH ?? 80),
     indexerJobDetails: env.INDEXER_JOB_DETAILS === "1",
     indexerLogColor: env.INDEXER_LOG_COLOR === "1",
     jobDeferAfterAttempts: Number(env.JOB_DEFER_AFTER_ATTEMPTS ?? 20),

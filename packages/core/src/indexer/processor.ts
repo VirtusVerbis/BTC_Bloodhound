@@ -1300,15 +1300,17 @@ export async function processJobs(
     jobDetails?: boolean;
     logColor?: boolean;
     subrequestBudget?: SubrequestBudget;
+    jobsPerTick?: number;
   },
 ): Promise<ProcessJobsResult> {
   const jobDetails = opts?.jobDetails ?? false;
   const logColor = opts?.logColor ?? false;
   const budget = opts?.subrequestBudget;
+  const jobsPerTick = opts?.jobsPerTick ?? config.jobsPerTick;
   let processed = 0;
   let stopReason: TickStopReason = "jobs_cap";
   let cachedHackers: Set<string> | undefined;
-  for (let i = 0; i < config.jobsPerTick; i++) {
+  for (let i = 0; i < jobsPerTick; i++) {
     if (opts?.deadlineMs != null && Date.now() >= opts.deadlineMs) {
       stopReason = "deadline";
       break;

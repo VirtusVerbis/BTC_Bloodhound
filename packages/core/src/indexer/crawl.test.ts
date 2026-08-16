@@ -76,6 +76,10 @@ function baseConfig(): AppConfig {
     maxGraphVictims: 1000,
     maxGraphDownstream: 1000,
     maxQueueDepth: 360,
+    queueDrainFirstDepth: 1,
+    jobsPerTickMax: 3,
+    queueDepthPerExtraJob: 40,
+    queueSoftThrottleDepth: 80,
     indexerJobDetails: false,
     indexerLogColor: false,
     jobDeferAfterAttempts: 20,
@@ -345,6 +349,58 @@ describe("scheduleDownstreamCrawl", () => {
       undefined,
       expect.objectContaining({ ...BACKFILL_DEDUPE, address: addr }),
     );
+  });
+
+  it("skips crawl and poll enqueue when queue depth is at soft throttle threshold", async () => {
+    const store = mockStore({
+      getQueueDepth: vi.fn().mockResolvedValue(80),
+      getSchedulerState: vi.fn().mockResolvedValue({ queueSchedulingPaused: 0 }),
+      incrementMaintenanceCronCounter: vi.fn().mockResolvedValue(10),
+      listHackers: vi.fn().mockResolvedValue([{ address: "bc1qa" }]),
+      getBackfillState: vi.fn().mockResolvedValue({ backfillComplete: true }),
+      getSyncState: vi.fn().mockResolvedValue(null),
+      getSourceSync: vi.fn().mockResolvedValue({ lastSyncAt: new Date().toISOString() }),
+      getDownstreamFrontier: vi.fn().mockResolvedValue([{ address: "bc1qdown" }]),
+      listDownstreamForPoll: vi.fn().mockResolvedValue([{ address: "bc1qdown2" }]),
+    });
+
+    const stats = await scheduleDownstreamCrawl(store, baseConfig(), unlimitedBudget, 0);
+
+    expect(stats.throttled).toBe(true);
+    expect(stats.crawlEnqueued).toBe(0);
+    expect(stats.pollEnqueued).toBe(0);
+    expect(store.getDownstreamFrontier).not.toHaveBeenCalled();
+    expect(store.listDownstreamForPoll).not.toHaveBeenCalled();
+    expect(store.enqueueJobIfAbsent).toHaveBeenCalledWith(
+      "poll_hacker_address",
+      { address: "bc1qa" },
+      JOB_PRIORITY.POLL_HACKER,
+      undefined,
+      { address: "bc1qa" },
+    );
+  });
+
+  it("enqueues crawl and poll when queue depth is below soft throttle threshold", async () => {
+    const store = mockStore({
+      getQueueDepth: vi.fn().mockResolvedValue(10),
+      getSchedulerState: vi.fn().mockResolvedValue({ queueSchedulingPaused: 0 }),
+      incrementMaintenanceCronCounter: vi.fn().mockResolvedValue(11),
+      getSourceSync: vi.fn().mockResolvedValue({ lastSyncAt: new Date().toISOString() }),
+      getDownstreamFrontier: vi.fn().mockResolvedValue([{ address: "bc1qdown" }]),
+      listDownstreamForPoll: vi.fn().mockResolvedValue([{ address: "bc1qdown2" }]),
+      enqueueJobIfAbsent: vi
+        .fn()
+        .mockResolvedValueOnce(1)
+        .mockResolvedValueOnce(2),
+    });
+
+    const stats = await scheduleDownstreamCrawl(store, baseConfig(), unlimitedBudget, 0);
+
+    expect(stats.throttled).toBe(false);
+    expect(stats.crawlEnqueued).toBe(1);
+    expect(stats.pollEnqueued).toBe(1);
+    expect(store.getDownstreamFrontier).toHaveBeenCalled();
+    expect(store.listDownstreamForPoll).toHaveBeenCalled();
   });
 });
 
