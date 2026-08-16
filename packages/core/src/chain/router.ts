@@ -39,7 +39,6 @@ export interface ChainRouterOptions {
 
 export class ChainRouter {
   private providers: ChainProvider[];
-  private index = 0;
   private sleepOnRateLimit: boolean;
   private backoff: ChainRouterBackoffConfig;
 
@@ -66,6 +65,11 @@ export class ChainRouter {
     return name === "esplora" ? "esplora" : "mempool";
   }
 
+  /** Opposite of last used: esplora → mempool (1); otherwise esplora (0). */
+  private startIndex(lastProviderUsed: string | null | undefined): number {
+    return lastProviderUsed === "esplora" ? 1 : 0;
+  }
+
   private async waitForRateLimit(): Promise<void> {
     const state = await this.store.getSchedulerState();
     const nextAtIso = state?.nextProviderCallAt ?? null;
@@ -81,26 +85,23 @@ export class ChainRouter {
     await new Promise((r) => setTimeout(r, wait));
   }
 
-  private async resolveAvailableProvider(
+  private resolveAvailableProvider(
     state: Awaited<ReturnType<Store["getSchedulerState"]>>,
-    preferAlternate: boolean,
-  ): Promise<ChainProvider | null> {
-    const start = preferAlternate ? (this.index + 1) % this.providers.length : this.index;
+  ): ChainProvider | null {
+    const start = this.startIndex(state?.lastProviderUsed);
     for (let offset = 0; offset < this.providers.length; offset++) {
       const idx = (start + offset) % this.providers.length;
       const provider = this.providers[idx]!;
       const id = this.providerId(provider.name);
       if (!this.store.isProviderInBackoff(state, id)) {
-        this.index = (idx + 1) % this.providers.length;
         return provider;
       }
     }
     return null;
   }
 
-  private async markCalled(providerName: string, success: boolean, nextAtOverride?: string) {
-    const next =
-      nextAtOverride ?? new Date(Date.now() + this.backoff.rateLimitMs).toISOString();
+  private async markCalled(providerName: string, success: boolean) {
+    const next = new Date(Date.now() + this.backoff.rateLimitMs).toISOString();
     await this.store.updateSchedulerState({
       nextProviderCallAt: next,
       lastProviderUsed: providerName,
@@ -109,15 +110,10 @@ export class ChainRouter {
     });
   }
 
-  private maxIso(a: string | null | undefined, b: string): string {
-    if (!a) return b;
-    return new Date(a).getTime() >= new Date(b).getTime() ? a : b;
-  }
-
-  async withProvider<T>(fn: (p: ChainProvider) => Promise<T>, preferAlternate = false): Promise<T> {
+  async withProvider<T>(fn: (p: ChainProvider) => Promise<T>): Promise<T> {
     await this.waitForRateLimit();
     const state = await this.store.getSchedulerState();
-    const provider = await this.resolveAvailableProvider(state, preferAlternate);
+    const provider = this.resolveAvailableProvider(state);
     if (!provider) {
       const retryAt = (await this.store.earliestProviderRetryAt()) ?? new Date(Date.now() + 60_000).toISOString();
       throw new RateLimitNotReadyError(retryAt, "provider-backoff");
@@ -140,11 +136,8 @@ export class ChainRouter {
         );
         const retryAfterAt = new Date(Date.now() + backoffSec * 1000).toISOString();
         await this.store.recordApiThreshold(providerId, { retryAfterAt, strikeCount: strikes });
-        const nextGlobal = this.maxIso(state?.nextProviderCallAt, retryAfterAt);
-        await this.markCalled(provider.name, false, nextGlobal);
-      } else {
-        await this.markCalled(provider.name, false);
       }
+      await this.markCalled(provider.name, false);
       throw err;
     }
   }

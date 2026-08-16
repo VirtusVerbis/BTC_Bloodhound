@@ -61,7 +61,7 @@ MEMPOOL_BASE = "https://mempool.space/api"
 # Set to your Worker URL(s), e.g. https://cointrace-production.<account>.workers.dev
 CORS_ORIGINS = "https://www.bitcoinbloodhound.com,https://bitcoinbloodhound.com"
 RATE_LIMIT_MS = "8000"
-JOBS_PER_TICK = "1"
+JOBS_PER_TICK = "2"
 TICK_BUDGET_MS = "25000"
 RUNNING_JOB_STALE_MS = "120000"
 # Workers Free: 50 subrequests per cron invocation — chunk D1/sync work across ticks

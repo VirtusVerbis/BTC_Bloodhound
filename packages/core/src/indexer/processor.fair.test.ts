@@ -200,7 +200,58 @@ describe("processJobs fair scheduling", () => {
     expect(claimNextJob).not.toHaveBeenCalled();
   });
 
-  it("fails job with provider retryAt on HTTP 429", async () => {
+  it("fails 429 job on pacing delay and continues tick when other provider is available", async () => {
+    const failedJob = makeJob({
+      id: 20,
+      type: "poll_hacker_address",
+      payloadJson: JSON.stringify({ address: "bc1qhack" }),
+      priority: JOB_PRIORITY.POLL_HACKER,
+    });
+    const nextJob = makeJob({
+      id: 21,
+      type: "poll_hacker_address",
+      payloadJson: JSON.stringify({ address: "bc1qnext" }),
+      priority: JOB_PRIORITY.POLL_HACKER,
+    });
+    const pacingAt = new Date(Date.now() + 8_000).toISOString();
+
+    const completeJob = vi.fn();
+    const failJob = vi.fn();
+    const claimNextJob = vi.fn().mockResolvedValueOnce(failedJob).mockResolvedValueOnce(nextJob);
+
+    const store = {
+      claimNextIngestJob: vi.fn().mockResolvedValue(null),
+      claimNextJob,
+      completeJob,
+      failJob,
+      maybeClearQueueSchedulingPause: vi.fn(),
+      getQueueDepth: vi.fn().mockResolvedValue(1),
+      canUseSubrequests: vi.fn().mockReturnValue(true),
+      getSchedulerState: vi.fn().mockResolvedValue({ nextProviderCallAt: pacingAt }),
+      hasAvailableChainProvider: vi.fn().mockReturnValue(true),
+      getSyncState: vi.fn().mockResolvedValue(null),
+      listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack" }, { address: "bc1qnext" }]),
+      touchSyncPoll: vi.fn(),
+    } as unknown as Store;
+
+    const router = {
+      withProvider: vi
+        .fn()
+        .mockRejectedValueOnce(new RateLimitHttpError("429 Too Many Requests", 300))
+        .mockImplementation(async (fn: (p: { getAddressTxs: () => Promise<[]> }) => unknown) =>
+          fn({ getAddressTxs: async () => [] }),
+        ),
+    } as unknown as ChainRouter;
+
+    const { processed: n } = await processJobs(store, router, { ...baseConfig(), jobsPerTick: 2 });
+
+    expect(n).toBe(1);
+    expect(failJob).toHaveBeenCalledWith(failedJob.id, "429 Too Many Requests", pacingAt);
+    expect(completeJob).toHaveBeenCalledWith(nextJob.id);
+    expect(claimNextJob).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails 429 job until earliest provider retry and stops tick when both are in backoff", async () => {
     const pollJob = makeJob({
       id: 20,
       type: "poll_hacker_address",
@@ -211,14 +262,17 @@ describe("processJobs fair scheduling", () => {
 
     const completeJob = vi.fn();
     const failJob = vi.fn();
+    const claimNextJob = vi.fn().mockResolvedValue(pollJob);
     const store = {
       claimNextIngestJob: vi.fn().mockResolvedValue(null),
-      claimNextJob: vi.fn().mockResolvedValue(pollJob),
+      claimNextJob,
       completeJob,
       failJob,
       maybeClearQueueSchedulingPause: vi.fn(),
       getQueueDepth: vi.fn().mockResolvedValue(1),
       canUseSubrequests: vi.fn().mockReturnValue(true),
+      getSchedulerState: vi.fn().mockResolvedValue({}),
+      hasAvailableChainProvider: vi.fn().mockReturnValue(false),
       earliestProviderRetryAt: vi.fn().mockResolvedValue(providerRetryAt),
       getSyncState: vi.fn().mockResolvedValue(null),
       listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack" }]),
@@ -229,10 +283,11 @@ describe("processJobs fair scheduling", () => {
       withProvider: vi.fn().mockRejectedValue(new RateLimitHttpError("429 Too Many Requests", 300)),
     } as unknown as ChainRouter;
 
-    const { processed: n } = await processJobs(store, router, baseConfig());
+    const { processed: n } = await processJobs(store, router, { ...baseConfig(), jobsPerTick: 2 });
 
     expect(n).toBe(0);
     expect(failJob).toHaveBeenCalledWith(pollJob.id, "429 Too Many Requests", providerRetryAt);
     expect(completeJob).not.toHaveBeenCalled();
+    expect(claimNextJob).toHaveBeenCalledTimes(1);
   });
 });

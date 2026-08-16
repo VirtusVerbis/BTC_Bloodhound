@@ -1279,11 +1279,14 @@ export async function handleJobFailure(
 
   const message = err instanceof Error ? err.message : String(err);
   if (isRateLimitError(err)) {
-    const retryAt =
-      (await store.earliestProviderRetryAt()) ??
-      new Date(Date.now() + config.apiThresholdBaseSec * 1000).toISOString();
+    const state = await store.getSchedulerState();
+    const otherAvailable = store.hasAvailableChainProvider(state);
+    const retryAt = otherAvailable
+      ? (state?.nextProviderCallAt ?? new Date(Date.now() + config.rateLimitMs).toISOString())
+      : ((await store.earliestProviderRetryAt()) ??
+        new Date(Date.now() + config.apiThresholdBaseSec * 1000).toISOString());
     await store.failJob(job.id, message, retryAt);
-    return true;
+    return !otherAvailable;
   }
 
   const backoff = Math.min(300, 30 * attempt);

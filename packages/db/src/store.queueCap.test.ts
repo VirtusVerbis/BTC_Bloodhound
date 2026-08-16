@@ -81,4 +81,17 @@ describe("queue cap", () => {
     expect(state?.esploraRetryAfterAt).toBeNull();
     expect(store.isProviderInBackoff(state, "esplora")).toBe(false);
   });
+
+  it("hasAvailableChainProvider is true unless both providers are in backoff", async () => {
+    const store = openStore();
+    const future = new Date(Date.now() + 300_000).toISOString();
+
+    expect(store.hasAvailableChainProvider(await store.getSchedulerState())).toBe(true);
+
+    await store.recordApiThreshold("esplora", { retryAfterAt: future, strikeCount: 1 });
+    expect(store.hasAvailableChainProvider(await store.getSchedulerState())).toBe(true);
+
+    await store.recordApiThreshold("mempool", { retryAfterAt: future, strikeCount: 1 });
+    expect(store.hasAvailableChainProvider(await store.getSchedulerState())).toBe(false);
+  });
 });

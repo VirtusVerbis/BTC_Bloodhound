@@ -1527,6 +1527,13 @@ export class Store {
     return this.providerRetrySecondsLeft(state, provider) > 0;
   }
 
+  /** True when at least one of Esplora/Mempool is not in 429 backoff. */
+  hasAvailableChainProvider(
+    state: Awaited<ReturnType<Store["getSchedulerState"]>>,
+  ): boolean {
+    return !this.isProviderInBackoff(state, "esplora") || !this.isProviderInBackoff(state, "mempool");
+  }
+
   async earliestProviderRetryAt(): Promise<string | null> {
     const state = await this.getSchedulerState();
     const candidates = [

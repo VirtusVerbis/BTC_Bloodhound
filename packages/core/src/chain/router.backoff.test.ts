@@ -9,6 +9,13 @@ const backoff = {
   apiThresholdMaxSec: 3600,
 };
 
+function okTxResponse(): Response {
+  return new Response(JSON.stringify({ txid: "abc", vin: [], vout: [] }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 type SchedulerState = Awaited<ReturnType<Store["getSchedulerState"]>>;
 
 function makeMockStore(initial: Partial<NonNullable<SchedulerState>> = {}) {
@@ -91,12 +98,7 @@ describe("ChainRouter per-provider backoff", () => {
     const future = new Date(Date.now() + 600_000).toISOString();
     const { store } = makeMockStore({ esploraRetryAfterAt: future, esploraStrikeCount: 1 });
 
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ txid: "abc", vin: [], vout: [] }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(okTxResponse()));
     vi.stubGlobal("fetch", fetchMock);
 
     const router = new ChainRouter(
@@ -192,15 +194,41 @@ describe("ChainRouter per-provider backoff", () => {
     expect(retryMs).toBeLessThanOrEqual(601_000);
   });
 
+  it("does not copy 429 retry-after into nextProviderCallAt", async () => {
+    const { store, getState } = makeMockStore();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response("Too Many Requests", {
+          status: 429,
+          headers: { "Retry-After": "600" },
+        }),
+      ),
+    );
+
+    const router = new ChainRouter(
+      "https://blockstream.info/api",
+      "https://mempool.space/api",
+      store,
+      8000,
+      { sleepOnRateLimit: false, backoff: { ...backoff, rateLimitMs: 8000 } },
+    );
+
+    await expect(router.withProvider((p) => p.getTx("abc"))).rejects.toBeInstanceOf(
+      RateLimitHttpError,
+    );
+
+    const pacingMs = new Date(getState().nextProviderCallAt!).getTime() - Date.now();
+    expect(pacingMs).toBeGreaterThanOrEqual(7_000);
+    expect(pacingMs).toBeLessThanOrEqual(9_000);
+    const esploraBackoffMs = new Date(getState().esploraRetryAfterAt!).getTime() - Date.now();
+    expect(esploraBackoffMs).toBeGreaterThanOrEqual(599_000);
+  });
+
   it("clears provider strike after a successful call", async () => {
     const { store, getState } = makeMockStore({ esploraStrikeCount: 2 });
 
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ txid: "abc", vin: [], vout: [] }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(okTxResponse()));
     vi.stubGlobal("fetch", fetchMock);
 
     const router = new ChainRouter(
@@ -215,5 +243,120 @@ describe("ChainRouter per-provider backoff", () => {
     expect(store.clearProviderStrike).toHaveBeenCalledWith("esplora");
     expect(getState().esploraStrikeCount).toBe(0);
     expect(getState().esploraRetryAfterAt).toBeNull();
+  });
+
+  it("uses mempool when lastProviderUsed is esplora (new router / new cron)", async () => {
+    const { store } = makeMockStore({ lastProviderUsed: "esplora" });
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(okTxResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const router = new ChainRouter(
+      "https://blockstream.info/api",
+      "https://mempool.space/api",
+      store,
+      0,
+      { backoff },
+    );
+    await router.withProvider((p) => p.getTx("abc"));
+
+    expect(fetchMock.mock.calls[0]![0]).toContain("mempool.space");
+    expect((await store.getSchedulerState())?.lastProviderUsed).toBe("mempool");
+  });
+
+  it("uses esplora when lastProviderUsed is mempool (new router / new cron)", async () => {
+    const { store } = makeMockStore({ lastProviderUsed: "mempool" });
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(okTxResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const router = new ChainRouter(
+      "https://blockstream.info/api",
+      "https://mempool.space/api",
+      store,
+      0,
+      { backoff },
+    );
+    await router.withProvider((p) => p.getTx("abc"));
+
+    expect(fetchMock.mock.calls[0]![0]).toContain("blockstream.info");
+    expect((await store.getSchedulerState())?.lastProviderUsed).toBe("esplora");
+  });
+
+  it("alternates providers across successive successful calls", async () => {
+    const { store } = makeMockStore();
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(okTxResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const router = new ChainRouter(
+      "https://blockstream.info/api",
+      "https://mempool.space/api",
+      store,
+      0,
+      { backoff },
+    );
+    await router.withProvider((p) => p.getTx("abc"));
+    await router.withProvider((p) => p.getTx("def"));
+
+    expect(fetchMock.mock.calls[0]![0]).toContain("blockstream.info");
+    expect(fetchMock.mock.calls[1]![0]).toContain("mempool.space");
+    expect((await store.getSchedulerState())?.lastProviderUsed).toBe("mempool");
+  });
+
+  it("keeps global pacing at rateLimitMs after 429 and uses the other provider next", async () => {
+    const { store, getState } = makeMockStore();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response("Too Many Requests", {
+          status: 429,
+          headers: { "Retry-After": "600" },
+        }),
+      )
+      .mockResolvedValueOnce(okTxResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    const router = new ChainRouter(
+      "https://blockstream.info/api",
+      "https://mempool.space/api",
+      store,
+      0,
+      { backoff },
+    );
+
+    await expect(router.withProvider((p) => p.getTx("abc"))).rejects.toBeInstanceOf(
+      RateLimitHttpError,
+    );
+
+    const after429 = getState();
+    expect(after429.lastProviderUsed).toBe("esplora");
+    const pacingMs = new Date(after429.nextProviderCallAt!).getTime() - Date.now();
+    expect(pacingMs).toBeLessThan(2_000);
+    const esploraBackoffMs = new Date(after429.esploraRetryAfterAt!).getTime() - Date.now();
+    expect(esploraBackoffMs).toBeGreaterThanOrEqual(599_000);
+
+    await router.withProvider((p) => p.getTx("abc"));
+    expect(fetchMock.mock.calls[1]![0]).toContain("mempool.space");
+    expect(getState().lastProviderUsed).toBe("mempool");
+  });
+
+  it("skips esplora in backoff even when lastProviderUsed is mempool", async () => {
+    const future = new Date(Date.now() + 600_000).toISOString();
+    const { store } = makeMockStore({
+      lastProviderUsed: "mempool",
+      esploraRetryAfterAt: future,
+      esploraStrikeCount: 1,
+    });
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(okTxResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const router = new ChainRouter(
+      "https://blockstream.info/api",
+      "https://mempool.space/api",
+      store,
+      0,
+      { backoff },
+    );
+    await router.withProvider((p) => p.getTx("abc"));
+
+    expect(fetchMock.mock.calls[0]![0]).toContain("mempool.space");
   });
 });
