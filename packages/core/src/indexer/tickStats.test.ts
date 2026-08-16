@@ -3,6 +3,7 @@ import {
   formatCronScheduleDoneLine,
   formatCronTickDoneLine,
   formatJobRunStatsSuffix,
+  formatTickPlanLine,
 } from "./tickStats.js";
 import { createSubrequestBudget } from "./subrequestBudget.js";
 
@@ -99,6 +100,25 @@ describe("formatCronTickDoneLine", () => {
     );
   });
 
+  it("includes jobsCapReason when provided", () => {
+    const line = formatCronTickDoneLine({
+      processed: 1,
+      elapsedMs: 100,
+      subreqUsed: 0,
+      subreqLimit: 0,
+      schedSubreq: 0,
+      workSubreq: 0,
+      subreqRem: 0,
+      queue: 45,
+      stop: "pair_wait",
+      jobsCap: 1,
+      jobsCapReason: "heavy_head",
+    });
+    expect(line).toBe(
+      "[cron] tick done processed=1 ms=100 jobsCap=1 jobsCapReason=heavy_head stop=pair_wait queue=45",
+    );
+  });
+
   it("omits subrequest fields when unlimited", () => {
     const line = formatCronTickDoneLine({
       processed: 0,
@@ -112,6 +132,21 @@ describe("formatCronTickDoneLine", () => {
       stop: "idle",
     });
     expect(line).toBe("[cron] tick done processed=0 ms=42 stop=idle queue=10");
+  });
+});
+
+describe("formatTickPlanLine", () => {
+  it("formats tick plan with head weight", () => {
+    const line = formatTickPlanLine({
+      jobsCap: 2,
+      jobsCapReason: "pair_light",
+      headWeight: "light",
+      pairable: 3,
+      queue: 100,
+    });
+    expect(line).toBe(
+      "[cron] tick plan jobsCap=2 jobsCapReason=pair_light headWeight=light pairable=3 queue=100",
+    );
   });
 });
 

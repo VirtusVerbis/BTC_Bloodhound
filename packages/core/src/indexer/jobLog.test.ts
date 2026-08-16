@@ -19,6 +19,22 @@ function makeJob(overrides: Partial<Job> & Pick<Job, "type" | "payloadJson">): J
 }
 
 describe("jobLog", () => {
+  it("formatJobStartLine includes claim meta when provided", () => {
+    const line = formatJobStartLine(
+      makeJob({
+        type: "backfill_hacker_address",
+        payloadJson: JSON.stringify({
+          address: "bc1qtest",
+          pendingTxids: ["tx1"],
+        }),
+      }),
+      { slot: 1, weight: "light", phase: "process" },
+    );
+    expect(line).toContain("slot=1");
+    expect(line).toContain("weight=light");
+    expect(line).toContain("phase=process");
+  });
+
   it("formatJobStartLine includes type and address for backfill_hacker_address", () => {
     const line = formatJobStartLine(
       makeJob({

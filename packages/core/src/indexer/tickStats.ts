@@ -1,6 +1,6 @@
 import type { SubrequestBudget } from "./subrequestBudget.js";
 
-export type TickStopReason = "idle" | "deadline" | "subreq" | "jobs_cap";
+export type TickStopReason = "idle" | "deadline" | "subreq" | "jobs_cap" | "pacing" | "pair_wait";
 
 export type BtcScheduleMode = "fresh" | "inline" | "queued" | "skip";
 
@@ -25,6 +25,15 @@ export interface TickDoneStats {
   stop: TickStopReason;
   order?: "drain" | "schedule-first";
   jobsCap?: number;
+  jobsCapReason?: string;
+}
+
+export interface TickPlanStats {
+  jobsCap: number;
+  jobsCapReason: string;
+  headWeight: string | null;
+  pairable: number;
+  queue: number;
 }
 
 export interface JobRunStats {
@@ -60,7 +69,13 @@ export function formatCronTickDoneLine(stats: TickDoneStats): string {
       : "";
   const orderPart = stats.order ? ` order=${stats.order}` : "";
   const jobsCapPart = stats.jobsCap != null ? ` jobsCap=${stats.jobsCap}` : "";
-  return `[cron] tick done processed=${stats.processed} ms=${stats.elapsedMs}${subreqPart}${orderPart}${jobsCapPart} stop=${stats.stop} queue=${stats.queue}`;
+  const jobsCapReasonPart = stats.jobsCapReason ? ` jobsCapReason=${stats.jobsCapReason}` : "";
+  return `[cron] tick done processed=${stats.processed} ms=${stats.elapsedMs}${subreqPart}${orderPart}${jobsCapPart}${jobsCapReasonPart} stop=${stats.stop} queue=${stats.queue}`;
+}
+
+export function formatTickPlanLine(stats: TickPlanStats): string {
+  const headWeightPart = stats.headWeight != null ? ` headWeight=${stats.headWeight}` : "";
+  return `[cron] tick plan jobsCap=${stats.jobsCap} jobsCapReason=${stats.jobsCapReason}${headWeightPart} pairable=${stats.pairable} queue=${stats.queue}`;
 }
 
 export function formatJobRunStatsSuffix(stats?: JobRunStats, workSubreq?: number): string {

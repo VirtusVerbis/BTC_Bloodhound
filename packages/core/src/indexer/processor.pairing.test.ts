@@ -3,16 +3,17 @@ import type { Job, Store } from "@cointrace/db";
 import { JOB_PRIORITY } from "../config.js";
 import type { AppConfig } from "../config.js";
 import type { ChainRouter } from "../chain/router.js";
+import { RateLimitNotReadyError } from "../chain/router.js";
 import { processJobs } from "./processor.js";
-import { createSubrequestBudget } from "./subrequestBudget.js";
 
-function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
+function baseConfig(): AppConfig {
   return {
     databaseUrl: "file:./test.db",
     esploraBase: "https://blockstream.info/api",
     mempoolBase: "https://mempool.space/api",
     rateLimitMs: 3000,
-    jobsPerTick: 1,
+    jobsPerTick: 2,
+    jobsPerTickMax: 2,
     tickBudgetMs: 50_000,
     runningJobStaleMs: 120_000,
     cronIntervalSec: 60,
@@ -35,7 +36,7 @@ function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     apiThresholdCooldownSec: 300,
     apiThresholdBaseSec: 300,
     apiThresholdMaxSec: 3600,
-    backfillTxsPerJob: 5,
+    backfillTxsPerJob: 1,
     maxChainCallsPerJob: 0,
     backfillMaxTxs: 10000,
     backfillHealAuditIntervalSec: 86400,
@@ -64,7 +65,7 @@ function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     indexerLogColor: false,
     jobDeferAfterAttempts: 20,
     jobDeferSec: 86400,
-    subrequestLimitPerInvocation: 50,
+    subrequestLimitPerInvocation: 0,
     scheduleSubrequestReserve: 38,
     scheduleReserveMaintExtra: 10,
     maxSubrequestsPerJob: 0,
@@ -72,21 +73,21 @@ function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     maxGraphEdgesPerTx: 0,
     d1BatchSize: 8,
     syncAddressesPerJob: 5,
+    jobCpuGuardMs: 0,
+    deferGraphActivityBump: false,
     queueDepthPerExtraJob: 40,
     queueDrainFirstDepth: 1,
     queueSoftThrottleDepth: 80,
-    jobsPerTickMax: 3,
-    jobCpuGuardMs: 0,
-    deferGraphActivityBump: false,
-    ...overrides,
   };
 }
 
-function makeJob(overrides: Partial<Job> & Pick<Job, "type" | "payloadJson">): Job {
+function makeJob(
+  overrides: Partial<Job> & Pick<Job, "type" | "payloadJson">,
+): Job {
   return {
     id: 1,
     status: "running",
-    priority: JOB_PRIORITY.POLL_HACKER,
+    priority: JOB_PRIORITY.BACKFILL_HACKER,
     runAfter: new Date().toISOString(),
     attempts: 0,
     lastError: null,
@@ -99,84 +100,92 @@ function makeJob(overrides: Partial<Job> & Pick<Job, "type" | "payloadJson">): J
   };
 }
 
-function processStoreMock(overrides: Record<string, unknown> = {}): Store {
-  return {
-    listPendingIngestCandidates: vi.fn().mockResolvedValue([]),
-    claimIngestJobById: vi.fn().mockResolvedValue(null),
-    claimNextJob: vi.fn().mockResolvedValue(null),
-    getSchedulerState: vi.fn().mockResolvedValue({}),
-    canUseSubrequests: vi.fn().mockReturnValue(true),
-    ...overrides,
-  } as unknown as Store;
-}
+describe("processJobs weight-aware pairing", () => {
+  it("pair_wait after heavy ingest when no process-only candidate on slot 1", async () => {
+    const auditJob = makeJob({
+      id: 10,
+      type: "audit_hacker_backfill",
+      payloadJson: JSON.stringify({ address: "bc1qhack" }),
+    });
+    const heavyBackfill = makeJob({
+      id: 20,
+      type: "backfill_hacker_address",
+      payloadJson: JSON.stringify({ address: "bc1qother" }),
+    });
+    const pacingAt = new Date(Date.now() + 8_000).toISOString();
 
-describe("processJobs stopReason", () => {
-  it("returns idle when no jobs are claimable", async () => {
-    const budget = createSubrequestBudget(50);
-    const store = processStoreMock();
+    const claimIngestJobById = vi.fn().mockResolvedValueOnce(auditJob);
+    const completeJob = vi.fn();
+    const listPendingIngestCandidates = vi
+      .fn()
+      .mockResolvedValueOnce([auditJob])
+      .mockResolvedValueOnce([heavyBackfill]);
 
-    const result = await processJobs(store, {} as ChainRouter, baseConfig(), {
-      subrequestBudget: budget,
+    const store = {
+      listPendingIngestCandidates,
+      claimIngestJobById,
+      claimNextJob: vi.fn(),
+      completeJob,
+      maybeClearQueueSchedulingPause: vi.fn(),
+      getQueueDepth: vi.fn().mockResolvedValue(2),
+      canUseSubrequests: vi.fn().mockReturnValue(true),
+      getSchedulerState: vi.fn().mockResolvedValue({ nextProviderCallAt: pacingAt }),
+      listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack" }]),
+      countIndexedTxsForHacker: vi.fn().mockResolvedValue(1),
+      updateBackfillAudit: vi.fn(),
+      upsertBackfillState: vi.fn(),
+      getBackfillState: vi.fn(),
+    } as unknown as Store;
+
+    const router = {
+      withProvider: vi.fn(async (fn: (p: { getAddressStats: () => Promise<unknown> }) => unknown) =>
+        fn({
+          getAddressStats: async () => ({ chain_stats: { tx_count: 1 } }),
+        }),
+      ),
+    } as unknown as ChainRouter;
+
+    const { processed, stopReason } = await processJobs(store, router, {
+      ...baseConfig(),
+      jobsPerTick: 2,
     });
 
-    expect(result).toEqual({ processed: 0, stopReason: "idle" });
+    expect(processed).toBe(1);
+    expect(stopReason).toBe("pair_wait");
+    expect(completeJob).toHaveBeenCalledWith(auditJob.id);
+    expect(claimIngestJobById).toHaveBeenCalledTimes(1);
   });
 
-  it("returns subreq when budget is exhausted before claim", async () => {
-    const budget = createSubrequestBudget(50);
-    budget.consume(49);
-    const store = processStoreMock();
-
-    const result = await processJobs(store, {} as ChainRouter, baseConfig(), {
-      subrequestBudget: budget,
-    });
-
-    expect(result).toEqual({ processed: 0, stopReason: "subreq" });
-    expect(store.claimNextJob).not.toHaveBeenCalled();
-  });
-
-  it("returns jobs_cap after processing jobsPerTick jobs", async () => {
-    const budget = createSubrequestBudget(50);
+  it("uses stop=pacing when RateLimitNotReadyError stops tick", async () => {
     const pollJob = makeJob({
       id: 20,
       type: "poll_hacker_address",
       payloadJson: JSON.stringify({ address: "bc1qhack" }),
+      priority: JOB_PRIORITY.POLL_HACKER,
     });
-    const store = processStoreMock({
+    const retryAt = new Date(Date.now() + 8_000).toISOString();
+
+    const store = {
+      listPendingIngestCandidates: vi.fn().mockResolvedValue([]),
+      claimIngestJobById: vi.fn(),
       claimNextJob: vi.fn().mockResolvedValue(pollJob),
-      completeJob: vi.fn(),
+      failJob: vi.fn(),
       maybeClearQueueSchedulingPause: vi.fn(),
       getQueueDepth: vi.fn().mockResolvedValue(1),
+      canUseSubrequests: vi.fn().mockReturnValue(true),
+      getSchedulerState: vi.fn().mockResolvedValue({}),
       getSyncState: vi.fn().mockResolvedValue(null),
       listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack" }]),
       touchSyncPoll: vi.fn(),
-    });
+    } as unknown as Store;
 
     const router = {
-      withProvider: vi.fn(async (fn: (p: { getAddressTxs: () => Promise<[]> }) => unknown) =>
-        fn({ getAddressTxs: async () => [] }),
-      ),
+      withProvider: vi.fn().mockRejectedValue(new RateLimitNotReadyError(retryAt, "pacing")),
     } as unknown as ChainRouter;
 
-    const result = await processJobs(store, router, baseConfig(), {
-      subrequestBudget: budget,
-    });
+    const { processed, stopReason } = await processJobs(store, router, baseConfig());
 
-    expect(result).toEqual({ processed: 1, stopReason: "jobs_cap" });
-  });
-
-  it("stops claiming jobs when store subrequest sink is exhausted", async () => {
-    const budget = createSubrequestBudget(50);
-    budget.consume(48);
-    const store = processStoreMock({
-      canUseSubrequests: vi.fn().mockReturnValue(false),
-    });
-
-    const result = await processJobs(store, {} as ChainRouter, baseConfig(), {
-      subrequestBudget: budget,
-    });
-
-    expect(result).toEqual({ processed: 0, stopReason: "subreq" });
-    expect(store.claimNextJob).not.toHaveBeenCalled();
+    expect(processed).toBe(0);
+    expect(stopReason).toBe("pacing");
   });
 });

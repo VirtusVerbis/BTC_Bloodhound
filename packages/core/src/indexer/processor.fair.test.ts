@@ -5,6 +5,7 @@ import type { Job, Store } from "@cointrace/db";
 import type { ChainRouter } from "../chain/router.js";
 import { RateLimitHttpError } from "../chain/esplora.js";
 import { processJobs } from "./processor.js";
+
 function baseConfig(): AppConfig {
   return {
     databaseUrl: "file:./test.db",
@@ -73,6 +74,10 @@ function baseConfig(): AppConfig {
     syncAddressesPerJob: 5,
     jobCpuGuardMs: 0,
     deferGraphActivityBump: false,
+    jobsPerTickMax: 3,
+    queueDepthPerExtraJob: 40,
+    queueDrainFirstDepth: 1,
+    queueSoftThrottleDepth: 80,
   };
 }
 
@@ -85,8 +90,25 @@ function makeJob(overrides: Partial<Job> & Pick<Job, "type" | "payloadJson">): J
     attempts: 0,
     lastError: null,
     createdAt: new Date().toISOString(),
+    startedAt: new Date().toISOString(),
+    completedAt: null,
+    reclaimCount: 0,
+    reclaimProgressJson: null,
     ...overrides,
   };
+}
+
+function mockStore(overrides: Record<string, unknown> = {}): Store {
+  return {
+    listPendingIngestCandidates: vi.fn().mockResolvedValue([]),
+    claimIngestJobById: vi.fn().mockResolvedValue(null),
+    claimNextJob: vi.fn().mockResolvedValue(null),
+    getSchedulerState: vi.fn().mockResolvedValue({}),
+    canUseSubrequests: vi.fn().mockReturnValue(true),
+    maybeClearQueueSchedulingPause: vi.fn(),
+    getQueueDepth: vi.fn().mockResolvedValue(0),
+    ...overrides,
+  } as unknown as Store;
 }
 
 describe("processJobs fair scheduling", () => {
@@ -98,26 +120,16 @@ describe("processJobs fair scheduling", () => {
       priority: JOB_PRIORITY.BACKFILL_HACKER,
     });
 
-    const claimNextIngestJob = vi.fn().mockResolvedValue(auditJob);
-    const claimNextJob = vi.fn().mockResolvedValue(
-      makeJob({
-        id: 20,
-        type: "poll_hacker_address",
-        payloadJson: JSON.stringify({ address: "bc1qhack" }),
-        priority: JOB_PRIORITY.POLL_HACKER,
-      }),
-    );
+    const claimIngestJobById = vi.fn().mockResolvedValue(auditJob);
+    const claimNextJob = vi.fn();
     const completeJob = vi.fn();
-
     const listHackers = vi.fn().mockResolvedValue([{ address: "bc1qhack" }]);
 
-    const store = {
-      claimNextIngestJob,
+    const store = mockStore({
+      listPendingIngestCandidates: vi.fn().mockResolvedValue([auditJob]),
+      claimIngestJobById,
       claimNextJob,
       completeJob,
-      maybeClearQueueSchedulingPause: vi.fn(),
-      getQueueDepth: vi.fn().mockResolvedValue(0),
-      canUseSubrequests: vi.fn().mockReturnValue(true),
       countIndexedTxsForHacker: vi.fn().mockResolvedValue(100),
       updateBackfillAudit: vi.fn(),
       upsertBackfillState: vi.fn(),
@@ -125,7 +137,7 @@ describe("processJobs fair scheduling", () => {
       enqueueJob: vi.fn(),
       setExpandStatus: vi.fn(),
       listHackers,
-    } as unknown as Store;
+    });
 
     const router = {
       withProvider: vi.fn(async (fn: (p: { getAddressStats: () => Promise<unknown> }) => unknown) =>
@@ -138,7 +150,7 @@ describe("processJobs fair scheduling", () => {
     const { processed: n } = await processJobs(store, router, baseConfig());
 
     expect(n).toBe(1);
-    expect(claimNextIngestJob).toHaveBeenCalledWith({ preferContinuation: true });
+    expect(claimIngestJobById).toHaveBeenCalledWith(auditJob.id);
     expect(claimNextJob).not.toHaveBeenCalled();
     expect(completeJob).toHaveBeenCalledWith(auditJob.id);
     expect(listHackers).toHaveBeenCalledTimes(1);
@@ -152,21 +164,16 @@ describe("processJobs fair scheduling", () => {
       priority: JOB_PRIORITY.POLL_HACKER,
     });
 
-    const claimNextIngestJob = vi.fn().mockResolvedValue(null);
     const claimNextJob = vi.fn().mockResolvedValue(pollJob);
     const completeJob = vi.fn();
 
-    const store = {
-      claimNextIngestJob,
+    const store = mockStore({
       claimNextJob,
       completeJob,
-      maybeClearQueueSchedulingPause: vi.fn(),
-      getQueueDepth: vi.fn().mockResolvedValue(0),
-      canUseSubrequests: vi.fn().mockReturnValue(true),
       getSyncState: vi.fn().mockResolvedValue(null),
       listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack" }]),
       touchSyncPoll: vi.fn(),
-    } as unknown as Store;
+    });
 
     const router = {
       withProvider: vi.fn(async (fn: (p: { getAddressTxs: () => Promise<[]> }) => unknown) =>
@@ -183,72 +190,58 @@ describe("processJobs fair scheduling", () => {
   });
 
   it("stops claiming when deadlineMs has passed", async () => {
-    const claimNextIngestJob = vi.fn().mockResolvedValue(null);
     const claimNextJob = vi.fn();
-    const store = {
-      claimNextIngestJob,
-      claimNextJob,
-      canUseSubrequests: vi.fn().mockReturnValue(true),
-    } as unknown as Store;
+    const store = mockStore({ claimNextJob });
     const router = {} as unknown as ChainRouter;
 
-    const { processed: n, stopReason } = await processJobs(store, router, { ...baseConfig(), jobsPerTick: 5 }, { deadlineMs: Date.now() - 1 });
+    const { processed: n, stopReason } = await processJobs(
+      store,
+      router,
+      { ...baseConfig(), jobsPerTick: 5 },
+      { deadlineMs: Date.now() - 1 },
+    );
 
     expect(n).toBe(0);
     expect(stopReason).toBe("deadline");
-    expect(claimNextIngestJob).not.toHaveBeenCalled();
     expect(claimNextJob).not.toHaveBeenCalled();
   });
 
-  it("fails 429 job on pacing delay and continues tick when other provider is available", async () => {
+  it("pair_wait on second slot when pacing blocked and no process-only ingest", async () => {
     const failedJob = makeJob({
       id: 20,
       type: "poll_hacker_address",
       payloadJson: JSON.stringify({ address: "bc1qhack" }),
       priority: JOB_PRIORITY.POLL_HACKER,
     });
-    const nextJob = makeJob({
-      id: 21,
-      type: "poll_hacker_address",
-      payloadJson: JSON.stringify({ address: "bc1qnext" }),
-      priority: JOB_PRIORITY.POLL_HACKER,
-    });
     const pacingAt = new Date(Date.now() + 8_000).toISOString();
 
     const completeJob = vi.fn();
     const failJob = vi.fn();
-    const claimNextJob = vi.fn().mockResolvedValueOnce(failedJob).mockResolvedValueOnce(nextJob);
+    const claimNextJob = vi.fn().mockResolvedValue(failedJob);
 
-    const store = {
-      claimNextIngestJob: vi.fn().mockResolvedValue(null),
+    const store = mockStore({
       claimNextJob,
       completeJob,
       failJob,
-      maybeClearQueueSchedulingPause: vi.fn(),
       getQueueDepth: vi.fn().mockResolvedValue(1),
-      canUseSubrequests: vi.fn().mockReturnValue(true),
       getSchedulerState: vi.fn().mockResolvedValue({ nextProviderCallAt: pacingAt }),
       hasAvailableChainProvider: vi.fn().mockReturnValue(true),
       getSyncState: vi.fn().mockResolvedValue(null),
-      listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack" }, { address: "bc1qnext" }]),
+      listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack" }]),
       touchSyncPoll: vi.fn(),
-    } as unknown as Store;
+    });
 
     const router = {
-      withProvider: vi
-        .fn()
-        .mockRejectedValueOnce(new RateLimitHttpError("429 Too Many Requests", 300))
-        .mockImplementation(async (fn: (p: { getAddressTxs: () => Promise<[]> }) => unknown) =>
-          fn({ getAddressTxs: async () => [] }),
-        ),
+      withProvider: vi.fn().mockRejectedValue(new RateLimitHttpError("429 Too Many Requests", 300)),
     } as unknown as ChainRouter;
 
-    const { processed: n } = await processJobs(store, router, { ...baseConfig(), jobsPerTick: 2 });
+    const { processed: n, stopReason } = await processJobs(store, router, { ...baseConfig(), jobsPerTick: 2 });
 
-    expect(n).toBe(1);
+    expect(n).toBe(0);
+    expect(stopReason).toBe("pair_wait");
     expect(failJob).toHaveBeenCalledWith(failedJob.id, "429 Too Many Requests", pacingAt);
-    expect(completeJob).toHaveBeenCalledWith(nextJob.id);
-    expect(claimNextJob).toHaveBeenCalledTimes(2);
+    expect(completeJob).not.toHaveBeenCalled();
+    expect(claimNextJob).toHaveBeenCalledTimes(1);
   });
 
   it("fails 429 job until earliest provider retry and stops tick when both are in backoff", async () => {
@@ -263,29 +256,26 @@ describe("processJobs fair scheduling", () => {
     const completeJob = vi.fn();
     const failJob = vi.fn();
     const claimNextJob = vi.fn().mockResolvedValue(pollJob);
-    const store = {
-      claimNextIngestJob: vi.fn().mockResolvedValue(null),
+    const store = mockStore({
       claimNextJob,
       completeJob,
       failJob,
-      maybeClearQueueSchedulingPause: vi.fn(),
       getQueueDepth: vi.fn().mockResolvedValue(1),
-      canUseSubrequests: vi.fn().mockReturnValue(true),
-      getSchedulerState: vi.fn().mockResolvedValue({}),
       hasAvailableChainProvider: vi.fn().mockReturnValue(false),
       earliestProviderRetryAt: vi.fn().mockResolvedValue(providerRetryAt),
       getSyncState: vi.fn().mockResolvedValue(null),
       listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack" }]),
       touchSyncPoll: vi.fn(),
-    } as unknown as Store;
+    });
 
     const router = {
       withProvider: vi.fn().mockRejectedValue(new RateLimitHttpError("429 Too Many Requests", 300)),
     } as unknown as ChainRouter;
 
-    const { processed: n } = await processJobs(store, router, { ...baseConfig(), jobsPerTick: 2 });
+    const { processed: n, stopReason } = await processJobs(store, router, { ...baseConfig(), jobsPerTick: 2 });
 
     expect(n).toBe(0);
+    expect(stopReason).toBe("subreq");
     expect(failJob).toHaveBeenCalledWith(pollJob.id, "429 Too Many Requests", providerRetryAt);
     expect(completeJob).not.toHaveBeenCalled();
     expect(claimNextJob).toHaveBeenCalledTimes(1);

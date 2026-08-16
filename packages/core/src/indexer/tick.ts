@@ -10,8 +10,8 @@ import {
   scheduleSubrequestReserve,
   type SubrequestBudget,
 } from "./subrequestBudget.js";
-import { formatCronScheduleDoneLine, formatCronTickDoneLine, type TickStopReason } from "./tickStats.js";
-import { effectiveJobsPerTick, shouldDrainBeforeSchedule } from "./tickPolicy.js";
+import { formatCronScheduleDoneLine, formatCronTickDoneLine, formatTickPlanLine, type TickStopReason } from "./tickStats.js";
+import { planTickJobs, shouldDrainBeforeSchedule } from "./tickPolicy.js";
 
 export interface IndexerTickResult {
   scheduled: boolean;
@@ -83,6 +83,7 @@ export async function runIndexerTick(
   let schedSubreq = 0;
   let drainFirst = false;
   let jobsCap = config.jobsPerTick;
+  let jobsCapReason = "no_pair";
   const budget = attachSubrequestBudget(store, config);
 
   logCronDetail(jobDetails, "[cron] tick start", logColor);
@@ -94,7 +95,21 @@ export async function runIndexerTick(
       queueDepth,
       queueDrainFirstDepth: config.queueDrainFirstDepth,
     });
-    jobsCap = effectiveJobsPerTick(config, queueDepth);
+    const ingestCandidates = await store.listPendingIngestCandidates(32);
+    const tickPlan = planTickJobs(config, queueDepth, ingestCandidates, budget);
+    jobsCap = tickPlan.jobsCap;
+    jobsCapReason = tickPlan.reason;
+    logCronDetail(
+      jobDetails,
+      formatTickPlanLine({
+        jobsCap: tickPlan.jobsCap,
+        jobsCapReason: tickPlan.reason,
+        headWeight: tickPlan.headWeight,
+        pairable: tickPlan.pairableCount,
+        queue: queueDepth,
+      }),
+      logColor,
+    );
     const deadlineMs = Date.now() + config.tickBudgetMs;
     const jobOpts = {
       deadlineMs,
@@ -147,6 +162,7 @@ export async function runIndexerTick(
         stop: tickStop,
         order: drainFirst ? "drain" : "schedule-first",
         jobsCap,
+        jobsCapReason,
       }),
       logColor,
     );

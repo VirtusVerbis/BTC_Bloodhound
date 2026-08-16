@@ -33,6 +33,7 @@ const CRON_TICK_DONE = "\x1b[38;5;117m";
 const LINE_PREFIXES: ReadonlyArray<readonly [string, string]> = [
   ["[cron] schedule done", CRON_SCHEDULE],
   ["[cron] tick done", CRON_TICK_DONE],
+  ["[cron] tick plan", CRON_SCHEDULE],
   ["[job] start", CYAN],
   ["[job] done", GREEN],
   ["[job] fail", RED],
@@ -41,6 +42,12 @@ const LINE_PREFIXES: ReadonlyArray<readonly [string, string]> = [
 ];
 
 const KEY_LABELS: ReadonlyArray<readonly [string, string]> = [
+  ["jobsCapReason=", GOLD],
+  ["headWeight=", BRIGHT_CYAN],
+  ["pairable=", TEAL],
+  ["slot=", SKY],
+  ["weight=", ORANGE],
+  ["phase=", PURPLE],
   ["skipNonCritical=", GOLD],
   ["pendingTxidsCount=", BRIGHT_GREEN],
   ["processedIndex=", BRIGHT_YELLOW],

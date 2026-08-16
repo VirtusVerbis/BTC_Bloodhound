@@ -162,6 +162,38 @@ describe("claimNextIngestJob", () => {
   });
 });
 
+describe("listPendingIngestCandidates and claimIngestJobById", () => {
+  it("lists pending ingest jobs in priority order", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const lowId = await store.enqueueJob("expand_downstream", { address: "bc1qlow", cron: true }, 5);
+    const highId = await store.enqueueJob(
+      "backfill_hacker_address",
+      { address: "bc1qhigh" },
+      10,
+    );
+
+    const candidates = await store.listPendingIngestCandidates();
+    expect(candidates.map((j) => j.id)).toEqual([highId, lowId]);
+  });
+
+  it("claimIngestJobById claims only matching pending ingest job", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const id = await store.enqueueJob("backfill_hacker_address", { address: "bc1qclaim" }, 10);
+    const claimed = await store.claimIngestJobById(id);
+    expect(claimed?.id).toBe(id);
+    expect(claimed?.status).toBe("running");
+
+    const again = await store.claimIngestJobById(id);
+    expect(again).toBeNull();
+  });
+});
+
 describe("hasPendingIngestContinuation", () => {
   it("returns true for pending continuation ingest jobs", async () => {
     const { sqlite, db } = openDatabase(":memory:");

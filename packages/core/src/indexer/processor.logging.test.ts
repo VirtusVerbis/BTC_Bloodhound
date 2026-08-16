@@ -108,8 +108,10 @@ describe("processJobs logging", () => {
       payloadJson: JSON.stringify({ address: "bc1qbal" }),
     });
     const store = {
-      claimNextIngestJob: vi.fn().mockResolvedValue(null),
+      listPendingIngestCandidates: vi.fn().mockResolvedValue([]),
+      claimIngestJobById: vi.fn().mockResolvedValue(null),
       claimNextJob: vi.fn().mockResolvedValue(job),
+      getSchedulerState: vi.fn().mockResolvedValue({}),
       completeJob: vi.fn(),
       maybeClearQueueSchedulingPause: vi.fn(),
       getQueueDepth: vi.fn().mockResolvedValue(0),
@@ -139,8 +141,10 @@ describe("processJobs logging", () => {
       payloadJson: JSON.stringify({ address: "bc1qbal" }),
     });
     const store = {
-      claimNextIngestJob: vi.fn().mockResolvedValue(null),
+      listPendingIngestCandidates: vi.fn().mockResolvedValue([]),
+      claimIngestJobById: vi.fn().mockResolvedValue(null),
       claimNextJob: vi.fn().mockResolvedValue(job),
+      getSchedulerState: vi.fn().mockResolvedValue({}),
       completeJob: vi.fn(),
       maybeClearQueueSchedulingPause: vi.fn(),
       getQueueDepth: vi.fn().mockResolvedValue(0),
@@ -161,7 +165,7 @@ describe("processJobs logging", () => {
     await processJobs(store, router, baseConfig(), { jobDetails: true });
 
     expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining("[job] start id=7 type=refresh_live_balance attempts=0 address=bc1qbal"),
+      expect.stringContaining("[job] start id=7 type=refresh_live_balance attempts=0 slot=0"),
     );
   });
 
@@ -172,8 +176,10 @@ describe("processJobs logging", () => {
       payloadJson: JSON.stringify({ address: "bc1qbal" }),
     });
     const store = {
-      claimNextIngestJob: vi.fn().mockResolvedValue(null),
+      listPendingIngestCandidates: vi.fn().mockResolvedValue([]),
+      claimIngestJobById: vi.fn().mockResolvedValue(null),
       claimNextJob: vi.fn().mockResolvedValue(job),
+      getSchedulerState: vi.fn().mockResolvedValue({}),
       completeJob: vi.fn(),
       failJob: vi.fn(),
       maybeClearQueueSchedulingPause: vi.fn(),

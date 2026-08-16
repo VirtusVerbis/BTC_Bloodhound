@@ -2,10 +2,18 @@ import type { Job } from "@cointrace/db";
 import { RateLimitNotReadyError } from "../chain/router.js";
 import { summarizeJobPayload } from "../ops/queue.js";
 import { colorizeIndexerLogLine } from "./logColor.js";
+import type { JobWeightTier, JobWorkPhase } from "./jobWeight.js";
 import { formatJobRunStatsSuffix, type JobRunStats } from "./tickStats.js";
+
+export interface JobClaimMeta {
+  slot?: number;
+  weight?: JobWeightTier;
+  phase?: JobWorkPhase;
+}
 
 export interface JobLogOpts {
   color?: boolean;
+  claimMeta?: JobClaimMeta;
 }
 
 function parsePayload(job: Job): Record<string, unknown> {
@@ -53,10 +61,19 @@ function emitLog(fn: (message: string) => void, message: string, color = false):
   fn(colorizeIndexerLogLine(message, color));
 }
 
-export function formatJobStartLine(job: Job): string {
+function formatClaimMetaSuffix(meta?: JobClaimMeta): string {
+  if (!meta) return "";
+  const parts: string[] = [];
+  if (meta.slot != null) parts.push(`slot=${meta.slot}`);
+  if (meta.weight != null) parts.push(`weight=${meta.weight}`);
+  if (meta.phase != null) parts.push(`phase=${meta.phase}`);
+  return parts.length > 0 ? ` ${parts.join(" ")}` : "";
+}
+
+export function formatJobStartLine(job: Job, claimMeta?: JobClaimMeta): string {
   const payload = parsePayload(job);
   const details = summarizeJobPayload(job.type, payload);
-  return `[job] start id=${job.id} type=${job.type} attempts=${job.attempts}${formatDetailSuffix(details)}${formatProgressSuffix(details)}`;
+  return `[job] start id=${job.id} type=${job.type} attempts=${job.attempts}${formatClaimMetaSuffix(claimMeta)}${formatDetailSuffix(details)}${formatProgressSuffix(details)}`;
 }
 
 export function formatJobDoneLine(
@@ -70,7 +87,7 @@ export function formatJobDoneLine(
 }
 
 export function logJobStart(job: Job, opts?: JobLogOpts): void {
-  emitLog(console.log, formatJobStartLine(job), opts?.color ?? false);
+  emitLog(console.log, formatJobStartLine(job, opts?.claimMeta), opts?.color ?? false);
 }
 
 export function logJobDone(

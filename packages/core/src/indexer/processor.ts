@@ -23,6 +23,12 @@ import { fetchMempoolBtcUsd } from "../price/mempoolPrices.js";
 import { normalizeBitcoinAddress } from "../util/address.js";
 import { logJobDefer, logJobDone, logJobFail, logJobStart } from "./jobLog.js";
 import { isIngestJobType } from "./jobClass.js";
+import {
+  jobClaimMeta,
+  jobNeedsChainCallAtStart,
+  parseJobPayload,
+  pickIngestCandidate,
+} from "./jobWeight.js";
 import { processTxPriority } from "./rebuildMode.js";
 import { createChainCallBudget } from "./chainCallBudget.js";
 import { createCpuGuardFromConfig, type CpuGuard } from "./cpuGuard.js";
@@ -1255,6 +1261,77 @@ function jobDurationMs(job: Job): number | null {
   return durationMs >= 0 ? durationMs : null;
 }
 
+async function isPacingBlocked(store: Store, deadlineMs?: number): Promise<boolean> {
+  const state = await store.getSchedulerState();
+  const nextAtIso = state?.nextProviderCallAt ?? null;
+  if (!nextAtIso) return false;
+  const nextAt = new Date(nextAtIso).getTime();
+  if (!Number.isFinite(nextAt)) return false;
+  const now = Date.now();
+  if (nextAt <= now) return false;
+  if (deadlineMs != null && nextAt >= deadlineMs) return true;
+  return nextAt > now;
+}
+
+type ClaimSlotResult = Job | null | "pair_wait";
+
+async function claimJobForSlot(
+  store: Store,
+  config: AppConfig,
+  slot: number,
+  ctx: {
+    chainSlotUsed: boolean;
+    pacingBlocked: boolean;
+    claimedIds: number[];
+    budget?: SubrequestBudget;
+  },
+): Promise<ClaimSlotResult> {
+  const candidates = await store.listPendingIngestCandidates(32);
+  const maxEstimatedSubreq =
+    ctx.budget && ctx.budget.limit() > 0
+      ? ctx.budget.remaining() - config.scheduleSubrequestReserve - 2
+      : undefined;
+  const pickOpts = {
+    excludeIds: ctx.claimedIds,
+    maxEstimatedSubreq,
+  };
+
+  if (slot === 0) {
+    const pick = pickIngestCandidate(candidates, config, {
+      ...pickOpts,
+      preferContinuation: true,
+    });
+    if (pick) return await store.claimIngestJobById(pick.id);
+    return await store.claimNextJob();
+  }
+
+  if (ctx.chainSlotUsed || ctx.pacingBlocked) {
+    const pick = pickIngestCandidate(candidates, config, {
+      ...pickOpts,
+      requireNoChainAtStart: true,
+      preferProcessOnly: true,
+    });
+    if (!pick) return "pair_wait";
+    return await store.claimIngestJobById(pick.id);
+  }
+
+  const pick = pickIngestCandidate(candidates, config, {
+    ...pickOpts,
+    preferProcessOnly: true,
+  });
+  if (pick) return await store.claimIngestJobById(pick.id);
+  return await store.claimNextJob();
+}
+
+async function markChainSlotAfterJob(store: Store, config: AppConfig, job: Job): Promise<boolean> {
+  const payload = parseJobPayload(job.payloadJson);
+  if (jobNeedsChainCallAtStart(job.type, payload, config)) return true;
+  const state = await store.getSchedulerState();
+  const nextAtIso = state?.nextProviderCallAt ?? null;
+  if (!nextAtIso) return false;
+  return new Date(nextAtIso).getTime() > Date.now();
+}
+
 /** Handle job failure: log, defer or fail, return whether to stop claiming more jobs this tick. */
 export async function handleJobFailure(
   store: Store,
@@ -1313,6 +1390,8 @@ export async function processJobs(
   let processed = 0;
   let stopReason: TickStopReason = "jobs_cap";
   let cachedHackers: Set<string> | undefined;
+  let chainSlotUsed = await isPacingBlocked(store, opts?.deadlineMs);
+  const claimedIds: number[] = [];
   for (let i = 0; i < jobsPerTick; i++) {
     if (opts?.deadlineMs != null && Date.now() >= opts.deadlineMs) {
       stopReason = "deadline";
@@ -1329,14 +1408,25 @@ export async function processJobs(
       stopReason = "subreq";
       break;
     }
-    const job =
-      (await store.claimNextIngestJob({ preferContinuation: true })) ?? (await store.claimNextJob());
+    const pacingBlocked = await isPacingBlocked(store, opts?.deadlineMs);
+    const claimResult = await claimJobForSlot(store, config, i, {
+      chainSlotUsed,
+      pacingBlocked,
+      claimedIds,
+      budget,
+    });
+    if (claimResult === "pair_wait") {
+      stopReason = "pair_wait";
+      break;
+    }
+    const job = claimResult;
     if (!job) {
       stopReason = "idle";
       break;
     }
+    claimedIds.push(job.id);
     if (jobDetails) {
-      logJobStart(job, { color: logColor });
+      logJobStart(job, { color: logColor, claimMeta: jobClaimMeta(job, config, i) });
     }
     if (isIngestJobType(job.type) && !cachedHackers) {
       cachedHackers = await getHackerAddressSet(store);
@@ -1378,9 +1468,17 @@ export async function processJobs(
         stopReason = "subreq";
         break;
       }
+      if (await markChainSlotAfterJob(store, config, job)) {
+        chainSlotUsed = true;
+      }
     } catch (err) {
       if (await handleJobFailure(store, config, job, err, logColor)) {
-        stopReason = "subreq";
+        if (err instanceof RateLimitNotReadyError) {
+          stopReason = "pacing";
+          chainSlotUsed = true;
+        } else {
+          stopReason = "subreq";
+        }
         break;
       }
     }

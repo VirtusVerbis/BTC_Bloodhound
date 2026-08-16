@@ -19,6 +19,17 @@ vi.mock("./crawl.js", () => ({
 
 import { runIndexerTick } from "./tick.js";
 
+function tickStoreMock(overrides: Record<string, unknown> = {}): Store {
+  return {
+    setSubrequestBudget: vi.fn(),
+    getSchedulerState: vi.fn().mockResolvedValue({ maintenanceCronCounter: 0 }),
+    getQueueDepth: vi.fn().mockResolvedValue(0),
+    hasPendingIngestContinuation: vi.fn().mockResolvedValue(false),
+    listPendingIngestCandidates: vi.fn().mockResolvedValue([]),
+    ...overrides,
+  } as unknown as Store;
+}
+
 function baseConfig(): AppConfig {
   return {
     databaseUrl: "file:./test.db",
@@ -138,12 +149,9 @@ describe("runIndexerTick ordering", () => {
       };
     });
 
-    const store = {
-      setSubrequestBudget: vi.fn(),
-      getSchedulerState: vi.fn().mockResolvedValue({ maintenanceCronCounter: 0 }),
-      getQueueDepth: vi.fn().mockResolvedValue(0),
+    const store = tickStoreMock({
       hasPendingIngestContinuation: vi.fn().mockResolvedValue(true),
-    } as unknown as Store;
+    });
     const router = {} as ChainRouter;
 
     await runIndexerTick(store, router, baseConfig(), { schedule: true });
@@ -173,12 +181,7 @@ describe("runIndexerTick ordering", () => {
       };
     });
 
-    const store = {
-      setSubrequestBudget: vi.fn(),
-      getSchedulerState: vi.fn().mockResolvedValue({ maintenanceCronCounter: 0 }),
-      getQueueDepth: vi.fn().mockResolvedValue(0),
-      hasPendingIngestContinuation: vi.fn().mockResolvedValue(false),
-    } as unknown as Store;
+    const store = tickStoreMock();
     const router = {} as ChainRouter;
 
     await runIndexerTick(store, router, baseConfig(), { schedule: true });
@@ -208,12 +211,7 @@ describe("runIndexerTick ordering", () => {
       };
     });
 
-    const store = {
-      setSubrequestBudget: vi.fn(),
-      getSchedulerState: vi.fn().mockResolvedValue({ maintenanceCronCounter: 0 }),
-      getQueueDepth: vi.fn().mockResolvedValue(12),
-      hasPendingIngestContinuation: vi.fn().mockResolvedValue(false),
-    } as unknown as Store;
+    const store = tickStoreMock({ getQueueDepth: vi.fn().mockResolvedValue(12) });
     const router = {} as ChainRouter;
 
     await runIndexerTick(store, router, baseConfig(), { schedule: true });
@@ -223,12 +221,7 @@ describe("runIndexerTick ordering", () => {
   });
 
   it("passes effective jobsPerTick burst cap to processJobs", async () => {
-    const store = {
-      setSubrequestBudget: vi.fn(),
-      getSchedulerState: vi.fn().mockResolvedValue({ maintenanceCronCounter: 0 }),
-      getQueueDepth: vi.fn().mockResolvedValue(45),
-      hasPendingIngestContinuation: vi.fn().mockResolvedValue(false),
-    } as unknown as Store;
+    const store = tickStoreMock({ getQueueDepth: vi.fn().mockResolvedValue(45) });
     const router = {} as ChainRouter;
 
     await runIndexerTick(store, router, baseConfig(), { schedule: true });

@@ -1152,9 +1152,10 @@ export class Store {
     return { ...job, status: "running" as const, startedAt: ts, completedAt: null };
   }
 
-  async claimNextIngestJob(opts?: { preferContinuation?: boolean }): Promise<Job | null> {
+  /** Runnable pending ingest jobs in priority order (read-only peek for tick planning). */
+  async listPendingIngestCandidates(limit = 32): Promise<Job[]> {
     const ts = now();
-    const candidates = await this.db
+    return await this.db
       .select()
       .from(jobs)
       .where(
@@ -1165,11 +1166,42 @@ export class Store {
         ),
       )
       .orderBy(desc(jobs.priority), asc(jobs.runAfter))
-      .limit(32)
+      .limit(limit)
       .all();
+  }
 
+  /** Claim a specific ingest job by id (atomic pending → running). */
+  async claimIngestJobById(id: number): Promise<Job | null> {
+    const ts = now();
+    const job = await this.db
+      .select()
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.id, id),
+          eq(jobs.status, "pending"),
+          lte(jobs.runAfter, ts),
+          inArray(jobs.type, [...INGEST_JOB_TYPES]),
+        ),
+      )
+      .get();
+    if (!job) return null;
+    const claimed = await this.db
+      .update(jobs)
+      .set({ status: "running", startedAt: ts, completedAt: null })
+      .where(and(eq(jobs.id, id), eq(jobs.status, "pending")))
+      .run();
+    if (changesCount(claimed as { changes?: number; meta?: { changes?: number } }) === 0) {
+      return null;
+    }
+    return { ...job, status: "running" as const, startedAt: ts, completedAt: null };
+  }
+
+  async claimNextIngestJob(opts?: { preferContinuation?: boolean }): Promise<Job | null> {
+    const candidates = await this.listPendingIngestCandidates(32);
     if (candidates.length === 0) return null;
 
+    const ts = now();
     let pick = candidates[0]!;
     if (opts?.preferContinuation) {
       const cont = candidates.find(
