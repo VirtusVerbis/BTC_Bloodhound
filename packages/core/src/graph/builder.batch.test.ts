@@ -71,4 +71,39 @@ describe("applyHackTraceEdgesChunk", () => {
     };
     expect(edgeCount.c).toBeGreaterThan(0);
   });
+
+  it("resumes from cached flat edges without recomputing on continuation", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db, { d1BatchSize: 8 });
+
+    await store.upsertAddress({
+      address: "bc1qhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+    });
+
+    const hackers = new Set(["bc1qhacker"]);
+    const computed: HackTraceEdges = computeHackTraceEdges(sampleTx(), hackers, {
+      spendingAddress: "bc1qhacker",
+      spendingHop: 0,
+    });
+    const flat = [...computed.inToHacker, ...computed.outFromHacker];
+
+    const first = await applyHackTraceEdgesChunk(
+      store,
+      { txid: "txchunk", blockTime: "2024-01-01T00:00:00.000Z" },
+      { flat, victimAddresses: computed.victimAddresses },
+      { startEdgeIndex: 0, maxEdges: 1 },
+    );
+    expect(first.complete).toBe(false);
+
+    const second = await applyHackTraceEdgesChunk(
+      store,
+      { txid: "txchunk", blockTime: "2024-01-01T00:00:00.000Z" },
+      { flat, victimAddresses: [] },
+      { startEdgeIndex: first.nextEdgeIndex, maxEdges: 10 },
+    );
+    expect(second.complete).toBe(true);
+  });
 });

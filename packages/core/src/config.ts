@@ -136,6 +136,10 @@ export interface AppConfig {
   d1BatchSize: number;
   /** Source sync addresses processed per job chunk. */
   syncAddressesPerJob: number;
+  /** Cumulative sync-CPU budget per job (ms); 0 = disabled. */
+  jobCpuGuardMs: number;
+  /** Skip bumpHackerGraphActivity during ingest edge apply (Worker CPU savings). */
+  deferGraphActivityBump: boolean;
 }
 
 let envFileLoaded = false;
@@ -263,6 +267,8 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     maxVoutCountSkipGetTx: Number(env.MAX_VOUT_COUNT_SKIP_GET_TX ?? 20),
     d1BatchSize: Number(env.D1_BATCH_SIZE ?? 8),
     syncAddressesPerJob: Number(env.SYNC_ADDRESSES_PER_JOB ?? 5),
+    jobCpuGuardMs: Number(env.JOB_CPU_GUARD_MS ?? 0),
+    deferGraphActivityBump: env.DEFER_GRAPH_ACTIVITY_BUMP === "1",
   };
 }
 

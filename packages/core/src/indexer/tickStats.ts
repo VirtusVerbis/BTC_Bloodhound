@@ -30,6 +30,7 @@ export interface JobRunStats {
   traceEdgeTotal?: number;
   edgesApplied?: number;
   workSubreq?: number;
+  cpuGuard?: boolean;
 }
 
 function formatSubreqFields(used: number, limit: number, sched: number): string {
@@ -71,5 +72,6 @@ export function formatJobRunStatsSuffix(stats?: JobRunStats, workSubreq?: number
   if (stats?.edgesApplied != null && stats.edgesApplied > 0) {
     parts.push(`edgesApplied=${stats.edgesApplied}`);
   }
+  if (stats?.cpuGuard === true) parts.push("cpuGuard=1");
   return parts.length > 0 ? ` ${parts.join(" ")}` : "";
 }

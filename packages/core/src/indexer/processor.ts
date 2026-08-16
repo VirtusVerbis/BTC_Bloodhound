@@ -25,7 +25,9 @@ import { logJobDefer, logJobDone, logJobFail, logJobStart } from "./jobLog.js";
 import { isIngestJobType } from "./jobClass.js";
 import { processTxPriority } from "./rebuildMode.js";
 import { createChainCallBudget } from "./chainCallBudget.js";
+import { createCpuGuardFromConfig, type CpuGuard } from "./cpuGuard.js";
 import { createJobSubrequestBudget, type JobSubrequestBudget, type SubrequestBudget } from "./subrequestBudget.js";
+import type { HackTraceEdgeDraft } from "../graph/builder.js";
 import type { JobRunStats, TickStopReason } from "./tickStats.js";
 import {
   collectSpendTargetsFromRuntime,
@@ -35,7 +37,7 @@ import {
   type PendingPayloadFields,
 } from "./pendingPayload.js";
 import { detectSweepRelay } from "./sweepRelay.js";
-import { processClassifiedPendingTx } from "./txProcess.js";
+import { processClassifiedPendingTx, type TraceProcessState } from "./txProcess.js";
 import type { PendingTxRuntime } from "./txPage.js";
 
 export interface ProcessJobsResult {
@@ -51,12 +53,14 @@ function jobStatsFromTrace(
     traceEdgeTotal: number;
   },
   continued: boolean,
+  cpuGuardTripped?: boolean,
 ): JobRunStats {
   return {
     continued,
     traceEdgeIndex: traceResult.nextEdgeIndex,
     traceEdgeTotal: traceResult.traceEdgeTotal,
     edgesApplied: traceResult.edgesApplied,
+    cpuGuard: cpuGuardTripped === true ? true : undefined,
   };
 }
 
@@ -74,6 +78,8 @@ export interface BackfillPayload extends PendingPayloadFields {
   traceTxid?: string;
   traceEdgeIndex?: number;
   traceEdgesPending?: boolean;
+  traceEdgeTotal?: number;
+  traceEdgesFlat?: HackTraceEdgeDraft[];
 }
 
 function clearTraceFields(payload: BackfillPayload): BackfillPayload {
@@ -82,6 +88,26 @@ function clearTraceFields(payload: BackfillPayload): BackfillPayload {
     traceTxid: undefined,
     traceEdgeIndex: undefined,
     traceEdgesPending: undefined,
+    traceEdgeTotal: undefined,
+    traceEdgesFlat: undefined,
+  };
+}
+
+function traceFieldsFromState(
+  state: Pick<
+    BackfillPayload,
+    "traceTxid" | "traceEdgeIndex" | "traceEdgesPending" | "traceEdgeTotal" | "traceEdgesFlat"
+  >,
+): Pick<
+  BackfillPayload,
+  "traceTxid" | "traceEdgeIndex" | "traceEdgesPending" | "traceEdgeTotal" | "traceEdgesFlat"
+> {
+  return {
+    traceTxid: state.traceTxid,
+    traceEdgeIndex: state.traceEdgeIndex,
+    traceEdgesPending: state.traceEdgesPending,
+    traceEdgeTotal: state.traceEdgeTotal,
+    traceEdgesFlat: state.traceEdgesFlat,
   };
 }
 
@@ -94,17 +120,27 @@ async function processAddressTxs(
   hackers: Set<string>,
   hop: number,
   maxCalls?: number,
-  tracePayload?: Pick<BackfillPayload, "traceTxid" | "traceEdgeIndex" | "traceEdgesPending">,
+  tracePayload?: Pick<
+    BackfillPayload,
+    "traceTxid" | "traceEdgeIndex" | "traceEdgesPending" | "traceEdgeTotal" | "traceEdgesFlat"
+  >,
   expandProfile?: string | null,
-): Promise<Pick<BackfillPayload, "traceTxid" | "traceEdgeIndex" | "traceEdgesPending"> | null> {
+  cpuGuard?: CpuGuard,
+): Promise<Pick<
+  BackfillPayload,
+  "traceTxid" | "traceEdgeIndex" | "traceEdgesPending" | "traceEdgeTotal" | "traceEdgesFlat"
+> | null> {
   let calls = 0;
-  let traceState = {
+  let traceState: TraceProcessState = {
     traceTxid: tracePayload?.traceTxid,
     traceEdgeIndex: tracePayload?.traceEdgeIndex,
     traceEdgesPending: tracePayload?.traceEdgesPending,
+    traceEdgeTotal: tracePayload?.traceEdgeTotal,
+    traceEdgesFlat: tracePayload?.traceEdgesFlat,
   };
   for (const entry of txs) {
     if (maxCalls != null && calls >= maxCalls) break;
+    if (cpuGuard?.exceeded()) break;
     const result = await processClassifiedPendingTx(
       store,
       router,
@@ -114,21 +150,13 @@ async function processAddressTxs(
       entry,
       hackers,
       traceState,
-      { expandProfile },
+      { expandProfile, cpuGuard },
     );
     calls += result.chainCallsUsed;
     if (result.continued) {
-      return {
-        traceTxid: result.traceState.traceTxid,
-        traceEdgeIndex: result.traceState.traceEdgeIndex,
-        traceEdgesPending: result.traceState.traceEdgesPending,
-      };
+      return traceFieldsFromState(result.traceState);
     }
-    traceState = {
-      traceTxid: result.traceState.traceTxid,
-      traceEdgeIndex: result.traceState.traceEdgeIndex,
-      traceEdgesPending: result.traceState.traceEdgesPending,
-    };
+    traceState = result.traceState;
   }
   return null;
 }
@@ -292,6 +320,8 @@ function parseBackfillPayload(raw: Record<string, unknown>): BackfillPayload {
     traceTxid: raw.traceTxid as string | undefined,
     traceEdgeIndex: raw.traceEdgeIndex as number | undefined,
     traceEdgesPending: raw.traceEdgesPending as boolean | undefined,
+    traceEdgeTotal: raw.traceEdgeTotal as number | undefined,
+    traceEdgesFlat: raw.traceEdgesFlat as HackTraceEdgeDraft[] | undefined,
   };
 }
 
@@ -352,6 +382,8 @@ function toPersistedPayload(payload: BackfillPayload): Record<string, unknown> {
     traceTxid: payload.traceTxid,
     traceEdgeIndex: payload.traceEdgeIndex,
     traceEdgesPending: payload.traceEdgesPending,
+    traceEdgeTotal: payload.traceEdgeTotal,
+    traceEdgesFlat: payload.traceEdgesFlat,
   };
 }
 
@@ -375,10 +407,16 @@ async function backfillHacker(
   router: ChainRouter,
   config: AppConfig,
   rawPayload: Record<string, unknown>,
-  options?: { enqueueContinuation?: boolean; jobSubreq?: JobSubrequestBudget },
+  options?: {
+    enqueueContinuation?: boolean;
+    jobSubreq?: JobSubrequestBudget;
+    hackers?: Set<string>;
+    cpuGuard?: CpuGuard;
+  },
 ): Promise<JobRunStats | undefined> {
   const enqueueContinuation = options?.enqueueContinuation !== false;
   const jobSubreq = options?.jobSubreq;
+  const cpuGuard = options?.cpuGuard;
   const payload = await hydrateBackfillPayload(store, rawPayload);
   const address = payload.address;
   let pending = readPendingRuntime(payload as unknown as Record<string, unknown>).pending;
@@ -388,7 +426,7 @@ async function backfillHacker(
   let newestTxid = payload.newestTxid;
   let newestBlockHeight = payload.newestBlockHeight ?? null;
 
-  const hackers = await getHackerAddressSet(store);
+  const hackers = options?.hackers ?? (await getHackerAddressSet(store));
   await store.setExpandStatus(address, "backfilling");
 
   const budget = createChainCallBudget(config.maxChainCallsPerJob);
@@ -438,6 +476,8 @@ async function backfillHacker(
   let traceTxid = payload.traceTxid;
   let traceEdgeIndex = payload.traceEdgeIndex;
   let traceEdgesPending = payload.traceEdgesPending;
+  let traceEdgeTotal = payload.traceEdgeTotal;
+  let traceEdgesFlat = payload.traceEdgesFlat;
   const addrRow = await store.getAddress(address);
   const expandProfile = addrRow?.expandProfile ?? null;
   let skippedReceives = 0;
@@ -445,7 +485,8 @@ async function backfillHacker(
     processedIndex < pending.length &&
     processed < processLimit &&
     budget.canCall() &&
-    (!jobSubreq || jobSubreq.canUse())
+    (!jobSubreq || jobSubreq.canUse()) &&
+    !cpuGuard?.exceeded()
   ) {
     const entry = pending[processedIndex]!;
     const traceActiveOnEntry = traceEdgesPending === true && traceTxid === entry.txid;
@@ -467,8 +508,8 @@ async function backfillHacker(
       0,
       entry,
       hackers,
-      { traceTxid, traceEdgeIndex, traceEdgesPending },
-      { expandProfile },
+      { traceTxid, traceEdgeIndex, traceEdgesPending, traceEdgeTotal, traceEdgesFlat },
+      { expandProfile, cpuGuard },
     );
     if (result.chainCallsUsed > 0) budget.consume();
     processed++;
@@ -480,9 +521,7 @@ async function backfillHacker(
         pagesExhausted,
         newestTxid,
         newestBlockHeight,
-        traceTxid: result.traceState.traceTxid,
-        traceEdgeIndex: result.traceState.traceEdgeIndex,
-        traceEdgesPending: result.traceState.traceEdgesPending,
+        ...traceFieldsFromState(result.traceState),
       };
       await enqueueBackfillContinuation(store, pendingPayload, enqueueContinuation);
       return jobStatsFromTrace(
@@ -490,16 +529,19 @@ async function backfillHacker(
           traceComplete: false,
           nextEdgeIndex: result.traceState.traceEdgeIndex ?? 0,
           edgesApplied: 0,
-          traceEdgeTotal: 0,
+          traceEdgeTotal: result.traceState.traceEdgeTotal ?? 0,
         },
         true,
+        result.cpuGuardTripped,
       );
     }
     processedIndex++;
     traceTxid = result.traceState.traceTxid;
     traceEdgeIndex = result.traceState.traceEdgeIndex;
     traceEdgesPending = result.traceState.traceEdgesPending;
-    if ((limited && budget.exhausted()) || jobSubreq?.exhausted()) break;
+    traceEdgeTotal = result.traceState.traceEdgeTotal;
+    traceEdgesFlat = result.traceState.traceEdgesFlat;
+    if ((limited && budget.exhausted()) || jobSubreq?.exhausted() || cpuGuard?.exceeded()) break;
   }
 
   const hasPending = processedIndex < pending.length;
@@ -515,6 +557,8 @@ async function backfillHacker(
     traceTxid,
     traceEdgeIndex,
     traceEdgesPending,
+    traceEdgeTotal,
+    traceEdgesFlat,
   });
 
   if (needsMore) {
@@ -673,6 +717,7 @@ async function pollHacker(
   router: ChainRouter,
   config: AppConfig,
   rawPayload: Record<string, unknown>,
+  options?: { hackers?: Set<string>; cpuGuard?: CpuGuard },
 ): Promise<void> {
   const payload = parsePollPayload(rawPayload);
   const address = payload.address;
@@ -711,7 +756,8 @@ async function pollHacker(
     }
   }
 
-  const hackers = await getHackerAddressSet(store);
+  const hackers = options?.hackers ?? (await getHackerAddressSet(store));
+  const cpuGuard = options?.cpuGuard;
   const processLimit = limited
     ? budget.processBatchLimit(1)
     : pending.length - processedIndex;
@@ -719,7 +765,8 @@ async function pollHacker(
   while (
     processedIndex < pending.length &&
     processed < processLimit &&
-    budget.canCall()
+    budget.canCall() &&
+    !cpuGuard?.exceeded()
   ) {
     const entry = pending[processedIndex]!;
     const result = await processClassifiedPendingTx(
@@ -731,7 +778,7 @@ async function pollHacker(
       entry,
       hackers,
       {},
-      { skipIfIndexed: false },
+      { skipIfIndexed: false, cpuGuard },
     );
     if (result.chainCallsUsed > 0) budget.consume();
     processedIndex++;
@@ -770,6 +817,7 @@ async function pollDownstream(
   router: ChainRouter,
   config: AppConfig,
   rawPayload: Record<string, unknown>,
+  options?: { hackers?: Set<string>; cpuGuard?: CpuGuard },
 ): Promise<void> {
   const payload = parsePollPayload(rawPayload);
   const address = payload.address;
@@ -811,7 +859,8 @@ async function pollDownstream(
     }
   }
 
-  const hackers = await getHackerAddressSet(store);
+  const hackers = options?.hackers ?? (await getHackerAddressSet(store));
+  const cpuGuard = options?.cpuGuard;
   const processLimit = limited
     ? budget.processBatchLimit(1)
     : pending.length - processedIndex;
@@ -820,7 +869,8 @@ async function pollDownstream(
   while (
     processedIndex < pending.length &&
     processed < processLimit &&
-    budget.canCall()
+    budget.canCall() &&
+    !cpuGuard?.exceeded()
   ) {
     batch.push(pending[processedIndex]!);
     processedIndex++;
@@ -868,6 +918,8 @@ interface ExpandPayload extends PendingPayloadFields {
   traceTxid?: string;
   traceEdgeIndex?: number;
   traceEdgesPending?: boolean;
+  traceEdgeTotal?: number;
+  traceEdgesFlat?: HackTraceEdgeDraft[];
 }
 
 /** Chunked expand: paginate address txs and process up to backfillTxsPerJob per job tick. */
@@ -876,9 +928,10 @@ async function expandDownstream(
   router: ChainRouter,
   config: AppConfig,
   rawPayload: Record<string, unknown>,
-  options?: { jobSubreq?: JobSubrequestBudget },
+  options?: { jobSubreq?: JobSubrequestBudget; hackers?: Set<string>; cpuGuard?: CpuGuard },
 ): Promise<JobRunStats | undefined> {
   const jobSubreq = options?.jobSubreq;
+  const cpuGuard = options?.cpuGuard;
   const address = rawPayload.address as string;
   let pending = readPendingRuntime(rawPayload).pending;
   let processedIndex = (rawPayload.processedIndex as number | undefined) ?? 0;
@@ -890,11 +943,13 @@ async function expandDownstream(
   let traceTxid = rawPayload.traceTxid as string | undefined;
   let traceEdgeIndex = rawPayload.traceEdgeIndex as number | undefined;
   let traceEdgesPending = rawPayload.traceEdgesPending as boolean | undefined;
+  let traceEdgeTotal = rawPayload.traceEdgeTotal as number | undefined;
+  let traceEdgesFlat = rawPayload.traceEdgesFlat as HackTraceEdgeDraft[] | undefined;
 
   const addr = await store.getAddress(address);
   const hop = addr?.hopFromHacker ?? 0;
   const expandProfile = addr?.expandProfile ?? null;
-  const hackers = await getHackerAddressSet(store);
+  const hackers = options?.hackers ?? (await getHackerAddressSet(store));
   await store.setExpandStatus(address, "expanding");
 
   const budget = createChainCallBudget(config.maxChainCallsPerJob);
@@ -965,7 +1020,8 @@ async function expandDownstream(
     processedIndex < pending.length &&
     processed < processLimit &&
     budget.canCall() &&
-    (!jobSubreq || jobSubreq.canUse())
+    (!jobSubreq || jobSubreq.canUse()) &&
+    !cpuGuard?.exceeded()
   ) {
     const entry = pending[processedIndex]!;
     const result = await processClassifiedPendingTx(
@@ -976,8 +1032,8 @@ async function expandDownstream(
       hop,
       entry,
       hackers,
-      { traceTxid, traceEdgeIndex, traceEdgesPending },
-      { expandProfile },
+      { traceTxid, traceEdgeIndex, traceEdgesPending, traceEdgeTotal, traceEdgesFlat },
+      { expandProfile, cpuGuard },
     );
     if (result.chainCallsUsed > 0) budget.consume();
     processed++;
@@ -992,9 +1048,7 @@ async function expandDownstream(
           newestTxid,
           newestBlockHeight,
           pagesFetched,
-          traceTxid: result.traceState.traceTxid,
-          traceEdgeIndex: result.traceState.traceEdgeIndex,
-          traceEdgesPending: result.traceState.traceEdgesPending,
+          ...traceFieldsFromState(result.traceState),
         } as unknown as Record<string, unknown>,
         JOB_PRIORITY.CRON_EXPAND,
       );
@@ -1003,16 +1057,19 @@ async function expandDownstream(
           traceComplete: false,
           nextEdgeIndex: result.traceState.traceEdgeIndex ?? 0,
           edgesApplied: 0,
-          traceEdgeTotal: 0,
+          traceEdgeTotal: result.traceState.traceEdgeTotal ?? 0,
         },
         true,
+        result.cpuGuardTripped,
       );
     }
     processedIndex++;
     traceTxid = result.traceState.traceTxid;
     traceEdgeIndex = result.traceState.traceEdgeIndex;
     traceEdgesPending = result.traceState.traceEdgesPending;
-    if ((limited && budget.exhausted()) || jobSubreq?.exhausted()) break;
+    traceEdgeTotal = result.traceState.traceEdgeTotal;
+    traceEdgesFlat = result.traceState.traceEdgesFlat;
+    if ((limited && budget.exhausted()) || jobSubreq?.exhausted() || cpuGuard?.exceeded()) break;
   }
 
   const hasPending = processedIndex < pending.length;
@@ -1029,6 +1086,8 @@ async function expandDownstream(
     traceTxid,
     traceEdgeIndex,
     traceEdgesPending,
+    traceEdgeTotal,
+    traceEdgesFlat,
   };
 
   if (needsMore) {
@@ -1133,23 +1192,24 @@ export async function processJob(
   router: ChainRouter,
   config: AppConfig,
   job: Job,
-  opts?: { jobSubreq?: JobSubrequestBudget },
+  opts?: { jobSubreq?: JobSubrequestBudget; hackers?: Set<string>; cpuGuard?: CpuGuard },
 ): Promise<JobRunStats | undefined> {
   const payload = JSON.parse(job.payloadJson) as Record<string, unknown>;
+  const jobOpts = { jobSubreq: opts?.jobSubreq, hackers: opts?.hackers, cpuGuard: opts?.cpuGuard };
   switch (job.type) {
     case "backfill_hacker_address":
-      return backfillHacker(store, router, config, payload, { jobSubreq: opts?.jobSubreq });
+      return backfillHacker(store, router, config, payload, jobOpts);
     case "audit_hacker_backfill":
       await auditHackerBackfill(store, router, config, payload.address as string);
       break;
     case "poll_hacker_address":
-      await pollHacker(store, router, config, payload);
+      await pollHacker(store, router, config, payload, jobOpts);
       break;
     case "poll_downstream_address":
-      await pollDownstream(store, router, config, payload);
+      await pollDownstream(store, router, config, payload, jobOpts);
       break;
     case "expand_downstream":
-      return expandDownstream(store, router, config, payload, { jobSubreq: opts?.jobSubreq });
+      return expandDownstream(store, router, config, payload, jobOpts);
     case "refresh_live_balance":
       await refreshBalance(store, router, payload.address as string);
       break;
@@ -1165,10 +1225,12 @@ export async function processJob(
       await syncVercelTrackers(store, config, payload);
       break;
     case "process_tx": {
-      const hackers = await getHackerAddressSet(store);
+      const hackers = opts?.hackers ?? (await getHackerAddressSet(store));
       await processTxForHackTrace(store, router, payload.txid as string, hackers, {
         maxGraphEdgesPerTx: config.maxGraphEdgesPerTx > 0 ? config.maxGraphEdgesPerTx : undefined,
         maxEdgesPerJob: config.maxEdgesPerJob > 0 ? config.maxEdgesPerJob : undefined,
+        cpuGuard: opts?.cpuGuard,
+        deferGraphActivityBump: config.deferGraphActivityBump,
       });
       break;
     }
@@ -1245,6 +1307,7 @@ export async function processJobs(
   const budget = opts?.subrequestBudget;
   let processed = 0;
   let stopReason: TickStopReason = "jobs_cap";
+  let cachedHackers: Set<string> | undefined;
   for (let i = 0; i < config.jobsPerTick; i++) {
     if (opts?.deadlineMs != null && Date.now() >= opts.deadlineMs) {
       stopReason = "deadline";
@@ -1270,8 +1333,13 @@ export async function processJobs(
     if (jobDetails) {
       logJobStart(job, { color: logColor });
     }
+    if (isIngestJobType(job.type) && !cachedHackers) {
+      cachedHackers = await getHackerAddressSet(store);
+    }
     const subreqBefore = budget?.used() ?? 0;
     const jobSubreq = createJobSubrequestBudget(config.maxSubrequestsPerJob, budget, subreqBefore);
+    const cpuGuard = createCpuGuardFromConfig(config.jobCpuGuardMs);
+    const hackers = isIngestJobType(job.type) ? cachedHackers : undefined;
     try {
       let runStats: JobRunStats | undefined;
       if (job.type === "sync_coldcardwatch") {
@@ -1289,7 +1357,7 @@ export async function processJobs(
           { jobSubreq },
         );
       } else {
-        runStats = await processJob(store, router, config, job, { jobSubreq });
+        runStats = await processJob(store, router, config, job, { jobSubreq, hackers, cpuGuard });
       }
       await store.completeJob(job.id);
       await store.maybeClearQueueSchedulingPause();

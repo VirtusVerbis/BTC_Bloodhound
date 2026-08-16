@@ -71,6 +71,8 @@ function baseConfig(): AppConfig {
     maxGraphEdgesPerTx: 0,
     d1BatchSize: 8,
     syncAddressesPerJob: 5,
+    jobCpuGuardMs: 0,
+    deferGraphActivityBump: false,
   };
 }
 
@@ -107,6 +109,8 @@ describe("processJobs fair scheduling", () => {
     );
     const completeJob = vi.fn();
 
+    const listHackers = vi.fn().mockResolvedValue([{ address: "bc1qhack" }]);
+
     const store = {
       claimNextIngestJob,
       claimNextJob,
@@ -120,6 +124,7 @@ describe("processJobs fair scheduling", () => {
       getBackfillState: vi.fn(),
       enqueueJob: vi.fn(),
       setExpandStatus: vi.fn(),
+      listHackers,
     } as unknown as Store;
 
     const router = {
@@ -136,6 +141,7 @@ describe("processJobs fair scheduling", () => {
     expect(claimNextIngestJob).toHaveBeenCalledWith({ preferContinuation: true });
     expect(claimNextJob).not.toHaveBeenCalled();
     expect(completeJob).toHaveBeenCalledWith(auditJob.id);
+    expect(listHackers).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to claimNextJob when no ingest jobs pending", async () => {

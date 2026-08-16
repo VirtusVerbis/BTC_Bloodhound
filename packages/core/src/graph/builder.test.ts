@@ -7,6 +7,7 @@ import {
   computeHackTraceEdges,
   processTxForHackTrace,
 } from "./builder.js";
+import * as builderModule from "./builder.js";
 import { buildGraphL1Page, buildGraphL2Page } from "./graphPaged.js";
 import type { ChainTxDetail } from "../chain/types.js";
 import type { ChainRouter } from "../chain/router.js";
@@ -227,6 +228,39 @@ describe("processTxForHackTrace", () => {
     const inEdges = (await store.getEdgesToAddress("hack1")).filter((e) => e.direction === "in_to_hacker");
     expect(inEdges).toHaveLength(3);
     expect(inEdges.reduce((sum, e) => sum + e.amountSats, 0)).toBe(60_000);
+  });
+
+  it("skips computeHackTraceEdges when traceEdgesFlat cache is provided", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    await store.upsertAddress({
+      address: "hack1",
+      role: "hacker",
+      isFlaggedHacker: true,
+    });
+    const tx = makeTx([{ address: "hack1", value: 1000 }], [{ address: "down1", value: 1000 }]);
+    const hackers = new Set(["hack1"]);
+    const computed = computeHackTraceEdges(tx, hackers, {
+      spendingAddress: "hack1",
+      spendingHop: 0,
+    });
+    const flat = [...computed.inToHacker, ...computed.outFromHacker];
+    const router = { withProvider: vi.fn() } as unknown as ChainRouter;
+    const spy = vi.spyOn(builderModule, "computeHackTraceEdges");
+
+    await processTxForHackTrace(store, router, tx.txid, hackers, {
+      tx,
+      spendingAddress: "hack1",
+      spendingHop: 0,
+      traceEdgeIndex: 0,
+      traceEdgeTotal: flat.length,
+      traceEdgesFlat: flat,
+      maxEdgesPerJob: 1,
+    });
+
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 });
 

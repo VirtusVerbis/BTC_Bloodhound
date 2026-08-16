@@ -3,6 +3,7 @@ import type { AppConfig } from "../config.js";
 import { blockTimeIso } from "../chain/esplora.js";
 import type { ChainRouter } from "../chain/router.js";
 import type { ChainTxDetail } from "../chain/types.js";
+import type { CpuGuard } from "../indexer/cpuGuard.js";
 import { bundleParallelEdges, mapDbEdgeToGraph, type EdgeKind } from "./graphEdges.js";
 
 export interface HackTraceOptions {
@@ -539,6 +540,8 @@ export interface HackTraceApplyMeta {
 export interface HackTraceApplyChunkOptions {
   startEdgeIndex?: number;
   maxEdges?: number;
+  deferGraphActivityBump?: boolean;
+  cpuGuard?: CpuGuard;
 }
 
 export interface HackTraceApplyChunkResult {
@@ -546,29 +549,56 @@ export interface HackTraceApplyChunkResult {
   nextEdgeIndex: number;
   edgesApplied: number;
   traceEdgeTotal: number;
+  cpuGuardTripped?: boolean;
 }
+
+export type HackTraceApplyInput =
+  | HackTraceEdges
+  | { flat: HackTraceEdgeDraft[]; victimAddresses: string[] };
 
 function flattenHackTraceEdges(edges: HackTraceEdges): HackTraceEdgeDraft[] {
   return [...edges.inToHacker, ...edges.outFromHacker];
 }
 
+function normalizeHackTraceApplyInput(input: HackTraceApplyInput): {
+  flat: HackTraceEdgeDraft[];
+  victimAddresses: string[];
+} {
+  if ("flat" in input) return input;
+  return {
+    flat: flattenHackTraceEdges(input),
+    victimAddresses: input.victimAddresses,
+  };
+}
+
 export async function applyHackTraceEdgesChunk(
   store: Store,
   meta: HackTraceApplyMeta,
-  computed: HackTraceEdges,
+  input: HackTraceApplyInput,
   opts?: HackTraceApplyChunkOptions,
 ): Promise<HackTraceApplyChunkResult> {
   const startEdgeIndex = opts?.startEdgeIndex ?? 0;
   const maxEdges = opts?.maxEdges ?? Number.POSITIVE_INFINITY;
-  const flat = flattenHackTraceEdges(computed);
+  const cpuGuard = opts?.cpuGuard;
+  const { flat, victimAddresses } = normalizeHackTraceApplyInput(input);
   const totalEdges = flat.length;
 
+  if (cpuGuard?.exceeded()) {
+    return {
+      complete: startEdgeIndex >= totalEdges,
+      nextEdgeIndex: startEdgeIndex,
+      edgesApplied: 0,
+      traceEdgeTotal: totalEdges,
+      cpuGuardTripped: true,
+    };
+  }
+
   let newVictimAddresses = new Set<string>();
-  if (startEdgeIndex === 0 && computed.victimAddresses.length > 0) {
-    const existingVictims = await store.getExistingAddressSet(computed.victimAddresses);
-    newVictimAddresses = new Set(computed.victimAddresses.filter((a) => !existingVictims.has(a)));
+  if (startEdgeIndex === 0 && victimAddresses.length > 0) {
+    const existingVictims = await store.getExistingAddressSet(victimAddresses);
+    newVictimAddresses = new Set(victimAddresses.filter((a) => !existingVictims.has(a)));
     await store.upsertAddressesBatch(
-      computed.victimAddresses.map((address) => ({
+      victimAddresses.map((address) => ({
         address,
         role: "victim",
         source: "derived",
@@ -645,10 +675,22 @@ export async function applyHackTraceEdgesChunk(
       hackersToBump.add(edge.toAddress);
     }
   }
-  for (const edge of slice) {
-    if (edge.direction === "out_from_hacker" && newDownstreamAddresses.has(edge.toAddress)) {
-      const roots = await store.findRootHackersForSpender(edge.fromAddress);
-      for (const root of roots) hackersToBump.add(root);
+  if (!opts?.deferGraphActivityBump) {
+    const downstreamFromAddresses = [
+      ...new Set(
+        slice
+          .filter(
+            (edge) =>
+              edge.direction === "out_from_hacker" && newDownstreamAddresses.has(edge.toAddress),
+          )
+          .map((edge) => edge.fromAddress),
+      ),
+    ];
+    if (downstreamFromAddresses.length > 0) {
+      const rootsBySpender = await store.findRootHackersForSpenders(downstreamFromAddresses);
+      for (const roots of rootsBySpender.values()) {
+        for (const root of roots) hackersToBump.add(root);
+      }
     }
   }
   if (hackersToBump.size > 0) {
@@ -661,6 +703,7 @@ export async function applyHackTraceEdgesChunk(
     nextEdgeIndex,
     edgesApplied: slice.length,
     traceEdgeTotal: totalEdges,
+    cpuGuardTripped: cpuGuard?.tripped(),
   };
 }
 
@@ -673,12 +716,18 @@ export async function processTxForHackTrace(
     maxGraphEdgesPerTx?: number;
     maxEdgesPerJob?: number;
     traceEdgeIndex?: number;
+    traceEdgeTotal?: number;
+    traceEdgesFlat?: HackTraceEdgeDraft[];
+    cpuGuard?: CpuGuard;
+    deferGraphActivityBump?: boolean;
   } = {},
 ): Promise<{
   traceComplete: boolean;
   nextEdgeIndex: number;
   edgesApplied: number;
   traceEdgeTotal: number;
+  traceEdgesFlat?: HackTraceEdgeDraft[];
+  cpuGuardTripped?: boolean;
 }> {
   const tx = options.tx ?? (await router.withProvider((p) => p.getTx(txid)));
   const blockTime = blockTimeIso(tx);
@@ -689,14 +738,31 @@ export async function processTxForHackTrace(
     feeSats: tx.fee ?? null,
   });
 
-  const maxGraphEdges =
-    options.maxGraphEdgesPerTx && options.maxGraphEdgesPerTx > 0
-      ? options.maxGraphEdgesPerTx
-      : Number.POSITIVE_INFINITY;
-  const computed = computeHackTraceEdges(tx, hackerAddresses, {
-    ...options,
-    maxEdges: maxGraphEdges,
-  });
+  const traceEdgeIndex = options.traceEdgeIndex ?? 0;
+  const cpuGuard = options.cpuGuard;
+  let applyInput: HackTraceApplyInput;
+  let traceEdgeTotal: number;
+
+  if (traceEdgeIndex > 0 && options.traceEdgesFlat && options.traceEdgesFlat.length > 0) {
+    applyInput = {
+      flat: options.traceEdgesFlat,
+      victimAddresses: [],
+    };
+    traceEdgeTotal = options.traceEdgeTotal ?? options.traceEdgesFlat.length;
+  } else {
+    const maxGraphEdges =
+      options.maxGraphEdgesPerTx && options.maxGraphEdgesPerTx > 0
+        ? options.maxGraphEdgesPerTx
+        : Number.POSITIVE_INFINITY;
+    const compute = () =>
+      computeHackTraceEdges(tx, hackerAddresses, {
+        ...options,
+        maxEdges: maxGraphEdges,
+      });
+    const computed = cpuGuard ? cpuGuard.run(compute) : compute();
+    applyInput = computed;
+    traceEdgeTotal = flattenHackTraceEdges(computed).length;
+  }
 
   const maxEdgesPerJob =
     options.maxEdgesPerJob && options.maxEdgesPerJob > 0
@@ -706,15 +772,25 @@ export async function processTxForHackTrace(
   const result = await applyHackTraceEdgesChunk(
     store,
     { txid, blockTime },
-    computed,
-    { startEdgeIndex: options.traceEdgeIndex ?? 0, maxEdges: maxEdgesPerJob },
+    applyInput,
+    {
+      startEdgeIndex: traceEdgeIndex,
+      maxEdges: maxEdgesPerJob,
+      deferGraphActivityBump: options.deferGraphActivityBump,
+      cpuGuard,
+    },
   );
+
+  const flatForCache =
+    "flat" in applyInput ? applyInput.flat : flattenHackTraceEdges(applyInput);
 
   return {
     traceComplete: result.complete,
     nextEdgeIndex: result.nextEdgeIndex,
     edgesApplied: result.edgesApplied,
-    traceEdgeTotal: result.traceEdgeTotal,
+    traceEdgeTotal: result.traceEdgeTotal || traceEdgeTotal,
+    traceEdgesFlat: result.complete ? undefined : flatForCache,
+    cpuGuardTripped: result.cpuGuardTripped,
   };
 }
 

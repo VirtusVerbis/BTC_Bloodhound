@@ -2030,28 +2030,62 @@ export class Store {
 
   /** Walk backward along out_from_hacker edges to root flagged hackers. */
   async findRootHackersForSpender(address: string): Promise<string[]> {
-    const seen = new Set<string>();
-    const queue = [address];
-    const roots = new Set<string>();
-    while (queue.length > 0) {
-      const cur = queue.shift()!;
-      if (seen.has(cur)) continue;
-      seen.add(cur);
-      const row = await this.getAddress(cur);
-      if (row?.isFlaggedHacker) {
-        roots.add(cur);
-        continue;
+    const map = await this.findRootHackersForSpenders([address]);
+    return map.get(address) ?? [];
+  }
+
+  /** Batch root-hacker lookup with shared D1 read cache across seeds. */
+  async findRootHackersForSpenders(addresses: string[]): Promise<Map<string, string[]>> {
+    const seeds = [...new Set(addresses.filter(Boolean))];
+    const result = new Map<string, string[]>();
+    if (seeds.length === 0) return result;
+
+    const addressRowCache = new Map<string, Awaited<ReturnType<Store["getAddress"]>>>();
+    const inboundCache = new Map<string, Array<{ from: string }>>();
+
+    const getAddr = async (addr: string) => {
+      let row = addressRowCache.get(addr);
+      if (row === undefined) {
+        row = await this.getAddress(addr);
+        addressRowCache.set(addr, row);
       }
-      const ins = await this.db
-        .select({ from: edges.fromAddress })
-        .from(edges)
-        .where(and(eq(edges.toAddress, cur), eq(edges.direction, "out_from_hacker")))
-        .all();
-      for (const inbound of ins) {
-        if (!seen.has(inbound.from)) queue.push(inbound.from);
+      return row;
+    };
+
+    const getInbound = async (addr: string) => {
+      let rows = inboundCache.get(addr);
+      if (rows === undefined) {
+        rows = await this.db
+          .select({ from: edges.fromAddress })
+          .from(edges)
+          .where(and(eq(edges.toAddress, addr), eq(edges.direction, "out_from_hacker")))
+          .all();
+        inboundCache.set(addr, rows);
       }
+      return rows;
+    };
+
+    for (const seed of seeds) {
+      const seen = new Set<string>();
+      const queue = [seed];
+      const roots = new Set<string>();
+      while (queue.length > 0) {
+        const cur = queue.shift()!;
+        if (seen.has(cur)) continue;
+        seen.add(cur);
+        const row = await getAddr(cur);
+        if (row?.isFlaggedHacker) {
+          roots.add(cur);
+          continue;
+        }
+        const ins = await getInbound(cur);
+        for (const inbound of ins) {
+          if (!seen.has(inbound.from)) queue.push(inbound.from);
+        }
+      }
+      result.set(seed, [...roots]);
     }
-    return [...roots];
+    return result;
   }
 
   async bumpHackerGraphActivity(hackerAddresses: string[], at?: string): Promise<void> {

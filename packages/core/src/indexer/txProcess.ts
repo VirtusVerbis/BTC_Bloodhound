@@ -3,8 +3,9 @@ import type { ChainRouter } from "../chain/router.js";
 import type { AppConfig } from "../config.js";
 import { txInvolvesSpend } from "../chain/esplora.js";
 import { processTxForHackTrace } from "../graph/builder.js";
-import type { HackTraceOptions } from "../graph/builder.js";
+import type { HackTraceEdgeDraft, HackTraceOptions } from "../graph/builder.js";
 import { applySpendFanoutSummary, spendFanoutTxFromPage } from "./spendFanout.js";
+import type { CpuGuard } from "./cpuGuard.js";
 import {
   hasPageVinVout,
   isSpendFanout,
@@ -18,12 +19,15 @@ export interface TraceProcessState {
   traceTxid?: string;
   traceEdgeIndex?: number;
   traceEdgesPending?: boolean;
+  traceEdgeTotal?: number;
+  traceEdgesFlat?: HackTraceEdgeDraft[];
 }
 
 export interface ProcessClassifiedTxResult {
   traceState: TraceProcessState;
   continued: boolean;
   chainCallsUsed: number;
+  cpuGuardTripped?: boolean;
 }
 
 function traceOptions(
@@ -31,13 +35,26 @@ function traceOptions(
   state: TraceProcessState,
   txid: string,
   extra?: HackTraceOptions,
-): HackTraceOptions & { maxGraphEdgesPerTx?: number; maxEdgesPerJob?: number; traceEdgeIndex?: number } {
+  opts?: { cpuGuard?: CpuGuard },
+): HackTraceOptions & {
+  maxGraphEdgesPerTx?: number;
+  maxEdgesPerJob?: number;
+  traceEdgeIndex?: number;
+  traceEdgeTotal?: number;
+  traceEdgesFlat?: HackTraceEdgeDraft[];
+  cpuGuard?: CpuGuard;
+  deferGraphActivityBump?: boolean;
+} {
+  const traceActive = state.traceEdgesPending && state.traceTxid === txid;
   return {
     ...extra,
-    traceEdgeIndex:
-      state.traceEdgesPending && state.traceTxid === txid ? (state.traceEdgeIndex ?? 0) : 0,
+    traceEdgeIndex: traceActive ? (state.traceEdgeIndex ?? 0) : 0,
+    traceEdgeTotal: traceActive ? state.traceEdgeTotal : undefined,
+    traceEdgesFlat: traceActive ? state.traceEdgesFlat : undefined,
     maxGraphEdgesPerTx: config.maxGraphEdgesPerTx > 0 ? config.maxGraphEdgesPerTx : undefined,
     maxEdgesPerJob: config.maxEdgesPerJob > 0 ? config.maxEdgesPerJob : undefined,
+    cpuGuard: opts?.cpuGuard,
+    deferGraphActivityBump: config.deferGraphActivityBump,
   };
 }
 
@@ -50,7 +67,7 @@ export async function processClassifiedPendingTx(
   entry: PendingTxRuntime,
   hackers: Set<string>,
   state: TraceProcessState,
-  opts?: { expandProfile?: string | null; skipIfIndexed?: boolean },
+  opts?: { expandProfile?: string | null; skipIfIndexed?: boolean; cpuGuard?: CpuGuard },
 ): Promise<ProcessClassifiedTxResult> {
   const txid = entry.txid;
   const traceActive = state.traceEdgesPending && state.traceTxid === txid;
@@ -58,6 +75,8 @@ export async function processClassifiedPendingTx(
     traceTxid: undefined,
     traceEdgeIndex: undefined,
     traceEdgesPending: undefined,
+    traceEdgeTotal: undefined,
+    traceEdgesFlat: undefined,
   };
 
   if (
@@ -121,11 +140,17 @@ export async function processClassifiedPendingTx(
     router,
     txid,
     hackers,
-    traceOptions(config, state, txid, {
-      tx,
-      spendingAddress: address,
-      spendingHop: hop,
-    }),
+    traceOptions(
+      config,
+      state,
+      txid,
+      {
+        tx,
+        spendingAddress: address,
+        spendingHop: hop,
+      },
+      { cpuGuard: opts?.cpuGuard },
+    ),
   );
 
   if (!traceResult.traceComplete) {
@@ -134,11 +159,19 @@ export async function processClassifiedPendingTx(
         traceTxid: txid,
         traceEdgeIndex: traceResult.nextEdgeIndex,
         traceEdgesPending: true,
+        traceEdgeTotal: traceResult.traceEdgeTotal,
+        traceEdgesFlat: traceResult.traceEdgesFlat,
       },
       continued: true,
       chainCallsUsed,
+      cpuGuardTripped: traceResult.cpuGuardTripped,
     };
   }
 
-  return { traceState: nextState, continued: false, chainCallsUsed };
+  return {
+    traceState: nextState,
+    continued: false,
+    chainCallsUsed,
+    cpuGuardTripped: traceResult.cpuGuardTripped,
+  };
 }
