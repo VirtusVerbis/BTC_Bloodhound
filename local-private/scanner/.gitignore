@@ -1,0 +1,23 @@
+# CMake / MSVC build outputs
+build/
+out/
+cmake-build-*/
+
+# Local scan data — nested git repo (see data/README.md)
+data/
+
+# Encryption key material — never commit
+*.scanner.key
+
+# SQLite sidecars (matches.db itself is in data/, ignored above)
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Third-party download artifacts
+third_party/sqlite3/tmp/
+third_party/sqlite3/*.zip
+
+# OS / editor
+.DS_Store
+Thumbs.db

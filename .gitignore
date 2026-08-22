@@ -38,3 +38,7 @@ Desktop.ini
 .idea/
 *.swp
 *.swo
+
+# Scanner match data & keys stay local (see local-private/scanner/.gitignore)
+# local-private/scanner/data/ is a nested git repo for local-only match history
+*.scanner.key

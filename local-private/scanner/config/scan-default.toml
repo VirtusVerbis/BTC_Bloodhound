@@ -1,0 +1,42 @@
+[scan]
+# Pad image: 90 high-word bands × 65536 low words ≈ 5,898,240 pads
+pad_high_min = 0
+pad_high_max = 89
+pad_high_filter_min = 0
+pad_high_filter_max = 89
+scan_session_min = 8
+scan_session_max = 60
+
+[bip84]
+accounts_min = 0
+accounts_max = 2
+receive_min = 0
+receive_max = 100
+change_min = 0
+change_max = 50
+
+[bip49]
+receive_min = 0
+receive_max = 40
+
+[bip44]
+receive_min = 0
+receive_max = 20
+
+[gpu]
+device_index = 0
+gpu_util_pct = 100
+base_batch_seeds = 512
+max_cuda_streams = 3
+
+[logging]
+progress_interval_sec = 60
+show_live_matches = true
+abbrev_len = 6
+color_enabled = true
+eta_smoothing_alpha = 0.2
+
+[cointrace]
+# Relative to scanner executable / working directory
+db_path = "../../data/cointrace.db"
+db_max_age_hours = 48

@@ -1,0 +1,7 @@
+MIT License
+
+CUDA secp256k1 field/point math patterns referenced from public Bitcoin GPU projects
+(e.g. BitCrack, MIT License). Host-side batched scalar multiply uses OpenSSL EC until
+device kernels in field.cuh are completed.
+
+Hash160 device code in cuda/hash160_device.cuh is original to this project.
