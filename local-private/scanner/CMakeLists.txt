@@ -96,6 +96,8 @@ set(SCANNER_SOURCES
 
   cuda/secp256k1_batch.cu
 
+  cuda/seed_pipeline.cu
+
 )
 
 

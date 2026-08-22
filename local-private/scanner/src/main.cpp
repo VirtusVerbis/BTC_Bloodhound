@@ -74,6 +74,39 @@ static int run_verify() {
     std::cerr << " ok\n";
   }
 
+  {
+    char err_seed[512] = {};
+    std::cerr << "verify: GPU seed pipeline…" << std::flush;
+    if (!cuda_seed_pipeline_selftest(err_seed, sizeof(err_seed))) {
+      std::cerr << "\nverify failed: " << err_seed << "\n";
+      return 1;
+    }
+    std::cerr << " ok\n";
+  }
+
+  {
+    LibnguYasmarang lib1;
+    LibnguYasmarang lib2;
+    if (lib1.rng_get() != lib2.rng_get()) {
+      std::cerr << "verify failed: libngu yasmarang not deterministic\n";
+      return 1;
+    }
+  }
+
+  {
+    const std::vector<uint8_t> msg = {'a', 'b', 'c'};
+    const auto d = sha256d(msg);
+    if (d.size() != 32) {
+      std::cerr << "verify failed: sha256d size\n";
+      return 1;
+    }
+    const auto d2 = sha256d(msg);
+    if (d != d2) {
+      std::cerr << "verify failed: sha256d not deterministic\n";
+      return 1;
+    }
+  }
+
   const auto e1 = coldcard_seed_entropy(0x00400001, 8);
   const auto e2 = coldcard_seed_entropy(0x00400001, 8);
   if (e1 != e2 || e1.size() != 32) {
@@ -145,6 +178,22 @@ static int run_verify() {
   sc.scan_session = 8;
   sc.entropy = e1;
   const auto masters = masters_for_seeds({sc});
+
+  {
+    const uint32_t pads[] = {sc.pad};
+    const uint32_t sessions[] = {sc.scan_session};
+    uint8_t gpu_master[64] = {};
+    char err_seed[512] = {};
+    if (!cuda_batch_seeds_to_masters(pads, sessions, 1, gpu_master, err_seed, sizeof(err_seed))) {
+      std::cerr << "\nverify failed: GPU seed batch: " << err_seed << "\n";
+      return 1;
+    }
+    if (memcmp(gpu_master, masters.data(), 64) != 0) {
+      std::cerr << "\nverify failed: CPU/GPU master mismatch for pad/session fixture\n";
+      return 1;
+    }
+  }
+
   const auto cuda_paths = build_cuda_path_descs(paths);
 
   {

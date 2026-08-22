@@ -124,4 +124,16 @@ std::string sha256_hex(const std::string& data) {
   return sha256_hex(std::vector<uint8_t>(data.begin(), data.end()));
 }
 
+std::vector<uint8_t> sha256d(const uint8_t* data, size_t len) {
+  unsigned char h1[SHA256_DIGEST_LENGTH];
+  unsigned char h2[SHA256_DIGEST_LENGTH];
+  SHA256(data, len, h1);
+  SHA256(h1, SHA256_DIGEST_LENGTH, h2);
+  return std::vector<uint8_t>(h2, h2 + SHA256_DIGEST_LENGTH);
+}
+
+std::vector<uint8_t> sha256d(const std::vector<uint8_t>& data) {
+  return sha256d(data.data(), data.size());
+}
+
 }  // namespace scanner

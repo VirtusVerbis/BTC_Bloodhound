@@ -105,7 +105,9 @@ mkdir data -Force
 
 |-------|--------|
 
-| Yasmarang seed + BIP39 master | CPU (`masters_for_seeds` per chunk) |
+| Pad enumeration, batching, checkpoints | CPU |
+
+| Yasmarang + libngu XOR + sha256d + BIP39 + PBKDF2 + BIP32 master | **CUDA** (`seed_pipeline.cu`, batch) |
 
 | BIP32 prefix derive (steps 0–3) | **CUDA** (`prefix_derive_kernel`, 8 prefix groups per config) |
 
@@ -117,9 +119,35 @@ mkdir data -Force
 
 | Address strings + DB writes | CPU (hits only) |
 
+| `verify` golden reference | CPU reference, compared against GPU |
 
 
-`preflight` probes CUDA device name and VRAM. `benchmark` reports end-to-end fused GPU checks/s.
+
+`preflight` probes CUDA device name and VRAM. `benchmark` reports end-to-end fused GPU checks/s (seed pipeline + derive + match).
+
+
+
+## Search space (Mk3 default)
+
+
+
+- **Pads:** 68 high-word bands × 65,536 low words = **4,456,448** distinct `pad` values (`pad_high_max=67`).
+- **Draw ranks:** `scan_session` 0–3000 (prior RNG draws before seed generation).
+- **Paths:** 518 BIP84/49/44 derivation paths per seed (from `scan-default.toml`).
+
+Total seed candidates ≈ 4.45M × 3,001 ≈ **13.4 billion**; address checks ≈ seeds × 518.
+
+
+
+**After upgrading to the Mk3 firmware-accurate seed model, run `scan --fresh`.** Checkpoints from older runs use a different `config_hash` and are not comparable.
+
+
+
+### v1 limitation
+
+
+
+Firmware `_rand_below` retries advance **libngu only** on rejection; this scanner burns paired draws on both Yasmarang streams. Acceptable for v1; revisit if validation shows missed hits.
 
 
 
@@ -168,5 +196,5 @@ mkdir data -Force
 
 ## Scope
 
-Mk3 cold-start Yasmarang path, zero RTC, no dice, no passphrases. Standard BIP84/49/44 paths from `config/scan-default.toml`.
+Mk3 firmware-accurate seed path: MicroPython Yasmarang XOR libngu Yasmarang (fixed init), `my_random_bytes` (32-bit LE word packing), `sha256d`, then BIP39/PBKDF2/BIP32. Cold-start pad = UID XOR SysTick; zero RTC. No dice, no passphrases. Standard BIP84/49/44 paths from `config/scan-default.toml`.
 

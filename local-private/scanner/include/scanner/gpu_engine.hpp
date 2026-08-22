@@ -24,6 +24,9 @@ class GpuEngine {
 
   void set_utilization_cap(int pct);
 
+  // GPU seed pipeline: (pad, scan_session) -> masters -> fused derive/match.
+  bool process_candidate_batch(const std::vector<SeedCandidate>& seeds, std::vector<GpuHit>& hits, std::string& error);
+
   // masters: seeds.size() * 64 bytes (priv32 + chain32 per seed)
   bool process_master_batch(const std::vector<SeedCandidate>& seeds, const std::vector<uint8_t>& masters,
                             std::vector<GpuHit>& hits, std::string& error);

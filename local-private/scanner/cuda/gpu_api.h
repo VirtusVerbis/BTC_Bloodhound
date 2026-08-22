@@ -86,6 +86,13 @@ int cuda_crypto_selftest(char* err, int err_cap);
 int cuda_hmac_sha512(const uint8_t* key, int key_len, const uint8_t* data, int data_len, uint8_t* out64, char* err,
                      int err_cap);
 
+// Mk3 seed pipeline: (pad, prior_draws) -> BIP32 master (priv32 + chain32 per seed).
+int cuda_seed_pipeline_init(char* err, int err_cap);
+void cuda_seed_pipeline_shutdown();
+int cuda_batch_seeds_to_masters(const uint32_t* pads, const uint32_t* sessions, int count, uint8_t* masters64_out,
+                                char* err, int err_cap);
+int cuda_seed_pipeline_selftest(char* err, int err_cap);
+
 #ifdef __cplusplus
 }
 #endif

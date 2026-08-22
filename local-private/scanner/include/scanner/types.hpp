@@ -15,11 +15,11 @@ struct DerivationPath {
 
 struct ScanConfig {
   uint32_t pad_high_min = 0;
-  uint32_t pad_high_max = 89;
+  uint32_t pad_high_max = 67;
   uint32_t pad_high_filter_min = 0;
-  uint32_t pad_high_filter_max = 89;
-  uint32_t scan_session_min = 8;
-  uint32_t scan_session_max = 60;
+  uint32_t pad_high_filter_max = 67;
+  uint32_t scan_session_min = 0;
+  uint32_t scan_session_max = 3000;
 
   uint32_t bip84_accounts_min = 0;
   uint32_t bip84_accounts_max = 2;

@@ -83,6 +83,35 @@ void GpuEngine::set_utilization_cap(int pct) {
   util_pct_ = pct;
 }
 
+bool GpuEngine::process_candidate_batch(const std::vector<SeedCandidate>& seeds, std::vector<GpuHit>& hits,
+                                        std::string& error) {
+  if (!initialized_ || !impl_ || !impl_->cuda_handle) {
+    error = "GPU engine not initialized";
+    return false;
+  }
+  if (path_count_ == 0) {
+    error = "no derivation paths";
+    return false;
+  }
+  const int seed_count = static_cast<int>(seeds.size());
+  if (seed_count <= 0) return true;
+
+  std::vector<uint32_t> pads(static_cast<size_t>(seed_count));
+  std::vector<uint32_t> sessions(static_cast<size_t>(seed_count));
+  for (int i = 0; i < seed_count; i++) {
+    pads[static_cast<size_t>(i)] = seeds[static_cast<size_t>(i)].pad;
+    sessions[static_cast<size_t>(i)] = seeds[static_cast<size_t>(i)].scan_session;
+  }
+
+  std::vector<uint8_t> masters(static_cast<size_t>(seed_count) * 64);
+  char err[512] = {};
+  if (!cuda_batch_seeds_to_masters(pads.data(), sessions.data(), seed_count, masters.data(), err, sizeof(err))) {
+    error = err;
+    return false;
+  }
+  return process_master_batch(seeds, masters, hits, error);
+}
+
 bool GpuEngine::process_master_batch(const std::vector<SeedCandidate>& seeds, const std::vector<uint8_t>& masters,
                                      std::vector<GpuHit>& hits, std::string& error) {
   if (!initialized_ || !impl_ || !impl_->cuda_handle) {

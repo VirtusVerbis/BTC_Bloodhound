@@ -1,11 +1,11 @@
 [scan]
-# Pad image: 90 high-word bands × 65536 low words ≈ 5,898,240 pads
+# Pad image: 68 high-word bands × 65536 low words = 4,456,448 pads (Mk3 Y-row model)
 pad_high_min = 0
-pad_high_max = 89
+pad_high_max = 67
 pad_high_filter_min = 0
-pad_high_filter_max = 89
-scan_session_min = 8
-scan_session_max = 60
+pad_high_filter_max = 67
+scan_session_min = 0
+scan_session_max = 3000
 
 [bip84]
 accounts_min = 0
