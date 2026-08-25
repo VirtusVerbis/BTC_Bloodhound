@@ -54,6 +54,7 @@ function buildIndexer(env: WorkerEnv): {
   });
   const router = new ChainRouter(config.esploraBase, config.mempoolBase, store, config.rateLimitMs, {
     sleepOnRateLimit: false,
+    primaryProvider: config.chainPrimaryProvider,
     backoff: {
       rateLimitMs: config.rateLimitMs,
       apiThresholdBaseSec: config.apiThresholdBaseSec,

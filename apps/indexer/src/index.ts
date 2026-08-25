@@ -94,6 +94,7 @@ function openLocalStore(): Store {
 
 function openChainRouter(store: Store): ChainRouter {
   return new ChainRouter(config.esploraBase, config.mempoolBase, store, config.rateLimitMs, {
+    primaryProvider: config.chainPrimaryProvider,
     backoff: {
       rateLimitMs: config.rateLimitMs,
       apiThresholdBaseSec: config.apiThresholdBaseSec,

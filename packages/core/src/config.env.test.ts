@@ -40,4 +40,14 @@ describe("loadEnvFile via loadConfig", () => {
     const config = loadConfig({} as Record<string, string | undefined>);
     expect(config.rateLimitMs).toBe(8000);
   });
+
+  it("loads CHAIN_PRIMARY_PROVIDER mempool when set", () => {
+    const config = loadConfig({ CHAIN_PRIMARY_PROVIDER: "mempool" });
+    expect(config.chainPrimaryProvider).toBe("mempool");
+  });
+
+  it("defaults chainPrimaryProvider to esplora", () => {
+    const config = loadConfig({} as Record<string, string | undefined>);
+    expect(config.chainPrimaryProvider).toBe("esplora");
+  });
 });

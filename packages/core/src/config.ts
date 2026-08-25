@@ -33,6 +33,8 @@ export interface AppConfig {
   databaseUrl: string;
   esploraBase: string;
   mempoolBase: string;
+  /** Cold-start chain provider when lastProviderUsed is unset. */
+  chainPrimaryProvider: "esplora" | "mempool";
   rateLimitMs: number;
   jobsPerTick: number;
   /** Wall-clock budget for one indexer tick (stop claiming jobs after this). */
@@ -194,6 +196,8 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     databaseUrl: env.DATABASE_URL ?? "file:./data/cointrace.db",
     esploraBase: (env.ESPLORA_BASE ?? "https://blockstream.info/api").replace(/\/$/, ""),
     mempoolBase: (env.MEMPOOL_BASE ?? "https://mempool.space/api").replace(/\/$/, ""),
+    chainPrimaryProvider:
+      env.CHAIN_PRIMARY_PROVIDER === "mempool" ? "mempool" : "esplora",
     rateLimitMs: Number(env.RATE_LIMIT_MS ?? 8000),
     jobsPerTick: Number(env.JOBS_PER_TICK ?? 1),
     tickBudgetMs: Number(env.TICK_BUDGET_MS ?? 50_000),

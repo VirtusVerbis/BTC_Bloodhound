@@ -5,6 +5,8 @@ import { providerBackoffSec } from "./backoff.js";
 
 export type RateLimitNotReadyReason = "pacing" | "provider-backoff";
 
+export type ChainPrimaryProvider = "esplora" | "mempool";
+
 function formatRateLimitNotReadyMessage(retryAt: string, reason: RateLimitNotReadyReason): string {
   if (reason === "pacing") {
     return `Provider pacing: next call allowed at ${retryAt}`;
@@ -35,12 +37,15 @@ export interface ChainRouterOptions {
   /** When false, throw RateLimitNotReadyError instead of sleeping (Cloudflare Workers). Default true. */
   sleepOnRateLimit?: boolean;
   backoff?: ChainRouterBackoffConfig;
+  /** First provider on cold start when lastProviderUsed is unset. Default esplora. */
+  primaryProvider?: ChainPrimaryProvider;
 }
 
 export class ChainRouter {
   private providers: ChainProvider[];
   private sleepOnRateLimit: boolean;
   private backoff: ChainRouterBackoffConfig;
+  private primaryProvider: ChainPrimaryProvider;
 
   constructor(
     esploraBase: string,
@@ -59,15 +64,18 @@ export class ChainRouter {
       apiThresholdBaseSec: 300,
       apiThresholdMaxSec: 3600,
     };
+    this.primaryProvider = options?.primaryProvider ?? "esplora";
   }
 
   private providerId(name: string): ChainApiProviderId {
     return name === "esplora" ? "esplora" : "mempool";
   }
 
-  /** Opposite of last used: esplora → mempool (1); otherwise esplora (0). */
+  /** Alternate pick: opposite of last used; cold start uses primaryProvider. */
   private startIndex(lastProviderUsed: string | null | undefined): number {
-    return lastProviderUsed === "esplora" ? 1 : 0;
+    if (lastProviderUsed === "esplora") return 1;
+    if (lastProviderUsed === "mempool") return 0;
+    return this.primaryProvider === "mempool" ? 1 : 0;
   }
 
   private async waitForRateLimit(): Promise<void> {
@@ -85,19 +93,28 @@ export class ChainRouter {
     await new Promise((r) => setTimeout(r, wait));
   }
 
-  private resolveAvailableProvider(
+  private orderedProviders(
     state: Awaited<ReturnType<Store["getSchedulerState"]>>,
-  ): ChainProvider | null {
-    const start = this.startIndex(state?.lastProviderUsed);
-    for (let offset = 0; offset < this.providers.length; offset++) {
-      const idx = (start + offset) % this.providers.length;
-      const provider = this.providers[idx]!;
+  ): ChainProvider[] {
+    const available: ChainProvider[] = [];
+    for (const provider of this.providers) {
       const id = this.providerId(provider.name);
       if (!this.store.isProviderInBackoff(state, id)) {
-        return provider;
+        available.push(provider);
       }
     }
-    return null;
+    if (available.length === 0) return [];
+    if (available.length === 1) return available;
+
+    const start = this.startIndex(state?.lastProviderUsed);
+    const order: ChainProvider[] = [];
+    for (let offset = 0; offset < this.providers.length; offset++) {
+      const provider = this.providers[(start + offset) % this.providers.length]!;
+      if (available.includes(provider)) {
+        order.push(provider);
+      }
+    }
+    return order;
   }
 
   private async markCalled(providerName: string, success: boolean) {
@@ -110,36 +127,60 @@ export class ChainRouter {
     });
   }
 
+  private async recordProviderRateLimit(
+    state: Awaited<ReturnType<Store["getSchedulerState"]>>,
+    providerId: ChainApiProviderId,
+    err: unknown,
+  ): Promise<void> {
+    const strikes = this.store.getProviderStrikeCount(state, providerId) + 1;
+    const retryAfterSec = rateLimitRetryAfterSec(err);
+    const backoffSec = providerBackoffSec(
+      strikes,
+      this.backoff.apiThresholdBaseSec,
+      this.backoff.apiThresholdMaxSec,
+      retryAfterSec ?? undefined,
+    );
+    const retryAfterAt = new Date(Date.now() + backoffSec * 1000).toISOString();
+    await this.store.recordApiThreshold(providerId, { retryAfterAt, strikeCount: strikes });
+  }
+
   async withProvider<T>(fn: (p: ChainProvider) => Promise<T>): Promise<T> {
     await this.waitForRateLimit();
-    const state = await this.store.getSchedulerState();
-    const provider = this.resolveAvailableProvider(state);
-    if (!provider) {
-      const retryAt = (await this.store.earliestProviderRetryAt()) ?? new Date(Date.now() + 60_000).toISOString();
+    let state = await this.store.getSchedulerState();
+    const order = this.orderedProviders(state);
+    if (order.length === 0) {
+      const retryAt =
+        (await this.store.earliestProviderRetryAt()) ?? new Date(Date.now() + 60_000).toISOString();
       throw new RateLimitNotReadyError(retryAt, "provider-backoff");
     }
-    const providerId = this.providerId(provider.name);
-    try {
-      const result = await fn(provider);
-      await this.store.clearProviderStrike(providerId);
-      await this.markCalled(provider.name, true);
-      return result;
-    } catch (err) {
-      if (isRateLimitError(err)) {
-        const strikes = this.store.getProviderStrikeCount(state, providerId) + 1;
-        const retryAfterSec = rateLimitRetryAfterSec(err);
-        const backoffSec = providerBackoffSec(
-          strikes,
-          this.backoff.apiThresholdBaseSec,
-          this.backoff.apiThresholdMaxSec,
-          retryAfterSec ?? undefined,
-        );
-        const retryAfterAt = new Date(Date.now() + backoffSec * 1000).toISOString();
-        await this.store.recordApiThreshold(providerId, { retryAfterAt, strikeCount: strikes });
+
+    let lastErr: unknown;
+    let lastAttempted: ChainProvider | undefined;
+
+    for (const provider of order) {
+      lastAttempted = provider;
+      const providerId = this.providerId(provider.name);
+      try {
+        const result = await fn(provider);
+        await this.store.clearProviderStrike(providerId);
+        await this.markCalled(provider.name, true);
+        return result;
+      } catch (err) {
+        lastErr = err;
+        if (isRateLimitError(err)) {
+          await this.recordProviderRateLimit(state, providerId, err);
+          state = await this.store.getSchedulerState();
+          continue;
+        }
+        await this.markCalled(provider.name, false);
+        throw err;
       }
-      await this.markCalled(provider.name, false);
-      throw err;
     }
+
+    if (lastAttempted) {
+      await this.markCalled(lastAttempted.name, false);
+    }
+    throw lastErr;
   }
 
   async fetchAddressTxPage(
