@@ -93,6 +93,14 @@ export class RemoteReadStore {
   }
 
   async getQueueDepth() {
+    const ts = sqlString(new Date().toISOString());
+    const row = this.client.query(
+      `SELECT COUNT(*) AS count FROM jobs WHERE status = 'pending' AND run_after <= ${ts};`,
+    )[0];
+    return num(row?.count);
+  }
+
+  async getPendingQueueDepthAll() {
     const row = this.client.query("SELECT COUNT(*) AS count FROM jobs WHERE status = 'pending';")[0];
     return num(row?.count);
   }
@@ -141,6 +149,10 @@ export class RemoteReadStore {
       rateLimitMs: row.rate_limit_ms != null ? num(row.rate_limit_ms) : null,
       btcUsdPrice: row.btc_usd_price != null ? num(row.btc_usd_price) : null,
       btcUsdPriceAt: row.btc_usd_price_at != null ? str(row.btc_usd_price_at) : null,
+      d1ReadRetryAfterAt:
+        row.d1_read_retry_after_at != null ? str(row.d1_read_retry_after_at) : null,
+      d1WriteRetryAfterAt:
+        row.d1_write_retry_after_at != null ? str(row.d1_write_retry_after_at) : null,
     };
   }
 

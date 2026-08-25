@@ -1,5 +1,6 @@
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
 import * as schema from "./schema.js";
+import { classifyD1Error } from "./d1Quota.js";
 import { Store, type Db, type StoreOptions } from "./store.js";
 
 /** Minimal D1 binding shape (Cloudflare Workers runtime provides the real type). */
@@ -13,13 +14,23 @@ export type D1Db = DrizzleD1Database<typeof schema>;
 
 export type D1SubrequestSink = (count?: number) => void;
 
+function rethrowIfD1Quota(err: unknown): never {
+  const classified = classifyD1Error(err);
+  if (classified) throw classified;
+  throw err;
+}
+
 function wrapBoundStatement(bound: Record<string, unknown>, sink: D1SubrequestSink): Record<string, unknown> {
   const wrapTerminal = (name: string) => {
     const fn = bound[name];
     if (typeof fn !== "function") return;
-    bound[name] = (...args: unknown[]) => {
+    bound[name] = async (...args: unknown[]) => {
       sink(1);
-      return (fn as (...a: unknown[]) => unknown).apply(bound, args);
+      try {
+        return await (fn as (...a: unknown[]) => unknown).apply(bound, args);
+      } catch (err) {
+        rethrowIfD1Quota(err);
+      }
     };
   };
   wrapTerminal("run");
@@ -49,15 +60,23 @@ export function instrumentD1Binding(d1: D1Binding, sink: D1SubrequestSink): D1Bi
     prepare(query: string) {
       return wrapPreparedStatement(d1.prepare(query), sink);
     },
-    batch<T = unknown>(statements: unknown[]) {
+    async batch<T = unknown>(statements: unknown[]) {
       sink(1);
       if (!d1.batch) throw new Error("D1 batch not available");
-      return d1.batch<T>(statements);
+      try {
+        return await d1.batch<T>(statements);
+      } catch (err) {
+        rethrowIfD1Quota(err);
+      }
     },
-    exec(query: string) {
+    async exec(query: string) {
       sink(1);
       if (!d1.exec) throw new Error("D1 exec not available");
-      return d1.exec(query);
+      try {
+        return await d1.exec(query);
+      } catch (err) {
+        rethrowIfD1Quota(err);
+      }
     },
   };
 }

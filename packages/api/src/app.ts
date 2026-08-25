@@ -346,8 +346,12 @@ export function createApp(store: Store, config: AppConfig) {
     }
 
     let queueDepth = 0;
+    let pendingQueueDepthAll = 0;
+    let d1Quota = { readRetryAfterAt: null as string | null, writeRetryAfterAt: null as string | null, blocked: false };
     try {
       queueDepth = await store.getQueueDepth();
+      pendingQueueDepthAll = await store.getPendingQueueDepthAll();
+      d1Quota = await store.getD1QuotaStatus();
     } catch (err) {
       console.error("sync/status getQueueDepth failed", err);
     }
@@ -368,6 +372,8 @@ export function createApp(store: Store, config: AppConfig) {
 
     return c.json({
       queueDepth,
+      pendingQueueDepthAll,
+      d1Quota,
       nextApiCallAt: scheduler?.nextProviderCallAt ?? null,
       rateLimitMs: scheduler?.rateLimitMs ?? config.rateLimitMs,
       lastProviderUsed: scheduler?.lastProviderUsed ?? null,

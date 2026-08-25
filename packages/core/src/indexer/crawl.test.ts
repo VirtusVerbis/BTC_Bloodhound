@@ -116,6 +116,7 @@ function mockStore(overrides: Partial<Store> = {}): Store {
     setExpandStatus: vi.fn().mockResolvedValue(undefined),
     setBtcUsdRefreshAttemptAt: vi.fn().mockResolvedValue(undefined),
     setBtcUsdPrice: vi.fn().mockResolvedValue(undefined),
+    isD1QuotaBlocked: vi.fn().mockResolvedValue(false),
     ...overrides,
   } as unknown as Store;
 }
@@ -402,6 +403,18 @@ describe("scheduleDownstreamCrawl", () => {
     expect(store.getDownstreamFrontier).toHaveBeenCalled();
     expect(store.listDownstreamForPoll).toHaveBeenCalled();
   });
+
+  it("skips enqueue when D1 write quota is blocked", async () => {
+    const store = mockStore({
+      isD1QuotaBlocked: vi.fn().mockImplementation(async (kind?: string) => kind === "write"),
+    });
+
+    const stats = await scheduleDownstreamCrawl(store, baseConfig(), unlimitedBudget, 0);
+
+    expect(stats.skipNonCritical).toBe(true);
+    expect(stats.crawlEnqueued).toBe(0);
+    expect(store.enqueueJobIfAbsent).not.toHaveBeenCalled();
+  });
 });
 
 describe("scheduleBtcUsdPriceRefresh", () => {
@@ -502,5 +515,17 @@ describe("scheduleBtcUsdPriceRefresh", () => {
 
     expect(fetchMempoolBtcUsd).toHaveBeenCalledOnce();
     expect(store.setBtcUsdPrice).not.toHaveBeenCalled();
+  });
+
+  it("skips when D1 write quota is blocked", async () => {
+    const store = mockStore({
+      isD1QuotaBlocked: vi.fn().mockImplementation(async (kind?: string) => kind === "write"),
+    });
+
+    const mode = await scheduleBtcUsdPriceRefresh(store, mockRouter, baseConfig(), unlimitedBudget, 0);
+
+    expect(mode).toBe("skip");
+    expect(fetchMempoolBtcUsd).not.toHaveBeenCalled();
+    expect(store.enqueueJobIfAbsent).not.toHaveBeenCalled();
   });
 });

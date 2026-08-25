@@ -1,4 +1,5 @@
 import type { Job } from "@cointrace/db";
+import { D1QuotaExceededError } from "@cointrace/db";
 import { RateLimitNotReadyError } from "../chain/router.js";
 import { summarizeJobPayload } from "../ops/queue.js";
 import { colorizeIndexerLogLine } from "./logColor.js";
@@ -122,7 +123,11 @@ export function logJobFail(
   const message = err instanceof Error ? err.message : String(err);
   const attempt = opts?.attempt ?? job.attempts + 1;
   const reasonSuffix =
-    err instanceof RateLimitNotReadyError ? ` reason=${err.reason}` : "";
+    err instanceof RateLimitNotReadyError
+      ? ` reason=${err.reason}`
+      : err instanceof D1QuotaExceededError
+        ? ` reason=d1-quota kind=${err.kind}`
+        : "";
   emitLog(
     console.error,
     `[job] fail id=${job.id} type=${job.type} attempts=${attempt}${formatDetailSuffix(details)}${reasonSuffix} error=${message}`,

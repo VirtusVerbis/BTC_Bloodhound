@@ -2,6 +2,7 @@ import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, o
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { SQLiteAsyncDialect } from "drizzle-orm/sqlite-core";
 import type { D1Binding } from "./d1.js";
+import type { D1QuotaKind } from "./d1Quota.js";
 import * as schema from "./schema.js";
 import {
   addresses,
@@ -512,11 +513,36 @@ export class Store {
     }
   }
 
-  async upsertEdgesBatch(rows: EdgeUpsertData[]): Promise<string[]> {
-    if (rows.length === 0) return [];
-    const hackersToRecalc = new Set<string>();
+  async upsertEdgesBatch(rows: EdgeUpsertData[]): Promise<void> {
+    if (rows.length === 0) return;
     for (let i = 0; i < rows.length; i += this.d1BatchSize) {
       const chunk = rows.slice(i, i + this.d1BatchSize);
+      const inToHackerRows = chunk.filter((row) => row.direction === "in_to_hacker");
+      const oldAmountByKey = new Map<string, number>();
+      if (inToHackerRows.length > 0) {
+        const txids = [...new Set(inToHackerRows.map((row) => row.txid))];
+        for (const txidChunk of chunkArray(txids, D1_IN_CLAUSE_CHUNK_SIZE)) {
+          const existing = await this.db
+            .select({
+              fromAddress: edges.fromAddress,
+              toAddress: edges.toAddress,
+              txid: edges.txid,
+              amountSats: edges.amountSats,
+            })
+            .from(edges)
+            .where(
+              and(
+                inArray(edges.txid, txidChunk),
+                eq(edges.direction, "in_to_hacker"),
+              ),
+            )
+            .all();
+          for (const row of existing) {
+            oldAmountByKey.set(`${row.fromAddress}|${row.toAddress}|${row.txid}`, row.amountSats);
+          }
+        }
+      }
+
       const statements = chunk.map((data) =>
         sql`
           INSERT INTO edges (
@@ -537,11 +563,30 @@ export class Store {
         `,
       );
       await this.executeSqlBatch(statements);
-      for (const row of chunk) {
-        if (row.direction === "in_to_hacker") hackersToRecalc.add(row.toAddress);
+
+      const deltaByHacker = new Map<string, number>();
+      for (const row of inToHackerRows) {
+        const key = `${row.fromAddress}|${row.toAddress}|${row.txid}`;
+        const oldAmount = oldAmountByKey.get(key) ?? 0;
+        const delta = row.amountSats - oldAmount;
+        if (delta === 0) continue;
+        deltaByHacker.set(row.toAddress, (deltaByHacker.get(row.toAddress) ?? 0) + delta);
+      }
+      for (const [hackerAddress, delta] of deltaByHacker) {
+        await this.applyTotalReceivedDelta(hackerAddress, delta);
       }
     }
-    return [...hackersToRecalc];
+  }
+
+  private async applyTotalReceivedDelta(hackerAddress: string, deltaSats: number): Promise<void> {
+    if (deltaSats === 0) return;
+    await this.db
+      .update(addresses)
+      .set({
+        totalReceivedSats: sql`${addresses.totalReceivedSats} + ${deltaSats}`,
+      })
+      .where(eq(addresses.address, hackerAddress))
+      .run();
   }
 
   async recalcTotalReceivedFor(hackerAddresses: string[]): Promise<void> {
@@ -553,10 +598,7 @@ export class Store {
   }
 
   async upsertEdge(data: EdgeUpsertData) {
-    const hackers = await this.upsertEdgesBatch([data]);
-    if (hackers.length > 0) {
-      await this.recalcTotalReceivedFor(hackers);
-    }
+    await this.upsertEdgesBatch([data]);
   }
 
   async recalcTotalReceived(hackerAddress: string) {
@@ -1400,6 +1442,17 @@ export class Store {
   }
 
   async getQueueDepth() {
+    const ts = now();
+    const row = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(jobs)
+      .where(and(eq(jobs.status, "pending"), lte(jobs.runAfter, ts)))
+      .get();
+    return row?.count ?? 0;
+  }
+
+  /** All pending jobs including future run_after (ops/debug). */
+  async getPendingQueueDepthAll() {
     const row = await this.db
       .select({ count: sql<number>`count(*)` })
       .from(jobs)
@@ -1475,6 +1528,8 @@ export class Store {
     mempoolStrikeCount?: number;
     esploraRetryAfterAt?: string | null;
     mempoolRetryAfterAt?: string | null;
+    d1ReadRetryAfterAt?: string | null;
+    d1WriteRetryAfterAt?: string | null;
     queueSchedulingPaused?: number;
     backfillHealAuditIndex?: number;
     hackerPollIndex?: number;
@@ -1497,6 +1552,54 @@ export class Store {
 
   async setBtcUsdRefreshAttemptAt(at: string) {
     await this.updateSchedulerState({ btcUsdRefreshAttemptAt: at });
+  }
+
+  async setD1QuotaPaused(kind: D1QuotaKind, retryAt: string): Promise<void> {
+    if (kind === "read") {
+      await this.updateSchedulerState({ d1ReadRetryAfterAt: retryAt });
+    } else {
+      await this.updateSchedulerState({ d1WriteRetryAfterAt: retryAt });
+    }
+  }
+
+  async clearExpiredD1QuotaPause(): Promise<void> {
+    const state = await this.getSchedulerState();
+    if (!state) return;
+    const ts = Date.now();
+    const updates: Parameters<Store["updateSchedulerState"]>[0] = {};
+    if (state.d1ReadRetryAfterAt && new Date(state.d1ReadRetryAfterAt).getTime() <= ts) {
+      updates.d1ReadRetryAfterAt = null;
+    }
+    if (state.d1WriteRetryAfterAt && new Date(state.d1WriteRetryAfterAt).getTime() <= ts) {
+      updates.d1WriteRetryAfterAt = null;
+    }
+    if (Object.keys(updates).length > 0) {
+      await this.updateSchedulerState(updates);
+    }
+  }
+
+  async isD1QuotaBlocked(kind?: D1QuotaKind): Promise<boolean> {
+    const state = await this.getSchedulerState();
+    const ts = Date.now();
+    const readBlocked =
+      state?.d1ReadRetryAfterAt != null && new Date(state.d1ReadRetryAfterAt).getTime() > ts;
+    const writeBlocked =
+      state?.d1WriteRetryAfterAt != null && new Date(state.d1WriteRetryAfterAt).getTime() > ts;
+    if (kind === "read") return readBlocked;
+    if (kind === "write") return writeBlocked;
+    return readBlocked || writeBlocked;
+  }
+
+  async getD1QuotaStatus(): Promise<{
+    readRetryAfterAt: string | null;
+    writeRetryAfterAt: string | null;
+    blocked: boolean;
+  }> {
+    const state = await this.getSchedulerState();
+    const readRetryAfterAt = state?.d1ReadRetryAfterAt ?? null;
+    const writeRetryAfterAt = state?.d1WriteRetryAfterAt ?? null;
+    const blocked = await this.isD1QuotaBlocked();
+    return { readRetryAfterAt, writeRetryAfterAt, blocked };
   }
 
   async getBtcUsdPrice(): Promise<{ usd: number; at: string } | null> {

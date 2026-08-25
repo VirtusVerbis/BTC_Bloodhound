@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Job, Store } from "@cointrace/db";
+import { D1QuotaExceededError } from "@cointrace/db";
 import type { AppConfig } from "../config.js";
 import { JOB_PRIORITY } from "../config.js";
 import { ChainRouter, RateLimitNotReadyError } from "../chain/router.js";
@@ -45,6 +46,20 @@ import {
 import { detectSweepRelay } from "./sweepRelay.js";
 import { processClassifiedPendingTx, type TraceProcessState } from "./txProcess.js";
 import type { PendingTxRuntime } from "./txPage.js";
+
+async function withD1QuotaContinuationSave<T>(
+  saveContinuation: () => Promise<unknown>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof D1QuotaExceededError) {
+      await saveContinuation();
+    }
+    throw err;
+  }
+}
 
 export interface ProcessJobsResult {
   processed: number;
@@ -506,16 +521,37 @@ async function backfillHacker(
       continue;
     }
 
-    const result = await processClassifiedPendingTx(
-      store,
-      router,
-      config,
-      address,
-      0,
-      entry,
-      hackers,
-      { traceTxid, traceEdgeIndex, traceEdgesPending, traceEdgeTotal, traceEdgesFlat },
-      { expandProfile, cpuGuard },
+    const result = await withD1QuotaContinuationSave(
+      () =>
+        enqueueBackfillContinuation(
+          store,
+          clearTraceFields({
+            address,
+            chainCursor,
+            ...writePendingPayload(pending, processedIndex),
+            pagesExhausted,
+            newestTxid,
+            newestBlockHeight,
+            traceTxid,
+            traceEdgeIndex,
+            traceEdgesPending,
+            traceEdgeTotal,
+            traceEdgesFlat,
+          }),
+          enqueueContinuation,
+        ),
+      () =>
+        processClassifiedPendingTx(
+          store,
+          router,
+          config,
+          address,
+          0,
+          entry,
+          hackers,
+          { traceTxid, traceEdgeIndex, traceEdgesPending, traceEdgeTotal, traceEdgesFlat },
+          { expandProfile, cpuGuard },
+        ),
     );
     if (result.chainCallsUsed > 0) budget.consume();
     processed++;
@@ -775,16 +811,31 @@ async function pollHacker(
     !cpuGuard?.exceeded()
   ) {
     const entry = pending[processedIndex]!;
-    const result = await processClassifiedPendingTx(
-      store,
-      router,
-      config,
-      address,
-      0,
-      entry,
-      hackers,
-      {},
-      { skipIfIndexed: false, cpuGuard },
+    const result = await withD1QuotaContinuationSave(
+      () =>
+        store.enqueueJob(
+          "poll_hacker_address",
+          toPollJobPayload({
+            address,
+            ...writePendingPayload(pending, processedIndex),
+            pollFetched: true,
+            newestTxid,
+            newestBlockHeight,
+          }),
+          JOB_PRIORITY.POLL_HACKER,
+        ),
+      () =>
+        processClassifiedPendingTx(
+          store,
+          router,
+          config,
+          address,
+          0,
+          entry,
+          hackers,
+          {},
+          { skipIfIndexed: false, cpuGuard },
+        ),
     );
     if (result.chainCallsUsed > 0) budget.consume();
     processedIndex++;
@@ -884,7 +935,33 @@ async function pollDownstream(
   }
   if (batch.length > 0) {
     const maxCalls = limited ? 1 : undefined;
-    await processAddressTxs(store, router, config, address, batch, hackers, hop, maxCalls, undefined, expandProfile);
+    await withD1QuotaContinuationSave(
+      () =>
+        store.enqueueJob(
+          "poll_downstream_address",
+          toPollJobPayload({
+            address,
+            ...writePendingPayload(pending, processedIndex),
+            pollFetched: true,
+            newestTxid,
+            newestBlockHeight,
+          }),
+          JOB_PRIORITY.POLL_DOWNSTREAM,
+        ),
+      () =>
+        processAddressTxs(
+          store,
+          router,
+          config,
+          address,
+          batch,
+          hackers,
+          hop,
+          maxCalls,
+          undefined,
+          expandProfile,
+        ),
+    );
     if (limited) budget.consume();
   }
 
@@ -1030,16 +1107,38 @@ async function expandDownstream(
     !cpuGuard?.exceeded()
   ) {
     const entry = pending[processedIndex]!;
-    const result = await processClassifiedPendingTx(
-      store,
-      router,
-      config,
-      address,
-      hop,
-      entry,
-      hackers,
-      { traceTxid, traceEdgeIndex, traceEdgesPending, traceEdgeTotal, traceEdgesFlat },
-      { expandProfile, cpuGuard },
+    const result = await withD1QuotaContinuationSave(
+      () =>
+        store.enqueueJob(
+          "expand_downstream",
+          {
+            address,
+            chainCursor,
+            ...writePendingPayload(pending, processedIndex),
+            pagesExhausted,
+            newestTxid,
+            newestBlockHeight,
+            pagesFetched,
+            traceTxid,
+            traceEdgeIndex,
+            traceEdgesPending,
+            traceEdgeTotal,
+            traceEdgesFlat,
+          } as unknown as Record<string, unknown>,
+          JOB_PRIORITY.CRON_EXPAND,
+        ),
+      () =>
+        processClassifiedPendingTx(
+          store,
+          router,
+          config,
+          address,
+          hop,
+          entry,
+          hackers,
+          { traceTxid, traceEdgeIndex, traceEdgesPending, traceEdgeTotal, traceEdgesFlat },
+          { expandProfile, cpuGuard },
+        ),
     );
     if (result.chainCallsUsed > 0) budget.consume();
     processed++;
@@ -1351,6 +1450,12 @@ export async function handleJobFailure(
     } else {
       await store.failJob(job.id, err.message, err.retryAt);
     }
+    return true;
+  }
+
+  if (err instanceof D1QuotaExceededError) {
+    await store.setD1QuotaPaused(err.kind, err.retryAt);
+    await store.failJob(job.id, err.message, err.retryAt);
     return true;
   }
 

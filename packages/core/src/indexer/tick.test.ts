@@ -22,6 +22,8 @@ import { runIndexerTick } from "./tick.js";
 function tickStoreMock(overrides: Record<string, unknown> = {}): Store {
   return {
     setSubrequestBudget: vi.fn(),
+    clearExpiredD1QuotaPause: vi.fn().mockResolvedValue(undefined),
+    isD1QuotaBlocked: vi.fn().mockResolvedValue(false),
     getSchedulerState: vi.fn().mockResolvedValue({ maintenanceCronCounter: 0 }),
     getQueueDepth: vi.fn().mockResolvedValue(0),
     hasPendingIngestContinuation: vi.fn().mockResolvedValue(false),
@@ -232,5 +234,19 @@ describe("runIndexerTick ordering", () => {
       expect.anything(),
       expect.objectContaining({ jobsPerTick: 2 }),
     );
+  });
+
+  it("skips tick when D1 quota is blocked", async () => {
+    const store = tickStoreMock({
+      isD1QuotaBlocked: vi.fn().mockResolvedValue(true),
+    });
+    const router = {} as ChainRouter;
+
+    const result = await runIndexerTick(store, router, baseConfig(), { schedule: true });
+
+    expect(result.jobsProcessed).toBe(0);
+    expect(processJobsMock).not.toHaveBeenCalled();
+    expect(scheduleBtcMock).not.toHaveBeenCalled();
+    expect(scheduleCrawlMock).not.toHaveBeenCalled();
   });
 });

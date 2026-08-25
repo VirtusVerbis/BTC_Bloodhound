@@ -103,6 +103,8 @@ export async function scheduleBtcUsdPriceRefresh(
   budget: SubrequestBudget,
   reserve: number,
 ): Promise<BtcScheduleMode> {
+  if (await store.isD1QuotaBlocked("write")) return "skip";
+
   const ts = Date.now();
   const intervalMs = config.btcUsdPriceRefreshIntervalSec * 1000;
   const price = await store.getBtcUsdPrice();
@@ -149,6 +151,10 @@ export async function scheduleDownstreamCrawl(
   };
 
   if (await isRebuildActive(store, config)) return emptyStats;
+
+  if (await store.isD1QuotaBlocked("write")) {
+    return { ...emptyStats, skipNonCritical: true };
+  }
 
   const ts = Date.now();
   const enqueueCache = await loadScheduleEnqueueCache(store);

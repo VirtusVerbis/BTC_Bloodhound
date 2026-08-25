@@ -86,6 +86,13 @@ export async function runIndexerTick(
   let jobsCapReason = "no_pair";
   const budget = attachSubrequestBudget(store, config);
 
+  await store.clearExpiredD1QuotaPause();
+  if (await store.isD1QuotaBlocked()) {
+    logCronDetail(jobDetails, "[cron] tick skipped d1_quota", logColor);
+    store.setSubrequestBudget(undefined);
+    return { scheduled: schedule, jobsProcessed: 0 };
+  }
+
   logCronDetail(jobDetails, "[cron] tick start", logColor);
   try {
     const queueDepth = await store.getQueueDepth();

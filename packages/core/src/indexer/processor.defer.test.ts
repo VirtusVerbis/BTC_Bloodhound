@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../config.js";
 import { JOB_PRIORITY } from "../config.js";
 import type { Job, Store } from "@cointrace/db";
+import { D1QuotaExceededError, nextUtcMidnightIso } from "@cointrace/db";
 import { RateLimitNotReadyError } from "../chain/router.js";
 import { handleJobFailure } from "./processor.js";
 
@@ -155,5 +156,24 @@ describe("handleJobFailure defer", () => {
 
     expect(failJob).toHaveBeenCalledWith(job.id, err.message, retryAt);
     expect(deferJob).not.toHaveBeenCalled();
+  });
+
+  it("sets D1 quota pause and failJob until midnight UTC", async () => {
+    const retryAt = nextUtcMidnightIso();
+    const err = new D1QuotaExceededError("read", retryAt);
+    const failJob = vi.fn();
+    const setD1QuotaPaused = vi.fn();
+    const store = { failJob, setD1QuotaPaused } as unknown as Store;
+    const job = makeJob({ type: "backfill_hacker_address", attempts: 2 });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const stop = await handleJobFailure(store, baseConfig(), job, err);
+
+    expect(stop).toBe(true);
+    expect(setD1QuotaPaused).toHaveBeenCalledWith("read", retryAt);
+    expect(failJob).toHaveBeenCalledWith(job.id, err.message, retryAt);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("reason=d1-quota"));
+
+    errorSpy.mockRestore();
   });
 });

@@ -664,9 +664,8 @@ export async function applyHackTraceEdgesChunk(
     );
   }
 
-  const hackersToRecalc = edgeRows.length > 0 ? await store.upsertEdgesBatch(edgeRows) : [];
-  if (hackersToRecalc.length > 0) {
-    await store.recalcTotalReceivedFor(hackersToRecalc);
+  if (edgeRows.length > 0) {
+    await store.upsertEdgesBatch(edgeRows);
   }
 
   const hackersToBump = new Set<string>();

@@ -23,9 +23,15 @@ function createSqliteD1(sqlite: Database.Database): D1Binding {
         bind(...params: unknown[]) {
           const bound = stmt.bind(...params);
           return {
-            run: async () => bound.run(),
-            all: async () => bound.all(),
-            first: async () => bound.get(),
+            run: async () => {
+              const info = bound.run();
+              return { success: true, meta: { changes: info.changes, last_row_id: Number(info.lastInsertRowid) } };
+            },
+            all: async () => ({ success: true, results: bound.all() }),
+            first: async () => {
+              const row = bound.get();
+              return { success: true, results: row != null ? [row] : [] };
+            },
             raw: async (pluralizeColumns?: unknown) =>
               bound.raw(typeof pluralizeColumns === "boolean" ? pluralizeColumns : false),
           };
@@ -116,14 +122,14 @@ describe("Store subrequest metering", () => {
         toAddress: "bc1qh1",
         txid: "tx1",
         amountSats: 100,
-        direction: "in_to_hacker",
+        direction: "out_from_hacker",
       },
       {
         fromAddress: "bc1qv1",
         toAddress: "bc1qh2",
         txid: "tx2",
         amountSats: 200,
-        direction: "in_to_hacker",
+        direction: "out_from_hacker",
       },
     ]);
 

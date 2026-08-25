@@ -104,6 +104,8 @@ export const schedulerState = sqliteTable("scheduler_state", {
   btcUsdPriceAt: text("btc_usd_price_at"),
   btcUsdRefreshAttemptAt: text("btc_usd_refresh_attempt_at"),
   tickLeaseUntil: text("tick_lease_until"),
+  d1ReadRetryAfterAt: text("d1_read_retry_after_at"),
+  d1WriteRetryAfterAt: text("d1_write_retry_after_at"),
 });
 
 export const rateLimits = sqliteTable("rate_limits", {
