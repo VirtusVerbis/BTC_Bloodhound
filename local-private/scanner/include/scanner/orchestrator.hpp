@@ -20,6 +20,9 @@ struct OrchestratorOptions {
   std::string key_file;
   bool resume = false;
   bool fresh = false;
+  bool backfill = false;
+  std::string backfill_from_run_id;
+  uint64_t backfill_to = 0;  // 0 = use source next_pad_index
   bool preflight_only = false;
   bool no_color = false;
   bool no_eta = false;

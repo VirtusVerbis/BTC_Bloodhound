@@ -16,6 +16,7 @@ struct VictimEntry {
 class VictimSet {
  public:
   bool load_from_cointrace_db(const std::string& db_path, int max_age_hours, std::string& error);
+  bool add_address(const std::string& address, std::string& error);
   size_t size() const { return entries_.size(); }
   const std::vector<VictimEntry>& entries() const { return entries_; }
   const std::vector<std::vector<uint8_t>>& hash160_list() const { return hash160_list_; }

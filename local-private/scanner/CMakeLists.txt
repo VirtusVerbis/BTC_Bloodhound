@@ -85,6 +85,7 @@ set(SCANNER_SOURCES
   src/checkpoint.cpp
 
   src/report.cpp
+  src/verify.cpp
 
   third_party/sqlite3/sqlite3.c
 

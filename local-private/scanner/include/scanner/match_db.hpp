@@ -8,6 +8,8 @@
 
 namespace scanner {
 
+bool is_backfill_run_id(const std::string& run_id);
+
 class MatchDb {
  public:
   bool open(const std::string& path, std::string& error);
@@ -39,6 +41,8 @@ class MatchDb {
   std::optional<RunSummary> get_run(const std::string& run_id, std::string& error);
   std::optional<RunSummary> get_latest_incomplete(std::string& error);
   std::optional<RunSummary> get_latest_resumable(std::string& error);
+  std::optional<RunSummary> get_latest_backfill_resumable(std::string& error);
+  std::optional<RunSummary> get_latest_main_resumable(std::string& error);
   std::optional<RunSummary> get_latest_run(std::string& error);
 
  private:

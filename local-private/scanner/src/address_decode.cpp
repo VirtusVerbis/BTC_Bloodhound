@@ -67,10 +67,14 @@ int bech32_charset_index(char c) {
 }
 
 uint32_t bech32_polymod(const std::vector<uint8_t>& values) {
+  static const uint32_t GEN[] = {0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3};
   uint32_t chk = 1;
-  for (uint8_t v : values) {
-    chk ^= v;
-    for (int i = 0; i < 8; i++) chk = (chk & 1) ? (0x2bc830a3 ^ (chk >> 1)) : (chk >> 1);
+  for (uint8_t value : values) {
+    const uint32_t top = chk >> 25;
+    chk = ((chk & 0x1ffffff) << 5) ^ static_cast<uint32_t>(value);
+    for (int i = 0; i < 5; i++) {
+      if ((top >> i) & 1) chk ^= GEN[i];
+    }
   }
   return chk;
 }
@@ -86,13 +90,14 @@ bool bech32_decode(const std::string& addr, std::string& hrp_out, std::vector<ui
     data.push_back(static_cast<uint8_t>(v));
   }
   if (data.size() < 6) return false;
-  data.resize(data.size() - 6);
   std::vector<uint8_t> values;
   for (char c : hrp_out) values.push_back(static_cast<uint8_t>(c >> 5));
   values.push_back(0);
   for (char c : hrp_out) values.push_back(static_cast<uint8_t>(c & 31));
   values.insert(values.end(), data.begin(), data.end());
-  if (bech32_polymod(values) != 1) return false;
+  const uint32_t mod = bech32_polymod(values);
+  if (mod != 1) return false;
+  data.resize(data.size() - 6);
   data_out = data;
   return true;
 }
@@ -122,10 +127,11 @@ bool address_to_lookup_key(const std::string& address, VictimLookupKey& out) {
   if (address.rfind("bc1", 0) == 0) {
     std::string hrp;
     std::vector<uint8_t> data;
-    if (!bech32_decode(address, hrp, data) || hrp != "bc" || data.empty() || data[0] != 0) return false;
+    if (!bech32_decode(address, hrp, data)) return false;
+    if (hrp != "bc" || data.empty() || data[0] != 0) return false;
     std::vector<uint8_t> payload(data.begin() + 1, data.end());
     const auto bytes = convert_bits(payload, 5, 8, false);
-    if (bytes.size() != 20) return false;
+    if (bytes.empty() || bytes.size() != 20) return false;
     out.key20 = bytes;
     out.family = ScriptFamily::Bip84;
     return true;

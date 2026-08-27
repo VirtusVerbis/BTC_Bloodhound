@@ -6,6 +6,10 @@
 
 namespace scanner {
 
+bool is_backfill_run_id(const std::string& run_id) {
+  return run_id.rfind("backfill-for-", 0) == 0;
+}
+
 bool MatchDb::open(const std::string& path, std::string& error) {
   sqlite3* db = nullptr;
   if (sqlite3_open(path.c_str(), &db) != SQLITE_OK) {
@@ -66,6 +70,14 @@ bool MatchDb::init_schema(std::string& error) {
   char* err = nullptr;
   if (sqlite3_exec(db, sql, nullptr, nullptr, &err) != SQLITE_OK) {
     error = err ? err : "schema init failed";
+    sqlite3_free(err);
+    return false;
+  }
+  const char* idx_sql =
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_matches_seed_victim_derived "
+      "ON matches(seed_id, victim_address, derived_address);";
+  if (sqlite3_exec(db, idx_sql, nullptr, nullptr, &err) != SQLITE_OK) {
+    error = err ? err : "schema index failed";
     sqlite3_free(err);
     return false;
   }
@@ -179,8 +191,8 @@ bool MatchDb::insert_match(int64_t seed_id, const std::string& victim_address, c
   auto* db = static_cast<sqlite3*>(db_);
   sqlite3_stmt* stmt = nullptr;
   const char* sql =
-      "INSERT INTO matches (seed_id, victim_address, derived_address, script_type, account, branch, address_index) "
-      "VALUES (?,?,?,?,?,?,?)";
+      "INSERT OR IGNORE INTO matches (seed_id, victim_address, derived_address, script_type, account, branch, "
+      "address_index) VALUES (?,?,?,?,?,?,?)";
   if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
     error = sqlite3_errmsg(db);
     return false;
@@ -198,7 +210,7 @@ bool MatchDb::insert_match(int64_t seed_id, const std::string& victim_address, c
     return false;
   }
   sqlite3_finalize(stmt);
-  return true;
+  return sqlite3_changes(db) > 0;
 }
 
 std::optional<MatchDb::RunSummary> MatchDb::get_run(const std::string& run_id, std::string& error) {
@@ -253,11 +265,43 @@ std::optional<MatchDb::RunSummary> MatchDb::get_latest_incomplete(std::string& e
 }
 
 std::optional<MatchDb::RunSummary> MatchDb::get_latest_resumable(std::string& error) {
+  return get_latest_main_resumable(error);
+}
+
+std::optional<MatchDb::RunSummary> MatchDb::get_latest_main_resumable(std::string& error) {
   auto* db = static_cast<sqlite3*>(db_);
   sqlite3_stmt* stmt = nullptr;
   const char* sql =
       "SELECT id, run_id, config_json, pads_done, seeds_tested, hits, status FROM scan_runs "
-      "WHERE status IN ('running', 'interrupted') ORDER BY id DESC LIMIT 1";
+      "WHERE status IN ('running', 'interrupted') AND run_id NOT LIKE 'backfill-for-%' "
+      "ORDER BY id DESC LIMIT 1";
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    error = sqlite3_errmsg(db);
+    return std::nullopt;
+  }
+  if (sqlite3_step(stmt) != SQLITE_ROW) {
+    sqlite3_finalize(stmt);
+    return std::nullopt;
+  }
+  RunSummary r;
+  r.id = sqlite3_column_int64(stmt, 0);
+  r.run_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+  r.config_json = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+  r.pads_done = static_cast<uint64_t>(sqlite3_column_int64(stmt, 3));
+  r.seeds_tested = static_cast<uint64_t>(sqlite3_column_int64(stmt, 4));
+  r.hits = static_cast<uint64_t>(sqlite3_column_int64(stmt, 5));
+  r.status = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+  sqlite3_finalize(stmt);
+  return r;
+}
+
+std::optional<MatchDb::RunSummary> MatchDb::get_latest_backfill_resumable(std::string& error) {
+  auto* db = static_cast<sqlite3*>(db_);
+  sqlite3_stmt* stmt = nullptr;
+  const char* sql =
+      "SELECT id, run_id, config_json, pads_done, seeds_tested, hits, status FROM scan_runs "
+      "WHERE status IN ('running', 'interrupted') AND run_id LIKE 'backfill-for-%' "
+      "ORDER BY id DESC LIMIT 1";
   if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
     error = sqlite3_errmsg(db);
     return std::nullopt;

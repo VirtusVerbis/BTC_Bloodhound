@@ -91,6 +91,34 @@ bool VictimSet::load_from_cointrace_db(const std::string& db_path, int max_age_h
   return true;
 }
 
+bool VictimSet::add_address(const std::string& address, std::string& error) {
+  std::string normalized;
+  if (!normalize_bitcoin_address(address, normalized)) {
+    error = "invalid victim address: " + address;
+    return false;
+  }
+  if (address_index_.find(normalized) != address_index_.end()) {
+    error = "duplicate victim address: " + normalized;
+    return false;
+  }
+
+  VictimLookupKey lk;
+  if (!address_to_lookup_key(normalized, lk)) {
+    error = "failed to decode victim address: " + normalized;
+    return false;
+  }
+
+  VictimEntry e;
+  e.address = normalized;
+  e.hash160 = lk.key20;
+  lk.victim_index = static_cast<uint32_t>(entries_.size());
+  address_index_[normalized] = entries_.size();
+  entries_.push_back(e);
+  hash160_list_.push_back(lk.key20);
+  lookup_keys_.push_back(lk);
+  return true;
+}
+
 std::string VictimSet::snapshot_hash() const {
   std::string joined;
   for (const auto& e : entries_) {

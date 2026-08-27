@@ -51,10 +51,14 @@ const std::array<char, 32> BECH32_CHARSET = {
     '5', '4', 'k', 'h', 'c', 'e', '6', 'm', 'u', 'a', '7', 'l'};
 
 uint32_t bech32_polymod(const std::vector<uint8_t>& values) {
+  static const uint32_t GEN[] = {0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3};
   uint32_t chk = 1;
-  for (uint8_t v : values) {
-    chk ^= v;
-    for (int i = 0; i < 8; i++) chk = (chk & 1) ? (0x2bc830a3 ^ (chk >> 1)) : (chk >> 1);
+  for (uint8_t value : values) {
+    const uint32_t top = chk >> 25;
+    chk = ((chk & 0x1ffffff) << 5) ^ static_cast<uint32_t>(value);
+    for (int i = 0; i < 5; i++) {
+      if ((top >> i) & 1) chk ^= GEN[i];
+    }
   }
   return chk;
 }
@@ -82,13 +86,11 @@ std::string bech32_encode(const std::string& hrp, const std::vector<uint8_t>& da
   values.push_back(0);
   for (char c : hrp) values.push_back(static_cast<uint8_t>(c & 31));
   values.insert(values.end(), data.begin(), data.end());
-  const uint32_t mod = bech32_polymod(values);
-  std::vector<uint8_t> checksum(6);
-  uint32_t chk = mod ^ 1;
-  for (int i = 0; i < 6; i++) checksum[i] = static_cast<uint8_t>((chk >> (5 * (5 - i))) & 31);
+  values.insert(values.end(), {0, 0, 0, 0, 0, 0});
+  const uint32_t chk = bech32_polymod(values) ^ 1;
   std::string out = hrp + "1";
   for (uint8_t v : data) out.push_back(BECH32_CHARSET[v]);
-  for (uint8_t v : checksum) out.push_back(BECH32_CHARSET[v]);
+  for (int i = 0; i < 6; i++) out.push_back(BECH32_CHARSET[(chk >> (5 * (5 - i))) & 31]);
   return out;
 }
 

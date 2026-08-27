@@ -197,29 +197,90 @@ int Orchestrator::run_scan(const OrchestratorOptions& opts) {
   std::string run_id = opts.run_id;
   bool resuming = false;
   CheckpointState ck{};
+  std::string backfill_source_run_id;
+  std::string config_json;
 
-  if (!opts.fresh) {
-    if (run_id.empty()) {
-      if (auto resumable = db.get_latest_resumable(err)) {
+  if (opts.backfill) {
+    backfill_source_run_id = opts.backfill_from_run_id;
+    if (backfill_source_run_id.empty()) {
+      if (auto main_run = db.get_latest_main_resumable(err)) {
+        backfill_source_run_id = main_run->run_id;
+      } else {
+        std::cerr << style.value("backfill: no main run found; specify --from-run-id") << "\n";
+        return 1;
+      }
+    }
+
+    CheckpointState source_ck{};
+    if (!load_checkpoint(opts.checkpoint_dir, backfill_source_run_id, source_ck, err)) {
+      std::cerr << style.value("backfill: missing source checkpoint for run_id=" + backfill_source_run_id + ": " +
+                               err)
+                << "\n";
+      return 1;
+    }
+
+    const uint64_t source_pad_end = source_ck.next_pad_index;
+    uint64_t backfill_pad_end = source_pad_end;
+    if (opts.backfill_to > 0) {
+      backfill_pad_end = std::min(source_pad_end, opts.backfill_to);
+    }
+    if (backfill_pad_end == 0) {
+      std::cerr << style.value("backfill: source run next_pad_index is 0 — nothing to backfill") << "\n";
+      return 1;
+    }
+
+    pad_start = 0;
+    pad_end = backfill_pad_end;
+
+    if (!run_id.empty()) {
+      // explicit --run-id for backfill
+    } else if (!opts.backfill_from_run_id.empty()) {
+      run_id = "backfill-for-" + backfill_source_run_id;
+    } else if (!opts.fresh) {
+      if (auto resumable = db.get_latest_backfill_resumable(err)) {
         const std::string ck_path = checkpoint_path(opts.checkpoint_dir, resumable->run_id);
         if (std::filesystem::exists(ck_path)) {
           run_id = resumable->run_id;
         }
       }
     }
-    if (!run_id.empty()) {
+    if (run_id.empty()) {
+      run_id = "backfill-for-" + backfill_source_run_id;
+    }
+
+    if (!opts.fresh && !run_id.empty()) {
       if (load_checkpoint(opts.checkpoint_dir, run_id, ck, err)) {
         resuming = true;
       } else if (!opts.run_id.empty() || opts.resume) {
         std::cerr << err << "\n";
         return 1;
-      } else {
-        run_id.clear();
+      }
+    }
+  } else {
+    if (!opts.fresh) {
+      if (run_id.empty()) {
+        if (auto resumable = db.get_latest_resumable(err)) {
+          const std::string ck_path = checkpoint_path(opts.checkpoint_dir, resumable->run_id);
+          if (std::filesystem::exists(ck_path)) {
+            run_id = resumable->run_id;
+          }
+        }
+      }
+      if (!run_id.empty()) {
+        if (load_checkpoint(opts.checkpoint_dir, run_id, ck, err)) {
+          resuming = true;
+        } else if (!opts.run_id.empty() || opts.resume) {
+          std::cerr << err << "\n";
+          return 1;
+        }
       }
     }
   }
 
   if (run_id.empty()) run_id = make_run_id();
+  if (opts.backfill && is_backfill_run_id(run_id)) {
+    backfill_source_run_id = run_id.substr(13);
+  }
   ck.run_id = run_id;
   ck.pads_total = pad_end;
   ck.victim_snapshot_hash = victims.snapshot_hash();
@@ -231,6 +292,9 @@ int Orchestrator::run_scan(const OrchestratorOptions& opts) {
 
   if (resuming) {
     pad_start = ck.next_pad_index;
+    if (ck.pads_total > 0) {
+      pad_end = ck.pads_total;
+    }
     seeds_tested = ck.seeds_tested;
     hits = ck.hits;
     elapsed_base = ck.elapsed_sec;
@@ -245,6 +309,9 @@ int Orchestrator::run_scan(const OrchestratorOptions& opts) {
       return 1;
     }
     pad_start = ck.next_pad_index;
+    if (ck.pads_total > 0) {
+      pad_end = ck.pads_total;
+    }
     seeds_tested = ck.seeds_tested;
     hits = ck.hits;
     elapsed_base = ck.elapsed_sec;
@@ -256,10 +323,15 @@ int Orchestrator::run_scan(const OrchestratorOptions& opts) {
   const uint32_t scan_min = opts.config.scan_session_min;
   const uint32_t scan_max = opts.config.scan_session_max;
 
-  const std::string config_json = "seed_model=mk3_v1 pads=" + std::to_string(opts.config.pad_high_min) + "-" +
-                                  std::to_string(opts.config.pad_high_max) + " sessions=" +
-                                  std::to_string(scan_min) + "-" + std::to_string(scan_max) +
-                                  " gpu_util=" + std::to_string(gpu_util);
+  if (opts.backfill) {
+    config_json = "backfill_for=" + backfill_source_run_id + " pads=0-" + std::to_string(pad_end) +
+                  " victim_fix=bech32 seed_model=mk3_v1 sessions=" + std::to_string(scan_min) + "-" +
+                  std::to_string(scan_max) + " gpu_util=" + std::to_string(gpu_util);
+  } else {
+    config_json = "seed_model=mk3_v1 pads=" + std::to_string(opts.config.pad_high_min) + "-" +
+                  std::to_string(opts.config.pad_high_max) + " sessions=" + std::to_string(scan_min) + "-" +
+                  std::to_string(scan_max) + " gpu_util=" + std::to_string(gpu_util);
+  }
   const std::string expected_config_hash = sha256_hex(config_json);
   if (resuming && !ck.config_hash.empty() && ck.config_hash != expected_config_hash) {
     std::cerr << style.value("warning: checkpoint config_hash mismatch — use --fresh to restart with new seed model")
@@ -277,8 +349,22 @@ int Orchestrator::run_scan(const OrchestratorOptions& opts) {
   }
 
   if (resuming) {
-    std::cerr << "scan resumed run_id=" << run_id << " victims=" << victims.size() << " paths=" << paths.size()
-              << " batch_seeds=" << base_batch << " gpu_util=" << gpu_util << "% from_pad=" << pad_start
+    if (opts.backfill) {
+      std::cerr << "backfill resumed run_id=" << run_id << " for=" << backfill_source_run_id
+                << " victims=" << victims.size() << " paths=" << paths.size() << " batch_seeds=" << base_batch
+                << " gpu_util=" << gpu_util << "% from_pad=" << pad_start
+                << " progress_interval=" << opts.config.progress_interval_sec << "s\n"
+                << std::flush;
+    } else {
+      std::cerr << "scan resumed run_id=" << run_id << " victims=" << victims.size() << " paths=" << paths.size()
+                << " batch_seeds=" << base_batch << " gpu_util=" << gpu_util << "% from_pad=" << pad_start
+                << " progress_interval=" << opts.config.progress_interval_sec << "s\n"
+                << std::flush;
+    }
+  } else if (opts.backfill) {
+    std::cerr << "backfill started run_id=" << run_id << " for=" << backfill_source_run_id
+              << " victims=" << victims.size() << " paths=" << paths.size() << " batch_seeds=" << base_batch
+              << " gpu_util=" << gpu_util << "% pads=0-" << pad_end
               << " progress_interval=" << opts.config.progress_interval_sec << "s\n"
               << std::flush;
   } else {
@@ -348,7 +434,6 @@ int Orchestrator::run_scan(const OrchestratorOptions& opts) {
         }
         if (!victim) continue;
 
-        hits++;
         const std::string fp = sha256_hex(entropy);
         std::vector<uint8_t> enc;
         if (!cipher.encrypt(entropy, enc, err)) {
@@ -356,8 +441,8 @@ int Orchestrator::run_scan(const OrchestratorOptions& opts) {
           continue;
         }
         const int64_t seed_id = db.upsert_seed(run_row_id, fp, seed.pad, seed.scan_session, enc, err);
-        if (seed_id >= 0) {
-          db.insert_match(seed_id, victim->address, address, path, err);
+        if (seed_id >= 0 && db.insert_match(seed_id, victim->address, address, path, err)) {
+          hits++;
         }
 
         if (opts.config.show_live_matches) {
@@ -456,8 +541,11 @@ int Orchestrator::run_scan(const OrchestratorOptions& opts) {
   }
 
   if (g_interrupt) {
+    const std::string resume_hint =
+        opts.backfill ? "scanner scan --backfill" : "scanner scan";
     std::cout << style.value("interrupted — checkpoint saved at pad " + std::to_string(ck.next_pad_index) +
-                             ". Resume: scanner scan") << "\n";
+                             ". Resume: " + resume_hint)
+              << "\n";
     std::cout << style.value("(use --fresh to start a new run)") << "\n";
     return 130;
   }
