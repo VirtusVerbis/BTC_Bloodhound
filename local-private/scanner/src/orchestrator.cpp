@@ -376,6 +376,8 @@ int Orchestrator::run_scan(const OrchestratorOptions& opts) {
 
   auto scan_start_clock = std::chrono::steady_clock::now();
   auto last_progress = scan_start_clock;
+  auto last_pad_done = scan_start_clock;
+  bool have_pad_done = false;
   double smoothed_pads_per_sec = 0;
   double last_checks_per_sec = 0;
 
@@ -492,6 +494,14 @@ int Orchestrator::run_scan(const OrchestratorOptions& opts) {
     }
 
     const auto now = std::chrono::steady_clock::now();
+    std::string pad_duration_str = "—";
+    if (have_pad_done) {
+      pad_duration_str =
+          style.format_duration(std::chrono::duration<double>(now - last_pad_done).count());
+    }
+    last_pad_done = now;
+    have_pad_done = true;
+
     const double since_progress = std::chrono::duration<double>(now - last_progress).count();
     if (since_progress >= opts.config.progress_interval_sec) {
       const double elapsed = elapsed_base + std::chrono::duration<double>(now - scan_start_clock).count();
@@ -514,6 +524,7 @@ int Orchestrator::run_scan(const OrchestratorOptions& opts) {
 
       std::cout << style.tag_scan() << " " << style.percent_value(pct_ss.str()) << " | " << style.label("pads") << " "
                 << style.value(std::to_string(pads_done) + "/" + std::to_string(pad_end)) << " | "
+                << style.label("duration") << " " << style.value(pad_duration_str) << " | "
                 << style.label("seeds") << " " << style.value(std::to_string(seeds_tested)) << " | "
                 << style.label("hits") << " " << style.hits_value(hits) << " | " << style.label("gpu") << " "
                 << style.value(std::to_string(gpu_util) + "%") << " | " << style.label("ETA") << " "
