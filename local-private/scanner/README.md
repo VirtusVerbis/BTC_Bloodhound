@@ -182,7 +182,7 @@ Firmware `_rand_below` retries advance **libngu only** on rejection; this scanne
 
 
 - **`scan` auto-resumes** the latest **main** `running` or `interrupted` run when a checkpoint exists in `data/checkpoints/`. Backfill runs (`backfill-for-*`) are never auto-resumed by plain `scan`.
-- Use **`--fresh`** to start a new run instead of resuming.
+- Use **`--fresh`** to start a new run instead of resuming. If a resumable main run exists, you must type **`DELETE`** at the prompt to confirm.
 - **Ctrl-C** stops within one sub-batch (~32 seeds); checkpoint is saved immediately. Re-run `scan` to continue.
 - Optional **`--run-id ID`** forces a specific historical run.
 

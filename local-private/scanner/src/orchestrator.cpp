@@ -28,6 +28,10 @@
 #ifdef _WIN32
 #define NOMINMAX
 #include <windows.h>
+#include <io.h>
+#include <stdio.h>
+#else
+#include <unistd.h>
 #endif
 
 namespace scanner {
@@ -76,6 +80,39 @@ int clamp_gpu_util(int v) {
   if (v < 10) return 10;
   if (v > 100) return 100;
   return v;
+}
+
+bool stdin_is_tty() {
+#ifdef _WIN32
+  return _isatty(_fileno(stdin)) != 0;
+#else
+  return isatty(STDIN_FILENO) != 0;
+#endif
+}
+
+bool confirm_abandon_resumable_run(const ConsoleStyle& style, const MatchDb::RunSummary& run,
+                                   uint64_t checkpoint_next_pad, uint64_t checkpoint_pads_total) {
+  if (!stdin_is_tty()) {
+    std::cerr << style.value("error: --fresh requires interactive confirmation (stdin is not a terminal)") << "\n";
+    return false;
+  }
+
+  std::cerr << style.value("warning: --fresh will abandon resumable scan progress") << "\n";
+  std::cerr << style.value("  run_id=" + run.run_id + "  status=" + run.status + "  pads=" +
+                           std::to_string(run.pads_done) + "/" + std::to_string(checkpoint_pads_total) +
+                           "  seeds=" + std::to_string(run.seeds_tested) + "  hits=" + std::to_string(run.hits))
+            << "\n";
+  if (checkpoint_next_pad > 0) {
+    std::cerr << style.value("  checkpoint next_pad_index=" + std::to_string(checkpoint_next_pad)) << "\n";
+  }
+  std::cerr << style.value("Type DELETE to confirm: ") << std::flush;
+
+  std::string line;
+  if (!std::getline(std::cin, line) || line != "DELETE") {
+    std::cerr << style.value("aborted — confirmation required") << "\n";
+    return false;
+  }
+  return true;
 }
 
 }  // namespace
@@ -171,6 +208,20 @@ int Orchestrator::run_scan(const OrchestratorOptions& opts) {
   if (!db.open(opts.matches_db_path, err)) {
     std::cerr << err << "\n";
     return 1;
+  }
+
+  if (opts.fresh && !opts.backfill) {
+    if (auto resumable = db.get_latest_main_resumable(err)) {
+      const std::string ck_path = checkpoint_path(opts.checkpoint_dir, resumable->run_id);
+      if (std::filesystem::exists(ck_path)) {
+        CheckpointState ck{};
+        if (load_checkpoint(opts.checkpoint_dir, resumable->run_id, ck, err)) {
+          if (!confirm_abandon_resumable_run(style, *resumable, ck.next_pad_index, ck.pads_total)) {
+            return 1;
+          }
+        }
+      }
+    }
   }
 
   const int gpu_util = clamp_gpu_util(opts.gpu_util_override >= 0 ? opts.gpu_util_override : opts.config.gpu_util_pct);
