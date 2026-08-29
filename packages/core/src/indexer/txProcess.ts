@@ -43,7 +43,6 @@ function traceOptions(
   traceEdgeTotal?: number;
   traceEdgesFlat?: HackTraceEdgeDraft[];
   cpuGuard?: CpuGuard;
-  deferGraphActivityBump?: boolean;
 } {
   const traceActive = state.traceEdgesPending && state.traceTxid === txid;
   return {
@@ -54,7 +53,6 @@ function traceOptions(
     maxGraphEdgesPerTx: config.maxGraphEdgesPerTx > 0 ? config.maxGraphEdgesPerTx : undefined,
     maxEdgesPerJob: config.maxEdgesPerJob > 0 ? config.maxEdgesPerJob : undefined,
     cpuGuard: opts?.cpuGuard,
-    deferGraphActivityBump: config.deferGraphActivityBump,
   };
 }
 

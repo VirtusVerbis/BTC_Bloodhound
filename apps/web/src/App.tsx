@@ -19,14 +19,13 @@ import {
   MIN_BTC_INPUT_MAX_LENGTH,
   MIN_SATS_INPUT_MAX_LENGTH,
 } from "./lib/graphInputLimits";
-import { groupHackersForDropdown, formatHackerOptionLabel, isHackerUnread, type Hacker } from "./lib/hackerGroups";
 import {
-  getHackerLastViewedMap,
-  hasHackerLastViewedState,
-  markHackerViewed,
-  seedLastViewedFromHackers,
-  syncNewHackersLastViewed,
-} from "./lib/hackerLastViewed";
+  groupHackersForDropdown,
+  formatHackerOptionLabel,
+  isHackerRecent,
+  type Hacker,
+  type RecentHackerEntry,
+} from "./lib/hackerGroups";
 
 type AppTab = "tracker" | "about";
 
@@ -55,6 +54,7 @@ interface AppConfig {
   graphPageSizeDefault?: number;
   graphPageSizeMax?: number;
   graphActivityWindowHours?: number;
+  recentHackersLimit?: number;
   hackersPollMs?: number;
 }
 
@@ -104,9 +104,7 @@ export default function App() {
   const [victimSearchInput, setVictimSearchInput] = useState("");
   const [activeVictimSearch, setActiveVictimSearch] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<AppTab>("tracker");
-  const [lastViewedMap, setLastViewedMap] = useState<Record<string, string>>(() =>
-    getHackerLastViewedMap(),
-  );
+  const [recentHackers, setRecentHackers] = useState<RecentHackerEntry[]>([]);
   const [hackersPollMs, setHackersPollMs] = useState(DEFAULT_HACKERS_POLL_MS);
   const [hackersLoading, setHackersLoading] = useState(false);
   const [hackersError, setHackersError] = useState<string | null>(null);
@@ -118,15 +116,12 @@ export default function App() {
     setHackersError(null);
     try {
       const params = q ? `?q=${encodeURIComponent(q)}` : "";
-      const res = await api<{ hackers: Hacker[] }>(`/api/hackers${params}`);
-      if (!hasHackerLastViewedState()) {
-        seedLastViewedFromHackers(res.hackers);
-      } else {
-        syncNewHackersLastViewed(res.hackers);
-      }
-      setLastViewedMap(getHackerLastViewedMap());
+      const res = await api<{ hackers: Hacker[]; recentHackers: RecentHackerEntry[] }>(
+        `/api/hackers${params}`,
+      );
+      setRecentHackers(res.recentHackers ?? []);
       setHackers(res.hackers);
-      const visible = groupHackersForDropdown(res.hackers, getHackerLastViewedMap()).flatMap(
+      const visible = groupHackersForDropdown(res.hackers, res.recentHackers ?? []).flatMap(
         (g) => g.items,
       );
       if (!selected || !visible.some((h) => h.address === selected)) {
@@ -144,9 +139,14 @@ export default function App() {
     }
   }, [selected]);
 
+  const recentHackerAddresses = useMemo(
+    () => new Set(recentHackers.map((entry) => entry.address)),
+    [recentHackers],
+  );
+
   const hackerDropdownGroups = useMemo(
-    () => groupHackersForDropdown(hackers, lastViewedMap),
-    [hackers, lastViewedMap],
+    () => groupHackersForDropdown(hackers, recentHackers),
+    [hackers, recentHackers],
   );
   const sortedHackers = useMemo(
     () => hackerDropdownGroups.flatMap((g) => g.items),
@@ -164,12 +164,6 @@ export default function App() {
     }, pollMs);
     return () => clearInterval(iv);
   }, [filter, loadHackers, hackersPollMs]);
-
-  useEffect(() => {
-    if (!selected) return;
-    markHackerViewed(selected);
-    setLastViewedMap(getHackerLastViewedMap());
-  }, [selected]);
 
   useEffect(() => {
     api<AppConfig>("/api/config")
@@ -474,7 +468,7 @@ export default function App() {
                 >
                   {group.items.map((h) => (
                     <option key={h.address} value={h.address}>
-                      {formatHackerOptionLabel(h, isHackerUnread(h, lastViewedMap[h.address]))}
+                      {formatHackerOptionLabel(h, isHackerRecent(h.address, recentHackerAddresses))}
                     </option>
                   ))}
                 </optgroup>

@@ -73,7 +73,7 @@ function baseConfig(): AppConfig {
     d1BatchSize: 8,
     syncAddressesPerJob: 5,
     jobCpuGuardMs: 0,
-    deferGraphActivityBump: false,
+    recentHackersLimit: 5,
     jobsPerTickMax: 3,
     queueDepthPerExtraJob: 40,
     queueDrainFirstDepth: 1,

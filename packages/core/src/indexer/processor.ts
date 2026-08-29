@@ -1299,49 +1299,56 @@ export async function processJob(
   job: Job,
   opts?: { jobSubreq?: JobSubrequestBudget; hackers?: Set<string>; cpuGuard?: CpuGuard },
 ): Promise<JobRunStats | undefined> {
-  const payload = JSON.parse(job.payloadJson) as Record<string, unknown>;
-  const jobOpts = { jobSubreq: opts?.jobSubreq, hackers: opts?.hackers, cpuGuard: opts?.cpuGuard };
-  switch (job.type) {
-    case "backfill_hacker_address":
-      return backfillHacker(store, router, config, payload, jobOpts);
-    case "audit_hacker_backfill":
-      await auditHackerBackfill(store, router, config, payload.address as string);
-      break;
-    case "poll_hacker_address":
-      await pollHacker(store, router, config, payload, jobOpts);
-      break;
-    case "poll_downstream_address":
-      await pollDownstream(store, router, config, payload, jobOpts);
-      break;
-    case "expand_downstream":
-      return expandDownstream(store, router, config, payload, jobOpts);
-    case "refresh_live_balance":
-      await refreshBalance(store, router, payload.address as string);
-      break;
-    case "refresh_btc_usd_price": {
-      const { usd, at } = await fetchMempoolBtcUsd(config.mempoolBase, store);
-      await store.setBtcUsdPrice(usd, at);
-      break;
+  let result: JobRunStats | undefined;
+  try {
+    const payload = JSON.parse(job.payloadJson) as Record<string, unknown>;
+    const jobOpts = { jobSubreq: opts?.jobSubreq, hackers: opts?.hackers, cpuGuard: opts?.cpuGuard };
+    switch (job.type) {
+      case "backfill_hacker_address":
+        result = await backfillHacker(store, router, config, payload, jobOpts);
+        break;
+      case "audit_hacker_backfill":
+        await auditHackerBackfill(store, router, config, payload.address as string);
+        break;
+      case "poll_hacker_address":
+        await pollHacker(store, router, config, payload, jobOpts);
+        break;
+      case "poll_downstream_address":
+        await pollDownstream(store, router, config, payload, jobOpts);
+        break;
+      case "expand_downstream":
+        result = await expandDownstream(store, router, config, payload, jobOpts);
+        break;
+      case "refresh_live_balance":
+        await refreshBalance(store, router, payload.address as string);
+        break;
+      case "refresh_btc_usd_price": {
+        const { usd, at } = await fetchMempoolBtcUsd(config.mempoolBase, store);
+        await store.setBtcUsdPrice(usd, at);
+        break;
+      }
+      case "sync_coldcardwatch":
+        await syncColdcardwatch(store, config, payload);
+        break;
+      case "sync_vercel_trackers":
+        await syncVercelTrackers(store, config, payload);
+        break;
+      case "process_tx": {
+        const hackers = opts?.hackers ?? (await getHackerAddressSet(store));
+        await processTxForHackTrace(store, router, payload.txid as string, hackers, {
+          maxGraphEdgesPerTx: config.maxGraphEdgesPerTx > 0 ? config.maxGraphEdgesPerTx : undefined,
+          maxEdgesPerJob: config.maxEdgesPerJob > 0 ? config.maxEdgesPerJob : undefined,
+          cpuGuard: opts?.cpuGuard,
+        });
+        break;
+      }
+      default:
+        throw new Error(`Unknown job type: ${job.type}`);
     }
-    case "sync_coldcardwatch":
-      await syncColdcardwatch(store, config, payload);
-      break;
-    case "sync_vercel_trackers":
-      await syncVercelTrackers(store, config, payload);
-      break;
-    case "process_tx": {
-      const hackers = opts?.hackers ?? (await getHackerAddressSet(store));
-      await processTxForHackTrace(store, router, payload.txid as string, hackers, {
-        maxGraphEdgesPerTx: config.maxGraphEdgesPerTx > 0 ? config.maxGraphEdgesPerTx : undefined,
-        maxEdgesPerJob: config.maxEdgesPerJob > 0 ? config.maxEdgesPerJob : undefined,
-        cpuGuard: opts?.cpuGuard,
-        deferGraphActivityBump: config.deferGraphActivityBump,
-      });
-      break;
-    }
-    default:
-      throw new Error(`Unknown job type: ${job.type}`);
+  } finally {
+    await store.flushRecentHackerActivity(config.recentHackersLimit);
   }
+  return result;
 }
 
 function formatJobDurationMs(ms: number | null): string {

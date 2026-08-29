@@ -18,6 +18,15 @@ import {
   type Job,
   type Transaction,
 } from "./schema.js";
+import {
+  filterRecentHackersByWindow,
+  mergeRecentHackerActivity,
+  parseRecentHackersJson,
+  recentHackersEqual,
+  serializeRecentHackers,
+  type RecentHackerActivityDelta,
+  type RecentHackerEntry,
+} from "./recentHackers.js";
 
 const INGEST_JOB_TYPES = [
   "backfill_hacker_address",
@@ -226,6 +235,7 @@ export class Store {
   private d1BatchSize: number;
   private d1?: D1Binding;
   private subrequestBudget?: StoreOptions["subrequestBudget"];
+  private recentHackerActivityBuffer?: Map<string, RecentHackerActivityDelta>;
 
   constructor(
     public db: Db,
@@ -2228,6 +2238,90 @@ export class Store {
       result.set(seed, [...roots]);
     }
     return result;
+  }
+
+  async getExistingInToHackerEdgeKeys(
+    rows: Array<{ fromAddress: string; toAddress: string; txid: string }>,
+  ): Promise<Set<string>> {
+    const keys = new Set<string>();
+    if (rows.length === 0) return keys;
+    const txids = [...new Set(rows.map((row) => row.txid))];
+    for (const txidChunk of chunkArray(txids, D1_IN_CLAUSE_CHUNK_SIZE)) {
+      const existing = await this.db
+        .select({
+          fromAddress: edges.fromAddress,
+          toAddress: edges.toAddress,
+          txid: edges.txid,
+        })
+        .from(edges)
+        .where(and(inArray(edges.txid, txidChunk), eq(edges.direction, "in_to_hacker")))
+        .all();
+      for (const row of existing) {
+        keys.add(`${row.fromAddress}|${row.toAddress}|${row.txid}`);
+      }
+    }
+    return keys;
+  }
+
+  recordRecentHackerActivity(address: string, delta: RecentHackerActivityDelta): void {
+    if (!address) return;
+    if (!this.recentHackerActivityBuffer) {
+      this.recentHackerActivityBuffer = new Map();
+    }
+    const prev = this.recentHackerActivityBuffer.get(address);
+    const atCandidates = [prev?.at, delta.at].filter((v): v is string => Boolean(v));
+    const at =
+      atCandidates.length === 0
+        ? undefined
+        : atCandidates.reduce((max, cur) => (cur > max ? cur : max));
+    this.recentHackerActivityBuffer.set(address, {
+      victims: (prev?.victims ?? 0) + (delta.victims ?? 0),
+      downstream: (prev?.downstream ?? 0) + (delta.downstream ?? 0),
+      at,
+    });
+  }
+
+  clearRecentHackerActivityBuffer(): void {
+    this.recentHackerActivityBuffer = undefined;
+  }
+
+  async getRecentHackersActivity(windowHours?: number): Promise<RecentHackerEntry[]> {
+    const row = await this.db
+      .select({ json: schedulerState.recentHackersJson })
+      .from(schedulerState)
+      .where(eq(schedulerState.id, 1))
+      .get();
+    const parsed = parseRecentHackersJson(row?.json);
+    if (windowHours != null && windowHours > 0) {
+      return filterRecentHackersByWindow(parsed, windowHours);
+    }
+    return parsed;
+  }
+
+  async flushRecentHackerActivity(limit: number): Promise<boolean> {
+    const buffer = this.recentHackerActivityBuffer;
+    if (!buffer || buffer.size === 0) {
+      this.clearRecentHackerActivityBuffer();
+      return false;
+    }
+
+    const row = await this.db
+      .select({ json: schedulerState.recentHackersJson })
+      .from(schedulerState)
+      .where(eq(schedulerState.id, 1))
+      .get();
+    const existing = parseRecentHackersJson(row?.json);
+    const merged = mergeRecentHackerActivity(existing, buffer, limit);
+    this.clearRecentHackerActivityBuffer();
+
+    if (recentHackersEqual(existing, merged)) return false;
+
+    await this.db
+      .update(schedulerState)
+      .set({ recentHackersJson: serializeRecentHackers(merged) })
+      .where(eq(schedulerState.id, 1))
+      .run();
+    return true;
   }
 
   async bumpHackerGraphActivity(hackerAddresses: string[], at?: string): Promise<void> {

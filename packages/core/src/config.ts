@@ -92,6 +92,8 @@ export interface AppConfig {
   maxGraphDownstream: number;
   /** Hours for recent victim/downstream counts on hacker list. */
   graphActivityWindowHours: number;
+  /** Top N hacker addresses in global recent-activity cache. */
+  recentHackersLimit: number;
   /** Client poll interval for /api/hackers (ms). */
   hackersPollMs: number;
   /** Pause cron/discovery enqueue when pending queue reaches this depth; resume when depth hits 0. */
@@ -148,8 +150,6 @@ export interface AppConfig {
   syncAddressesPerJob: number;
   /** Cumulative sync-CPU budget per job (ms); 0 = disabled. */
   jobCpuGuardMs: number;
-  /** Skip bumpHackerGraphActivity during ingest edge apply (Worker CPU savings). */
-  deferGraphActivityBump: boolean;
 }
 
 let envFileLoaded = false;
@@ -254,6 +254,7 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     maxGraphVictims: Number(env.MAX_GRAPH_VICTIMS ?? 10000),
     maxGraphDownstream: Number(env.MAX_GRAPH_DOWNSTREAM ?? 10000),
     graphActivityWindowHours: Number(env.GRAPH_ACTIVITY_WINDOW_HOURS ?? 168),
+    recentHackersLimit: Math.max(1, Number(env.RECENT_HACKERS_LIMIT ?? 5)),
     hackersPollMs: Math.max(3_600_000, Number(env.HACKERS_POLL_MS ?? 3_600_000)),
     maxQueueDepth: Number(env.MAX_QUEUE_DEPTH ?? 360),
     queueDrainFirstDepth: Number(env.QUEUE_DRAIN_FIRST_DEPTH ?? 1),
@@ -284,7 +285,6 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     d1BatchSize: Number(env.D1_BATCH_SIZE ?? 8),
     syncAddressesPerJob: Number(env.SYNC_ADDRESSES_PER_JOB ?? 5),
     jobCpuGuardMs: Number(env.JOB_CPU_GUARD_MS ?? 0),
-    deferGraphActivityBump: env.DEFER_GRAPH_ACTIVITY_BUMP === "1",
   };
 }
 

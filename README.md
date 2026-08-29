@@ -120,11 +120,12 @@ Fair scheduling keeps graph ingest ahead of maintenance work. Cloudflare cron ru
 | `MAX_GRAPH_EDGES_PER_TX` | Cap fanout edge computation per tx (production `50`) |
 | `MAX_SUBREQUESTS_PER_JOB` | D1/fetch cap per job (production `6`) |
 | `JOB_CPU_GUARD_MS` | Cumulative sync-CPU budget per job; early continuation (production `7`) |
-| `DEFER_GRAPH_ACTIVITY_BUMP` | Skip `bumpHackerGraphActivity` during ingest apply (production `1`) |
+| `RECENT_HACKERS_LIMIT` | Top N hacker addresses in global recent-activity cache (default `5`) |
+| `GRAPH_ACTIVITY_WINDOW_HOURS` | Hide recent-activity entries older than this on `/api/hackers` (default `168`) |
 
 **Validate in `wrangler tail`:** healthy ticks end with `[cron] tick done`; jobs show `[job] done continued=true traceEdge=X/Y edgesApplied=N` on fanout traces. Missing `[cron] tick done` after `[job] start` indicates a hard CPU kill mid-job. Optional `[job] done … cpuGuard=1` means the job stopped early via `JOB_CPU_GUARD_MS` and enqueued a continuation.
 
-**CPU tuning playbook** (if kills persist after deploy): (1) lower `MAX_EDGES_PER_JOB` (e.g. 3 → 2), (2) lower `MAX_GRAPH_EDGES_PER_TX` (e.g. 50 → 30), (3) confirm `DEFER_GRAPH_ACTIVITY_BUMP=1`, (4) adjust `JOB_CPU_GUARD_MS` down if guard trips too late or up if jobs stop too early. Workers Free caps throughput; these settings maximize what a single cron Worker can do without a Paid plan or external processor.
+**CPU tuning playbook** (if kills persist after deploy): (1) lower `MAX_EDGES_PER_JOB` (e.g. 3 → 2), (2) lower `MAX_GRAPH_EDGES_PER_TX` (e.g. 50 → 30), (3) adjust `JOB_CPU_GUARD_MS` down if guard trips too late or up if jobs stop too early. Workers Free caps throughput; these settings maximize what a single cron Worker can do without a Paid plan or external processor.
 
 - **Reserved ingest slot:** each tick runs a pending `backfill_hacker_address`, `audit_hacker_backfill`, or `expand_downstream` job before polls/balance/price (continuation jobs preferred; includes partial trace apply via `traceEdgeIndex`).
 - **Enqueue caps (per cron tick):** code defaults are `CRAWL_ENQUEUE_PER_CRON=3`, `DOWNSTREAM_POLL_ENQUEUE_PER_CRON=2`, `POLL_HACKER_ENQUEUE_PER_CRON=1` (round-robin). **Production (Workers Free)** pins lower caps in `wrangler.toml` `[env.production.vars]`: `CRAWL_ENQUEUE_PER_CRON=1`, `DOWNSTREAM_POLL_ENQUEUE_PER_CRON=1`, `HACKER_MAINTENANCE_EVERY_N_CRONS=40`, `BALANCE_REFRESH_INTERVAL_SEC=900`, `DOWNSTREAM_POLL_INTERVAL_SEC=1200`.

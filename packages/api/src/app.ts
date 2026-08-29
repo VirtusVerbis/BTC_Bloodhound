@@ -134,6 +134,7 @@ export function createApp(store: Store, config: AppConfig) {
       graphPageSizeDefault: config.graphPageSizeDefault,
       graphPageSizeMax: config.graphPageSizeMax,
       graphActivityWindowHours: config.graphActivityWindowHours,
+      recentHackersLimit: config.recentHackersLimit,
       hackersPollMs: config.hackersPollMs,
     }),
   );
@@ -141,18 +142,24 @@ export function createApp(store: Store, config: AppConfig) {
   app.get("/api/hackers", async (c) => {
     const q = c.req.query("q");
     const hackers = await store.listHackers(q, true);
+    const recentHackers = await store.getRecentHackersActivity(config.graphActivityWindowHours);
+    const recentByAddress = new Map(recentHackers.map((entry) => [entry.address, entry]));
     return c.json({
-      hackers: hackers.map((h) => ({
-        address: h.address,
-        label: h.label,
-        source: h.source,
-        totalReceivedSats: h.totalReceivedSats,
-        liveBalanceSats: h.liveBalanceSats,
-        liveBalanceAt: h.liveBalanceAt,
-        lastGraphActivityAt: h.lastGraphActivityAt ?? null,
-        recentVictimCount: 0,
-        recentDownstreamCount: 0,
-      })),
+      recentHackers,
+      hackers: hackers.map((h) => {
+        const recent = recentByAddress.get(h.address);
+        return {
+          address: h.address,
+          label: h.label,
+          source: h.source,
+          totalReceivedSats: h.totalReceivedSats,
+          liveBalanceSats: h.liveBalanceSats,
+          liveBalanceAt: h.liveBalanceAt,
+          lastGraphActivityAt: h.lastGraphActivityAt ?? null,
+          recentVictimCount: recent?.victims ?? 0,
+          recentDownstreamCount: recent?.downstream ?? 0,
+        };
+      }),
     });
   });
 

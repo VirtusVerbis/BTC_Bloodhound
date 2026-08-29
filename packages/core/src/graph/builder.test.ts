@@ -532,7 +532,7 @@ describe("buildGraphL1Page pagination", () => {
 });
 
 describe("applyHackTraceEdgesChunk graph activity", () => {
-  it("bumps hacker when a new victim is indexed", async () => {
+  it("records recent hacker activity when a new victim is indexed", async () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);
     const store = new Store(db);
@@ -546,11 +546,20 @@ describe("applyHackTraceEdgesChunk graph activity", () => {
     const tx = makeTx([{ address: "v1", value: 10_000 }], [{ address: "hack1", value: 10_000 }]);
     const computed = computeHackTraceEdges(tx, new Set(["hack1"]));
     await applyHackTraceEdgesChunk(store, { txid: tx.txid, blockTime: "2026-01-01T00:00:00.000Z" }, computed);
+    await store.flushRecentHackerActivity(5);
 
-    expect((await store.getAddress("hack1"))?.lastGraphActivityAt).toBeTruthy();
+    const recent = await store.getRecentHackersActivity();
+    expect(recent).toEqual([
+      {
+        address: "hack1",
+        at: "2026-01-01T00:00:00.000Z",
+        victims: 1,
+        downstream: 0,
+      },
+    ]);
   });
 
-  it("does not bump hacker when victim already exists", async () => {
+  it("records activity when victim already exists but edge is new", async () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);
     const store = new Store(db);
@@ -561,12 +570,20 @@ describe("applyHackTraceEdgesChunk graph activity", () => {
       hopFromHacker: 0,
     });
     await store.upsertAddress({ address: "v1", role: "victim", source: "derived" });
-    await store.bumpHackerGraphActivity(["hack1"], "2024-01-01T00:00:00.000Z");
 
     const tx = makeTx([{ address: "v1", value: 10_000 }], [{ address: "hack1", value: 10_000 }]);
     const computed = computeHackTraceEdges(tx, new Set(["hack1"]));
-    await applyHackTraceEdgesChunk(store, { txid: tx.txid, blockTime: "2026-01-01T00:00:00.000Z" }, computed);
+    await applyHackTraceEdgesChunk(store, { txid: tx.txid, blockTime: "2026-02-01T00:00:00.000Z" }, computed);
+    await store.flushRecentHackerActivity(5);
 
-    expect((await store.getAddress("hack1"))?.lastGraphActivityAt).toBe("2024-01-01T00:00:00.000Z");
+    const recent = await store.getRecentHackersActivity();
+    expect(recent).toEqual([
+      {
+        address: "hack1",
+        at: "2026-02-01T00:00:00.000Z",
+        victims: 1,
+        downstream: 0,
+      },
+    ]);
   });
 });

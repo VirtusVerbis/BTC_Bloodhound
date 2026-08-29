@@ -77,7 +77,7 @@ function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     queueSoftThrottleDepth: 80,
     jobsPerTickMax: 3,
     jobCpuGuardMs: 0,
-    deferGraphActivityBump: false,
+    recentHackersLimit: 5,
     ...overrides,
   };
 }

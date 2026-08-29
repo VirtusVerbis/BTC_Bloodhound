@@ -231,6 +231,9 @@ export function runMigrations(sqlite: Database.Database): void {
   if (!schedulerCols.some((c) => c.name === "d1_write_retry_after_at")) {
     sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN d1_write_retry_after_at TEXT`);
   }
+  if (!schedulerCols.some((c) => c.name === "recent_hackers_json")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN recent_hackers_json TEXT`);
+  }
 
   const syncCols = sqlite.prepare("PRAGMA table_info(sync_state)").all() as Array<{ name: string }>;
   if (!syncCols.some((c) => c.name === "backfill_state_json")) {
@@ -304,6 +307,7 @@ export function runMigrations(sqlite: Database.Database): void {
 
 export * from "./schema.js";
 export * from "./store.js";
+export * from "./recentHackers.js";
 // D1 helper is also available via `@cointrace/db/d1` (avoids bundling better-sqlite3 in Workers).
 export { createD1Store, instrumentD1Binding, type D1Binding, type D1Db, type D1SubrequestSink } from "./d1.js";
 export {

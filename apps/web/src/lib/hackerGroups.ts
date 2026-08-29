@@ -10,6 +10,13 @@ export interface Hacker {
   recentDownstreamCount?: number;
 }
 
+export interface RecentHackerEntry {
+  address: string;
+  at: string;
+  victims: number;
+  downstream: number;
+}
+
 export interface HackerGroup {
   source: string;
   label: string;
@@ -39,10 +46,8 @@ export function formatSourceLabel(source: string): string {
   return SOURCE_LABELS[source] ?? source;
 }
 
-export function isHackerUnread(hacker: Hacker, lastViewedAt: string | undefined): boolean {
-  if (!hacker.lastGraphActivityAt) return false;
-  if (!lastViewedAt) return false;
-  return hacker.lastGraphActivityAt > lastViewedAt;
+export function isHackerRecent(address: string, recentAddresses: ReadonlySet<string>): boolean {
+  return recentAddresses.has(address);
 }
 
 function activitySuffix(hacker: Hacker): string {
@@ -55,11 +60,11 @@ function activitySuffix(hacker: Hacker): string {
   return ` · ${parts.join(", ")}`;
 }
 
-export function formatHackerOptionLabel(hacker: Hacker, unread: boolean): string {
+export function formatHackerOptionLabel(hacker: Hacker, recent: boolean): string {
   const name = (hacker.label ?? hacker.address.slice(0, 12)) + "…";
   const btc = `(${satsToBtc(hacker.totalReceivedSats)} BTC)`;
-  const suffix = unread ? activitySuffix(hacker) : "";
-  return unread ? `● ${name} ${btc}${suffix}` : `${name} ${btc}`;
+  const suffix = recent ? activitySuffix(hacker) : "";
+  return recent ? `● ${name} ${btc}${suffix}` : `${name} ${btc}`;
 }
 
 export function groupHackersBySource(hackers: Hacker[]): HackerGroup[] {
@@ -96,25 +101,26 @@ export function groupHackersBySource(hackers: Hacker[]): HackerGroup[] {
 
 export function groupHackersForDropdown(
   hackers: Hacker[],
-  lastViewedMap: Record<string, string>,
+  recentHackers: RecentHackerEntry[],
 ): HackerDropdownGroup[] {
-  const unread = hackers
-    .filter((h) => isHackerUnread(h, lastViewedMap[h.address]))
-    .sort((a, b) => (b.lastGraphActivityAt ?? "").localeCompare(a.lastGraphActivityAt ?? ""));
+  const recentSorted = [...recentHackers].sort((a, b) => b.at.localeCompare(a.at));
+  const recentAddresses = new Set(recentSorted.map((entry) => entry.address));
+  const recentItems = recentSorted
+    .map((entry) => hackers.find((h) => h.address === entry.address))
+    .filter((h): h is Hacker => h != null);
 
-  const unreadAddresses = new Set(unread.map((h) => h.address));
   const groups: HackerDropdownGroup[] = [];
 
-  if (unread.length > 0) {
+  if (recentItems.length > 0) {
     groups.push({
       source: RECENT_GROUP_SOURCE,
       label: "Recently updated",
-      items: unread,
+      items: recentItems,
     });
   }
 
   for (const group of groupHackersBySource(hackers)) {
-    const items = group.items.filter((h) => !unreadAddresses.has(h.address));
+    const items = group.items.filter((h) => !recentAddresses.has(h.address));
     if (items.length === 0) continue;
     groups.push({
       source: group.source,

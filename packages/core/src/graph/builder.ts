@@ -540,7 +540,6 @@ export interface HackTraceApplyMeta {
 export interface HackTraceApplyChunkOptions {
   startEdgeIndex?: number;
   maxEdges?: number;
-  deferGraphActivityBump?: boolean;
   cpuGuard?: CpuGuard;
 }
 
@@ -665,35 +664,43 @@ export async function applyHackTraceEdgesChunk(
   }
 
   if (edgeRows.length > 0) {
+    const inToHackerRows = edgeRows.filter((row) => row.direction === "in_to_hacker");
+    const existingInToHackerKeys = await store.getExistingInToHackerEdgeKeys(inToHackerRows);
     await store.upsertEdgesBatch(edgeRows);
-  }
 
-  const hackersToBump = new Set<string>();
-  for (const edge of slice) {
-    if (edge.direction === "in_to_hacker" && newVictimAddresses.has(edge.fromAddress)) {
-      hackersToBump.add(edge.toAddress);
+    const activityAt = meta.blockTime ?? new Date().toISOString();
+    for (const edge of slice) {
+      if (edge.direction === "in_to_hacker" && newVictimAddresses.has(edge.fromAddress)) {
+        store.recordRecentHackerActivity(edge.toAddress, { victims: 1, at: activityAt });
+      }
     }
-  }
-  if (!opts?.deferGraphActivityBump) {
-    const downstreamFromAddresses = [
-      ...new Set(
-        slice
-          .filter(
-            (edge) =>
-              edge.direction === "out_from_hacker" && newDownstreamAddresses.has(edge.toAddress),
-          )
-          .map((edge) => edge.fromAddress),
-      ),
-    ];
-    if (downstreamFromAddresses.length > 0) {
-      const rootsBySpender = await store.findRootHackersForSpenders(downstreamFromAddresses);
-      for (const roots of rootsBySpender.values()) {
-        for (const root of roots) hackersToBump.add(root);
+    for (const edge of slice) {
+      if (edge.direction !== "in_to_hacker" || newVictimAddresses.has(edge.fromAddress)) continue;
+      const key = `${edge.fromAddress}|${edge.toAddress}|${meta.txid}`;
+      if (!existingInToHackerKeys.has(key)) {
+        store.recordRecentHackerActivity(edge.toAddress, { victims: 1, at: activityAt });
       }
     }
   }
-  if (hackersToBump.size > 0) {
-    await store.bumpHackerGraphActivity([...hackersToBump]);
+
+  const downstreamFromAddresses = [
+    ...new Set(
+      slice
+        .filter(
+          (edge) =>
+            edge.direction === "out_from_hacker" && newDownstreamAddresses.has(edge.toAddress),
+        )
+        .map((edge) => edge.fromAddress),
+    ),
+  ];
+  if (downstreamFromAddresses.length > 0) {
+    const activityAt = meta.blockTime ?? new Date().toISOString();
+    const rootsBySpender = await store.findRootHackersForSpenders(downstreamFromAddresses);
+    for (const roots of rootsBySpender.values()) {
+      for (const root of roots) {
+        store.recordRecentHackerActivity(root, { downstream: 1, at: activityAt });
+      }
+    }
   }
 
   const nextEdgeIndex = endIndex;
@@ -718,7 +725,6 @@ export async function processTxForHackTrace(
     traceEdgeTotal?: number;
     traceEdgesFlat?: HackTraceEdgeDraft[];
     cpuGuard?: CpuGuard;
-    deferGraphActivityBump?: boolean;
   } = {},
 ): Promise<{
   traceComplete: boolean;
@@ -775,7 +781,6 @@ export async function processTxForHackTrace(
     {
       startEdgeIndex: traceEdgeIndex,
       maxEdges: maxEdgesPerJob,
-      deferGraphActivityBump: options.deferGraphActivityBump,
       cpuGuard,
     },
   );
