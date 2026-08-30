@@ -56,6 +56,7 @@ function minimalConfig(): AppConfig {
     graphActivityWindowHours: 168,
     recentHackersLimit: 5,
     hackersPollMs: 3600000,
+    hackersPollMsSidecar: 60000,
     maxQueueDepth: 360,
     queueDrainFirstDepth: 1,
     jobsPerTickMax: 3,

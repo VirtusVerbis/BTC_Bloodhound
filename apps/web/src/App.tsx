@@ -56,10 +56,12 @@ interface AppConfig {
   graphActivityWindowHours?: number;
   recentHackersLimit?: number;
   hackersPollMs?: number;
+  cronIndexerPaused?: boolean;
 }
 
 const DEFAULT_STATS_POLL_MS = 900_000;
 const DEFAULT_HACKERS_POLL_MS = 3_600_000;
+const MIN_HACKERS_POLL_MS = 60_000;
 const DEFAULT_GRAPH_PAGE_SIZE = 500;
 const SYNC_POLL_MS = 15_000;
 const DEFER_SECONDARY_POLLS_MS = 3_000;
@@ -158,7 +160,7 @@ export default function App() {
   }, [filter, loadHackers]);
 
   useEffect(() => {
-    const pollMs = Math.max(DEFAULT_HACKERS_POLL_MS, hackersPollMs);
+    const pollMs = Math.max(MIN_HACKERS_POLL_MS, hackersPollMs);
     const iv = setInterval(() => {
       loadHackers(filter).catch(console.error);
     }, pollMs);
@@ -176,7 +178,11 @@ export default function App() {
         if (cfg.statsPollMs != null && Number.isFinite(cfg.statsPollMs) && cfg.statsPollMs >= 1000) {
           setStatsPollMs(Math.floor(cfg.statsPollMs));
         }
-        if (cfg.hackersPollMs != null && Number.isFinite(cfg.hackersPollMs) && cfg.hackersPollMs >= DEFAULT_HACKERS_POLL_MS) {
+        if (
+          cfg.hackersPollMs != null &&
+          Number.isFinite(cfg.hackersPollMs) &&
+          cfg.hackersPollMs >= MIN_HACKERS_POLL_MS
+        ) {
           setHackersPollMs(Math.floor(cfg.hackersPollMs));
         }
         const victimsCap =

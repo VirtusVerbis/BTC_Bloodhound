@@ -123,6 +123,7 @@ export function summarizeJobPayload(type: string, payload: Record<string, unknow
         pendingTxidsCount: Array.isArray(pendingTxids) ? pendingTxids.length : 0,
         chainCursor: payload.chainCursor ?? null,
         pagesExhausted: payload.pagesExhausted ?? null,
+        pagesFetched: payload.pagesFetched ?? null,
         processedIndex: payload.processedIndex ?? null,
       };
     }
@@ -150,6 +151,7 @@ export function summarizeJobPayload(type: string, payload: Record<string, unknow
         processedIndex: payload.processedIndex ?? null,
         chainCursor: payload.chainCursor ?? null,
         pagesExhausted: payload.pagesExhausted ?? null,
+        pagesFetched: payload.pagesFetched ?? null,
         traceEdgeIndex: payload.traceEdgeIndex ?? null,
         traceEdgesPending: payload.traceEdgesPending === true,
       };

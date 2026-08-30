@@ -27,6 +27,8 @@ const KEY_LABELS: ReadonlyArray<readonly [string, string]> = [
   ["skipNonCritical=", "\x1b[38;5;220m"],
   ["pendingTxidsCount=", "\x1b[92m"],
   ["processedIndex=", "\x1b[93m"],
+  ["progress=", "\x1b[38;5;226m"],
+  ["pagesFetched=", "\x1b[38;5;39m"],
   ["traceEdgesPending=", "\x1b[38;5;183m"],
   ["traceEdgeIndex=", "\x1b[38;5;183m"],
   ["edgesApplied=", "\x1b[38;5;120m"],
@@ -47,6 +49,9 @@ const KEY_LABELS: ReadonlyArray<readonly [string, string]> = [
   ["maint=", "\x1b[38;5;218m"],
   ["btc=", "\x1b[38;5;229m"],
   ["traceEdge=", "\x1b[38;5;183m"],
+  ["apiBackoff=", "\x1b[38;5;208m"],
+  ["jobsSinceStart=", "\x1b[38;5;147m"],
+  ["elapsed=", GRAY],
   ["id=", "\x1b[36m"],
   ["type=", "\x1b[33m"],
   ["address=", "\x1b[35m"],
@@ -55,23 +60,19 @@ const KEY_LABELS: ReadonlyArray<readonly [string, string]> = [
   ["reason=", "\x1b[96m"],
   ["duration=", "\x1b[32m"],
   ["queue=", "\x1b[94m"],
+  ["pending=", "\x1b[94m"],
+  ["running=", "\x1b[38;5;39m"],
 ];
+
+const KEY_LABEL_COLOR = new Map<string, string>(KEY_LABELS);
 
 const SIDECAR_ERROR_PREFIXES = ["[job] fail", "[job] defer", "[sidecar] error"] as const;
 
-const SIDECAR_LINE_PREFIXES: ReadonlyArray<string> = [
-  "[cron] schedule done",
-  "[cron] tick done",
-  "[cron] tick plan",
-  "[cron] tick skipped d1_quota",
-  "[cron] tick start",
-  "[cron] schedule done",
-  "[job] start",
-  "[job] done",
+/** `[sidecar]` lines keep a white prefix; job/cron lines use prod prefix colors. */
+const SIDECAR_NATIVE_PREFIXES: ReadonlyArray<string> = [
   "[sidecar] heartbeat",
   "[sidecar] remote D1 connected",
   "[sidecar] tick lease cleared",
-  "[cron]",
   "[sidecar]",
 ];
 
@@ -80,8 +81,34 @@ function colorToken(text: string, token: string, color: string): string {
   return text.split(token).join(`${color}${token}${RESET}`);
 }
 
-function colorizeNormalTokens(rest: string): string {
+function applyLinePrefixColors(line: string): string {
+  for (const [prefix, color] of LINE_PREFIXES) {
+    if (line.startsWith(prefix)) {
+      return `${color}${prefix}${RESET}${line.slice(prefix.length)}`;
+    }
+  }
+  return line;
+}
+
+function applyKeyLabelColors(line: string): string {
+  let out = line;
+  for (const [label, color] of KEY_LABELS) {
+    out = colorToken(out, label, color);
+  }
+  return out;
+}
+
+function colorizeSidecarKeyValues(rest: string, errorLine: boolean): string {
   if (!rest) return rest;
+  if (errorLine) {
+    const errorIdx = rest.indexOf("error=");
+    if (errorIdx >= 0) {
+      const before = rest.slice(0, errorIdx);
+      const errorPart = rest.slice(errorIdx);
+      return colorizeSidecarKeyValues(before, false) + `${RED}${errorPart}${RESET}`;
+    }
+  }
+
   const tokens = rest.trimStart().split(/ +/);
   let out = rest.startsWith(" ") ? " " : "";
   for (let i = 0; i < tokens.length; i++) {
@@ -94,22 +121,14 @@ function colorizeNormalTokens(rest: string): string {
     }
     const label = tok.slice(0, eq + 1);
     const value = tok.slice(eq + 1);
-    out += `${WHITE}${label}${RESET}${GRAY}${value}${RESET}`;
-  }
-  return out;
-}
-
-function colorizeRestKeyValues(rest: string, errorLine: boolean): string {
-  if (!rest) return rest;
-  if (errorLine) {
-    const errorIdx = rest.indexOf("error=");
-    if (errorIdx >= 0) {
-      const before = rest.slice(0, errorIdx);
-      const errorPart = rest.slice(errorIdx);
-      return colorizeNormalTokens(before) + `${RED}${errorPart}${RESET}`;
+    const color = KEY_LABEL_COLOR.get(label);
+    if (color) {
+      out += `${color}${label}${RESET}${GRAY}${value}${RESET}`;
+    } else {
+      out += `${WHITE}${label}${RESET}${GRAY}${value}${RESET}`;
     }
   }
-  return colorizeNormalTokens(rest);
+  return out;
 }
 
 export function colorizeSidecarLogLine(line: string): string {
@@ -119,18 +138,22 @@ export function colorizeSidecarLogLine(line: string): string {
       if (prefix === "[sidecar] error") {
         return `${RED}${prefix}${rest}${RESET}`;
       }
-      return `${RED}${prefix}${RESET}${colorizeRestKeyValues(rest, true)}`;
+      return `${RED}${prefix}${RESET}${colorizeSidecarKeyValues(rest, true)}`;
     }
   }
 
-  for (const prefix of SIDECAR_LINE_PREFIXES) {
+  for (const prefix of SIDECAR_NATIVE_PREFIXES) {
     if (line.startsWith(prefix)) {
       const rest = line.slice(prefix.length);
-      return `${WHITE}${prefix}${RESET}${colorizeRestKeyValues(rest, false)}`;
+      return `${WHITE}${prefix}${RESET}${colorizeSidecarKeyValues(rest, false)}`;
     }
   }
 
-  return colorizeRestKeyValues(line, false);
+  if (line.startsWith("[job]") || line.startsWith("[cron]")) {
+    return applyKeyLabelColors(applyLinePrefixColors(line));
+  }
+
+  return colorizeSidecarKeyValues(line, false);
 }
 
 export function colorizeIndexerLogLine(
@@ -141,15 +164,5 @@ export function colorizeIndexerLogLine(
   if (!enabled) return line;
   if (mode === "sidecar") return colorizeSidecarLogLine(line);
 
-  let out = line;
-  for (const [prefix, color] of LINE_PREFIXES) {
-    if (out.startsWith(prefix)) {
-      out = `${color}${prefix}${RESET}${out.slice(prefix.length)}`;
-      break;
-    }
-  }
-  for (const [label, color] of KEY_LABELS) {
-    out = colorToken(out, label, color);
-  }
-  return out;
+  return applyKeyLabelColors(applyLinePrefixColors(line));
 }

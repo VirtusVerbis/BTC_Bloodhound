@@ -97,6 +97,8 @@ export interface AppConfig {
   recentHackersLimit: number;
   /** Client poll interval for /api/hackers (ms). */
   hackersPollMs: number;
+  /** Client poll interval while cron_indexer_paused=1 (sidecar drain). */
+  hackersPollMsSidecar: number;
   /** Pause cron/discovery enqueue when pending queue reaches this depth; resume when depth hits 0. */
   maxQueueDepth: number;
   /** Run jobs before schedule when queue depth is at or above this (default 1). */
@@ -261,6 +263,7 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     graphActivityWindowHours: Number(env.GRAPH_ACTIVITY_WINDOW_HOURS ?? 168),
     recentHackersLimit: Math.max(1, Number(env.RECENT_HACKERS_LIMIT ?? 5)),
     hackersPollMs: Math.max(3_600_000, Number(env.HACKERS_POLL_MS ?? 3_600_000)),
+    hackersPollMsSidecar: Math.max(60_000, Number(env.HACKERS_POLL_MS_SIDECAR ?? 60_000)),
     maxQueueDepth: Number(env.MAX_QUEUE_DEPTH ?? 360),
     queueDrainFirstDepth: Number(env.QUEUE_DRAIN_FIRST_DEPTH ?? 1),
     jobsPerTickMax: Number(env.JOBS_PER_TICK_MAX ?? 3),

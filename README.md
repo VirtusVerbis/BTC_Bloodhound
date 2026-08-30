@@ -87,7 +87,9 @@ node apps/indexer/dist/index.js run --remote           # Ctrl+C to stop
 node apps/indexer/dist/index.js resume-cron --remote
 ```
 
-`run --remote` loads `config/sidecar.env` by default (see `config/sidecar.env.example`). Defaults: `RATE_LIMIT_MS=8000`, `MAX_CHAIN_CALLS_PER_JOB=3`, verbose logging with **sidecar** color mode (white labels, grey values, red errors), and a **30s heartbeat** (`[sidecar] heartbeat queue=… pending=… running=…`). Pass `--no-job-details` / `--no-log-color` to disable. Refuses to start unless cron is paused (unless `--allow-cron-active`).
+`run --remote` loads `config/sidecar.env` by default (see `config/sidecar.env.example`). Tuned defaults: `RATE_LIMIT_MS=6500`, `BACKFILL_TXS_PER_JOB=10`, `JOBS_PER_TICK=2`, `CRON_INTERVAL_SEC=300`, `MAX_CHAIN_CALLS_PER_JOB=3`. Verbose logging uses **sidecar** color mode: white `[sidecar]` lines; `[job]`/`[cron]` lines use prod cron label colors with highlighted progress fields (`pendingTxidsCount`, `processedIndex`, `progress`, `pagesFetched`, `apiBackoff`). A **30s heartbeat** reports `queue`, `pending`, `running`, and `apiBackoff`. Pass `--no-job-details` / `--no-log-color` to disable. Refuses to start unless cron is paused (unless `--allow-cron-active`). After changing `sidecar.env`, restart the sidecar and watch `apiBackoff` in heartbeats; roll `RATE_LIMIT_MS` back to `8000` on any 429.
+
+While `cron_indexer_paused=1`, production `/api/config` returns `hackersPollMs: 60000` so the hacker dropdown **"Recently updated"** group refreshes every **1 minute** (requires Worker + web deploy). After `resume-cron --remote`, polling returns to **1 hour** automatically. Refresh the browser tab after pausing/resuming cron to pick up the new interval immediately.
 
 Esplora/Mempool 429 backoff is stored in prod `scheduler_state` (`esplora_retry_after_at`, `mempool_retry_after_at`) — shared with cron when you resume. Sidecar uses `sleepOnRateLimit: true` so ticks wait on provider pacing instead of failing immediately.
 

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Job } from "@cointrace/db";
 import { RateLimitNotReadyError } from "../chain/router.js";
-import { formatJobStartLine, logCronDetail, logJobDefer, logJobFail } from "./jobLog.js";
+import { formatJobDoneLine, formatJobStartLine, logCronDetail, logJobDefer, logJobFail } from "./jobLog.js";
 
 function makeJob(overrides: Partial<Job> & Pick<Job, "type" | "payloadJson">): Job {
   return {
@@ -54,6 +54,56 @@ describe("jobLog", () => {
     expect(line).toContain("pendingTxidsCount=1");
     expect(line).toContain("processedIndex=");
     expect(line).toContain("chainCursor=cursor");
+  });
+
+  it("formatJobStartLine includes progress and pagesFetched when present", () => {
+    const line = formatJobStartLine(
+      makeJob({
+        type: "expand_downstream",
+        payloadJson: JSON.stringify({
+          address: "bc1qtest",
+          pendingTxids: Array.from({ length: 25 }, (_, i) => `tx${i}`),
+          processedIndex: 18,
+          pagesExhausted: false,
+          pagesFetched: 3,
+        }),
+      }),
+    );
+    expect(line).toContain("pendingTxidsCount=25");
+    expect(line).toContain("processedIndex=18");
+    expect(line).toContain("progress=18/25");
+    expect(line).toContain("pagesFetched=3");
+  });
+
+  it("formatJobDoneLine includes progress suffix for ingest jobs", () => {
+    const line = formatJobDoneLine(
+      makeJob({
+        type: "expand_downstream",
+        payloadJson: JSON.stringify({
+          address: "bc1qtest",
+          pendingTxids: Array.from({ length: 25 }, (_, i) => `tx${i}`),
+          processedIndex: 19,
+        }),
+      }),
+      "3.5s",
+      310,
+      { continued: true },
+    );
+    expect(line).toContain("continued=true");
+    expect(line).toContain("progress=19/25");
+    expect(line).toContain("processedIndex=19");
+  });
+
+  it("formatJobDoneLine omits progress for non-ingest jobs", () => {
+    const line = formatJobDoneLine(
+      makeJob({
+        type: "refresh_live_balance",
+        payloadJson: JSON.stringify({ address: "bc1qtest" }),
+      }),
+      "1.2s",
+      42,
+    );
+    expect(line).not.toContain("progress=");
   });
 
   it("logCronDetail does not log when disabled", () => {

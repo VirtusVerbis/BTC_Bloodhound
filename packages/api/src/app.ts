@@ -9,6 +9,7 @@ import {
   buildVictimGraph,
   isRebuildActive,
   normalizeBitcoinAddress,
+  resolveHackersPollMs,
 } from "@cointrace/core";
 import {
   clampInt,
@@ -125,8 +126,9 @@ export function createApp(store: Store, config: AppConfig) {
     return next();
   });
 
-  app.get("/api/config", (c) =>
-    c.json({
+  app.get("/api/config", async (c) => {
+    const cronIndexerPaused = await store.isCronIndexerPaused();
+    return c.json({
       minEdgeSats: config.minEdgeSats,
       statsPollMs: config.btcUsdPriceRefreshIntervalSec * 1000,
       maxGraphVictims: config.maxGraphVictims,
@@ -135,9 +137,10 @@ export function createApp(store: Store, config: AppConfig) {
       graphPageSizeMax: config.graphPageSizeMax,
       graphActivityWindowHours: config.graphActivityWindowHours,
       recentHackersLimit: config.recentHackersLimit,
-      hackersPollMs: config.hackersPollMs,
-    }),
-  );
+      hackersPollMs: resolveHackersPollMs(config, cronIndexerPaused),
+      cronIndexerPaused,
+    });
+  });
 
   app.get("/api/hackers", async (c) => {
     const q = c.req.query("q");

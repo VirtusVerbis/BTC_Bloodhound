@@ -3,6 +3,7 @@ import { D1QuotaExceededError } from "@cointrace/db";
 import { RateLimitNotReadyError } from "../chain/router.js";
 import { summarizeJobPayload } from "../ops/queue.js";
 import { colorizeIndexerLogLine, type IndexerLogColorMode } from "./logColor.js";
+import { isIngestJobType } from "./jobClass.js";
 import type { JobWeightTier, JobWorkPhase } from "./jobWeight.js";
 import { formatJobRunStatsSuffix, type JobRunStats } from "./tickStats.js";
 
@@ -56,17 +57,35 @@ function formatDetailSuffix(details: Record<string, unknown>): string {
 
 function formatProgressSuffix(details: Record<string, unknown>): string {
   const parts: string[] = [];
+  const pendingCount =
+    typeof details.pendingTxidsCount === "number" ? details.pendingTxidsCount : 0;
+  const processedIndex =
+    typeof details.processedIndex === "number" ? details.processedIndex : null;
   if ("processedIndex" in details) {
     parts.push(`processedIndex=${details.processedIndex ?? 0}`);
+  }
+  if (pendingCount > 0 && processedIndex != null) {
+    parts.push(`progress=${processedIndex}/${pendingCount}`);
   }
   const cursor = abbreviateCursor(details.chainCursor);
   if (cursor != null) parts.push(`chainCursor=${cursor}`);
   if (details.pagesExhausted != null) parts.push(`pagesExhausted=${details.pagesExhausted}`);
+  if (details.pagesExhausted === false && typeof details.pagesFetched === "number") {
+    parts.push(`pagesFetched=${details.pagesFetched}`);
+  }
   if (details.traceEdgesPending === true) parts.push("traceEdgesPending=true");
   if (typeof details.traceEdgeIndex === "number") {
     parts.push(`traceEdgeIndex=${details.traceEdgeIndex}`);
   }
   return parts.length > 0 ? ` ${parts.join(" ")}` : "";
+}
+
+function jobTypeShowsProgress(type: string): boolean {
+  return (
+    isIngestJobType(type) ||
+    type === "poll_hacker_address" ||
+    type === "poll_downstream_address"
+  );
 }
 
 function emitLog(fn: (message: string) => void, message: string, color = false, colorMode?: IndexerLogColorMode): void {
@@ -95,7 +114,10 @@ export function formatJobDoneLine(
   runStats?: JobRunStats,
   workSubreq?: number,
 ): string {
-  return `[job] done id=${job.id} type=${job.type} duration=${duration} queue=${queueDepth}${formatJobRunStatsSuffix(runStats, workSubreq)}`;
+  const progressSuffix = jobTypeShowsProgress(job.type)
+    ? formatProgressSuffix(summarizeJobPayload(job.type, parsePayload(job)))
+    : "";
+  return `[job] done id=${job.id} type=${job.type} duration=${duration} queue=${queueDepth}${formatJobRunStatsSuffix(runStats, workSubreq)}${progressSuffix}`;
 }
 
 export function logJobStart(job: Job, opts?: JobLogOpts): void {
