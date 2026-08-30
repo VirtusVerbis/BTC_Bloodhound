@@ -27,6 +27,7 @@ export * from "./util/hash.js";
 export * from "./util/address.js";
 export * from "./util/timingSafe.js";
 export * from "./util/error.js";
+export * from "./util/timeout.js";
 export * from "./util/d1Transport.js";
 export * from "./indexer/tickLease.js";
 export * from "./ops/hackers.js";

@@ -97,7 +97,7 @@ Esplora/Mempool 429 backoff is stored in prod `scheduler_state` (`esplora_retry_
 
 **Do not** run sidecar while cron is actively ticking (default guard). **Do not** enqueue ops jobs during sidecar without understanding overlap.
 
-Transient D1 errors during tick or lease cleanup are logged (with underlying `cause` when available) and retried on the next tick. On wrangler remote-proxy transport failures, the sidecar auto-reopens prod D1 (`dispose` + reconnect) without a manual restart. If reconnect keeps failing, logs show `[sidecar] remote D1 reconnect failed` with exponential backoff (5s–60s); restart `run --remote` and check `cron-status --remote` as a last resort.
+Transient D1 errors during tick or lease cleanup are logged (with underlying `cause` when available) and retried on the next tick. On wrangler remote-proxy transport failures, the sidecar auto-reopens prod D1 (`dispose` + reconnect) without a manual restart — **never during an active tick** (deferred to tick `finally`). Dispose/open each time out at 30s. A tick watchdog (~`TICK_BUDGET_MS` + 10s lease skew + 30s) abandons hung ticks, reconnects, and reclaims orphaned `running` jobs. If reconnect keeps failing, logs show `[sidecar] remote D1 reconnect failed` with exponential backoff (5s–60s); restart `run --remote` and check `cron-status --remote` as a last resort.
 
 ### Dev & deploy
 

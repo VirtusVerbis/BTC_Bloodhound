@@ -243,4 +243,73 @@ describe("runRemoteSidecar resilience", () => {
 
     expect(process.exit).not.toHaveBeenCalledWith(1);
   }, 12_000);
+
+  it("defers reconnect on tick transport error until finally", async () => {
+    const transportErr = new Error("Failed query: select", {
+      cause: new Error("D1_ERROR: internal error; reference = abc"),
+    });
+    const store = makeStore();
+    mockRemoteHandle(store);
+
+    let tickCalls = 0;
+    runIndexerTickMock.mockImplementation(async () => {
+      tickCalls++;
+      if (tickCalls === 1) throw transportErr;
+      return { jobsProcessed: 0 };
+    });
+
+    let acquireCalls = 0;
+    store.tryAcquireTickLease.mockImplementation(async () => {
+      acquireCalls++;
+      if (acquireCalls >= 2) {
+        process.emit("SIGTERM");
+        await new Promise((r) => setImmediate(r));
+      }
+      return true;
+    });
+
+    const promise = runRemoteSidecar(minimalConfig(), ["run", "--remote"]);
+    await vi.waitFor(() => expect(runIndexerTickMock).toHaveBeenCalled());
+    await vi.waitFor(() => expect(reconnectRemoteProductionStoreMock).toHaveBeenCalled());
+    await vi.waitFor(() => expect(store.clearTickLease).toHaveBeenCalled());
+    await promise;
+
+    expect(reconnectRemoteProductionStoreMock).toHaveBeenCalled();
+    expect(process.exit).not.toHaveBeenCalledWith(1);
+  });
+
+  it("watchdog abandons hung tick and reclaims running jobs", async () => {
+    vi.useFakeTimers();
+    const config = minimalConfig();
+    config.tickBudgetMs = 50;
+
+    const store = makeStore({
+      resetRunningJobs: vi.fn(async (staleMs?: number) => {
+        if (staleMs === 0) return { reclaimed: 2, deferred: 0 };
+        return { reclaimed: 0, deferred: 0 };
+      }),
+    });
+    mockRemoteHandle(store);
+    runIndexerTickMock.mockImplementation(() => new Promise(() => {}));
+
+    let acquireCalls = 0;
+    store.tryAcquireTickLease.mockImplementation(async () => {
+      acquireCalls++;
+      if (acquireCalls >= 2) {
+        process.emit("SIGTERM");
+        await new Promise((r) => setImmediate(r));
+        return false;
+      }
+      return true;
+    });
+
+    const promise = runRemoteSidecar(config, ["run", "--remote"]);
+    await vi.advanceTimersByTimeAsync(50 + 10_000 + 30_000 + 2_000);
+    await vi.waitFor(() => expect(reconnectRemoteProductionStoreMock).toHaveBeenCalled());
+    await vi.waitFor(() => expect(store.resetRunningJobs).toHaveBeenCalledWith(0));
+    await vi.runOnlyPendingTimersAsync();
+    await promise;
+
+    vi.useRealTimers();
+  }, 20_000);
 });

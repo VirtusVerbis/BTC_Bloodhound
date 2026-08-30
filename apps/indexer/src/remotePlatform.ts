@@ -2,7 +2,9 @@ import path from "node:path";
 import { getPlatformProxy } from "wrangler";
 import { createD1Store, type D1Binding } from "@cointrace/db/d1";
 import type { Store } from "@cointrace/db";
-import type { AppConfig } from "@cointrace/core";
+import { withTimeout, type AppConfig } from "@cointrace/core";
+
+export const RECONNECT_OP_TIMEOUT_MS = 30_000;
 
 export interface RemoteProductionStore {
   store: Store;
@@ -63,6 +65,8 @@ export async function reconnectRemoteProductionStore(
   config: AppConfig,
   current: RemoteProductionStore | null,
 ): Promise<RemoteProductionStore> {
-  if (current) await current.dispose();
-  return openRemoteProductionStore(config);
+  if (current) {
+    await withTimeout(current.dispose(), RECONNECT_OP_TIMEOUT_MS, "dispose remote D1 proxy");
+  }
+  return withTimeout(openRemoteProductionStore(config), RECONNECT_OP_TIMEOUT_MS, "open remote D1 proxy");
 }

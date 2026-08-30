@@ -3,10 +3,10 @@ import {
   ChainRouter,
   clearTickLeaseSafe,
   formatErrorMessage,
-  isD1TransportError,
   runIndexerTick,
   setIndexerLogColorMode,
   TICK_LEASE_SKEW_MS,
+  type IndexerLogColorMode,
 } from "@cointrace/core";
 import type { Store } from "@cointrace/db";
 import {
@@ -14,6 +14,7 @@ import {
   reconnectRemoteProductionStore,
   type RemoteProductionStore,
 } from "./remotePlatform.js";
+import { ReconnectCoordinator } from "./remoteReconnect.js";
 import {
   emitSidecarHeartbeat,
   logSidecar,
@@ -25,6 +26,7 @@ import {
 const RECONNECT_BACKOFF_INITIAL_MS = 5_000;
 const RECONNECT_BACKOFF_MAX_MS = 60_000;
 const LOOP_SLEEP_MS = 1_000;
+const TICK_WATCHDOG_EXTRA_MS = 30_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -40,6 +42,30 @@ function openSidecarChainRouter(store: Store, config: AppConfig): ChainRouter {
       apiThresholdMaxSec: config.apiThresholdMaxSec,
     },
   });
+}
+
+type TickRaceResult =
+  | { ok: true; jobsProcessed: number }
+  | { ok: false; watchdog: true };
+
+async function runIndexerTickWithWatchdog(
+  store: Store,
+  router: ChainRouter,
+  config: AppConfig,
+  opts: {
+    schedule: boolean;
+    jobDetails: boolean;
+    logColor: boolean;
+    logColorMode?: IndexerLogColorMode;
+  },
+  watchdogMs: number,
+): Promise<TickRaceResult> {
+  const tickPromise = runIndexerTick(store, router, config, opts).then((result) => ({
+    ok: true as const,
+    jobsProcessed: result.jobsProcessed,
+  }));
+  const watchdogPromise = sleep(watchdogMs).then(() => ({ ok: false as const, watchdog: true as const }));
+  return Promise.race([tickPromise, watchdogPromise]);
 }
 
 export async function runRemoteSidecar(config: AppConfig, argv: string[]): Promise<void> {
@@ -60,6 +86,10 @@ export async function runRemoteSidecar(config: AppConfig, argv: string[]): Promi
   let reconnectBackoffMs = RECONNECT_BACKOFF_INITIAL_MS;
   let reconnectInFlight: Promise<void> | null = null;
 
+  const reconnectCoord = new ReconnectCoordinator({
+    onDeferred: () => logSidecar("[sidecar] reconnect deferred (tick in progress)", logColor, logColorMode),
+  });
+
   const clearLeaseSafe = async (target: Store) => {
     await clearTickLeaseSafe(target, (msg) =>
       logSidecarError(`[sidecar] clearTickLease failed: ${msg}`, logColor, logColorMode),
@@ -71,6 +101,7 @@ export async function runRemoteSidecar(config: AppConfig, argv: string[]): Promi
       await reconnectInFlight;
       return;
     }
+    const tickAbandoned = reconnectCoord.consumeTickAbandoned();
     reconnectInFlight = (async () => {
       try {
         remoteHandle = await reconnectRemoteProductionStore(config, remoteHandle);
@@ -78,6 +109,16 @@ export async function runRemoteSidecar(config: AppConfig, argv: string[]): Promi
         router = openSidecarChainRouter(store, config);
         reconnectBackoffMs = RECONNECT_BACKOFF_INITIAL_MS;
         logSidecar("[sidecar] remote D1 reconnected", logColor, logColorMode);
+        if (tickAbandoned) {
+          const { reclaimed } = await store.resetRunningJobs(0);
+          if (reclaimed > 0) {
+            logSidecar(
+              `Reclaimed ${reclaimed} orphaned running job(s) after tick watchdog`,
+              logColor,
+              logColorMode,
+            );
+          }
+        }
       } catch (err) {
         logSidecarErrorFrom("[sidecar] remote D1 reconnect failed: ", err, logColor, logColorMode);
         await sleep(reconnectBackoffMs);
@@ -89,9 +130,16 @@ export async function runRemoteSidecar(config: AppConfig, argv: string[]): Promi
     await reconnectInFlight;
   };
 
-  const handleTransportError = async (err: unknown): Promise<void> => {
-    if (!isD1TransportError(err)) return;
-    await reconnectRemoteStore();
+  const requestReconnect = async (err: unknown): Promise<void> => {
+    if (reconnectCoord.requestReconnect(err)) {
+      await reconnectRemoteStore();
+    }
+  };
+
+  const flushReconnectIfPending = async (): Promise<void> => {
+    if (reconnectCoord.consumePendingReconnect()) {
+      await reconnectRemoteStore();
+    }
   };
 
   const shutdown = async (signal: string) => {
@@ -156,12 +204,14 @@ export async function runRemoteSidecar(config: AppConfig, argv: string[]): Promi
     let jobsSinceStart = 0;
     const startTime = Date.now();
     const heartbeatMs = config.sidecarHeartbeatSec * 1000;
+    const tickWatchdogMs = config.tickBudgetMs + TICK_LEASE_SKEW_MS + TICK_WATCHDOG_EXTRA_MS;
+
     heartbeatTimer = setInterval(() => {
-      if (!store) return;
+      if (!store || reconnectCoord.tickInProgress) return;
       emitSidecarHeartbeat(store, jobsSinceStart, Date.now() - startTime, logColor, logColorMode).catch(
-        async (err) => {
+        (err) => {
           logSidecarErrorFrom("[sidecar] error heartbeat=", err, logColor, logColorMode);
-          await handleTransportError(err);
+          void requestReconnect(err);
         },
       );
     }, heartbeatMs);
@@ -179,7 +229,7 @@ export async function runRemoteSidecar(config: AppConfig, argv: string[]): Promi
         acquired = await store.tryAcquireTickLease(leaseMs);
       } catch (err) {
         logSidecarErrorFrom("[sidecar] error acquireLease=", err, logColor, logColorMode);
-        await handleTransportError(err);
+        await requestReconnect(err);
         await sleep(LOOP_SLEEP_MS);
         continue;
       }
@@ -189,24 +239,39 @@ export async function runRemoteSidecar(config: AppConfig, argv: string[]): Promi
         continue;
       }
 
+      reconnectCoord.tickInProgress = true;
       try {
         const now = Date.now();
         const due = now - lastCron >= config.cronIntervalSec * 1000;
-        const { jobsProcessed } = await runIndexerTick(store, router, config, {
-          schedule: due,
-          jobDetails,
-          logColor,
-          logColorMode,
-        });
-        jobsSinceStart += jobsProcessed;
-        if (due) lastCron = now;
-        if (jobsProcessed === 0) await sleep(LOOP_SLEEP_MS);
+        const tickResult = await runIndexerTickWithWatchdog(
+          store,
+          router,
+          config,
+          { schedule: due, jobDetails, logColor, logColorMode },
+          tickWatchdogMs,
+        );
+
+        if (!tickResult.ok) {
+          logSidecar(
+            `[sidecar] tick watchdog exceeded ms=${tickWatchdogMs}`,
+            logColor,
+            logColorMode,
+          );
+          reconnectCoord.markTickAbandoned();
+        } else {
+          jobsSinceStart += tickResult.jobsProcessed;
+          if (due) lastCron = now;
+          if (tickResult.jobsProcessed === 0) await sleep(LOOP_SLEEP_MS);
+        }
       } catch (err) {
         logSidecarErrorFrom("[sidecar] error tick=", err, logColor, logColorMode);
         if (err instanceof Error && err.stack) {
           console.error(err.stack);
         }
+        reconnectCoord.requestReconnect(err);
       } finally {
+        reconnectCoord.tickInProgress = false;
+        await flushReconnectIfPending();
         await clearLeaseSafe(store);
       }
     }
