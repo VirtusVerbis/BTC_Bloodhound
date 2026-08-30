@@ -2,10 +2,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "@cointrace/core";
 
 const openRemoteProductionStoreMock = vi.fn();
+const reconnectRemoteProductionStoreMock = vi.fn();
+const runIndexerTickMock = vi.fn();
 
 vi.mock("./remotePlatform.js", () => ({
   openRemoteProductionStore: (...args: unknown[]) => openRemoteProductionStoreMock(...args),
+  reconnectRemoteProductionStore: (...args: unknown[]) => reconnectRemoteProductionStoreMock(...args),
 }));
+
+vi.mock("@cointrace/core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@cointrace/core")>();
+  return {
+    ...actual,
+    runIndexerTick: (...args: unknown[]) => runIndexerTickMock(...args),
+  };
+});
 
 const { runRemoteSidecar } = await import("./runRemote.js");
 
@@ -90,29 +101,146 @@ function minimalConfig(): AppConfig {
   } as AppConfig;
 }
 
+function makeStore(overrides: Record<string, unknown> = {}) {
+  return {
+    isCronIndexerPaused: vi.fn(async () => true),
+    resetRunningJobs: vi.fn(async () => ({ reclaimed: 0 })),
+    tryAcquireTickLease: vi.fn(),
+    clearTickLease: vi.fn(async () => {}),
+    getQueueDepth: vi.fn(async () => 0),
+    getActiveJobSummary: vi.fn(async () => []),
+    getSchedulerState: vi.fn(async () => ({})),
+    ...overrides,
+  };
+}
+
+function mockRemoteHandle(store: ReturnType<typeof makeStore>) {
+  const dispose = vi.fn(async () => {});
+  openRemoteProductionStoreMock.mockResolvedValue({ store, dispose });
+  reconnectRemoteProductionStoreMock.mockImplementation(async () => {
+    const handle = { store, dispose };
+    return handle;
+  });
+  return { store, dispose };
+}
+
+function stopAfterNextAcquire(tryAcquireTickLease: ReturnType<typeof vi.fn>) {
+  let acquireCalls = 0;
+  tryAcquireTickLease.mockImplementation(async () => {
+    acquireCalls++;
+    if (acquireCalls >= 2) {
+      process.emit("SIGTERM");
+      await new Promise((r) => setImmediate(r));
+    }
+    return acquireCalls === 1;
+  });
+}
+
 describe("runRemoteSidecar guard", () => {
   beforeEach(() => {
     openRemoteProductionStoreMock.mockReset();
+    reconnectRemoteProductionStoreMock.mockReset();
+    runIndexerTickMock.mockReset();
+    runIndexerTickMock.mockResolvedValue({ jobsProcessed: 1 });
     vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
       throw new Error(`exit:${code ?? 0}`);
     }) as typeof process.exit);
+    vi.spyOn(global, "setInterval").mockImplementation(() => 0 as unknown as ReturnType<typeof setInterval>);
+    vi.spyOn(global, "clearInterval").mockImplementation(() => {});
   });
 
   it("refuses to start when cron is not paused", async () => {
-    const dispose = vi.fn(async () => {});
-    const store = {
-      isCronIndexerPaused: vi.fn(async () => false),
-      resetRunningJobs: vi.fn(),
-      tryAcquireTickLease: vi.fn(),
-      clearTickLease: vi.fn(),
-    };
-    openRemoteProductionStoreMock.mockResolvedValue({
-      store,
-      dispose,
-    });
+    const { store, dispose } = mockRemoteHandle(
+      makeStore({ isCronIndexerPaused: vi.fn(async () => false) }),
+    );
 
     await expect(runRemoteSidecar(minimalConfig(), ["run", "--remote"])).rejects.toThrow("exit:1");
     expect(dispose).toHaveBeenCalledOnce();
     expect(store.tryAcquireTickLease).not.toHaveBeenCalled();
   });
+});
+
+describe("runRemoteSidecar resilience", () => {
+  beforeEach(() => {
+    openRemoteProductionStoreMock.mockReset();
+    reconnectRemoteProductionStoreMock.mockReset();
+    runIndexerTickMock.mockReset();
+    runIndexerTickMock.mockResolvedValue({ jobsProcessed: 1 });
+    vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`exit:${code ?? 0}`);
+    }) as typeof process.exit);
+    vi.spyOn(global, "setInterval").mockImplementation(() => 0 as unknown as ReturnType<typeof setInterval>);
+    vi.spyOn(global, "clearInterval").mockImplementation(() => {});
+  });
+
+  it("continues when clearTickLease rejects after a successful tick", async () => {
+    const store = makeStore({
+      clearTickLease: vi.fn(async () => {
+        throw new Error("Failed query: update scheduler_state");
+      }),
+    });
+    mockRemoteHandle(store);
+    stopAfterNextAcquire(store.tryAcquireTickLease as ReturnType<typeof vi.fn>);
+
+    const promise = runRemoteSidecar(minimalConfig(), ["run", "--remote"]);
+    await vi.waitFor(() => expect(runIndexerTickMock).toHaveBeenCalled());
+    await vi.waitFor(() => expect(store.clearTickLease).toHaveBeenCalled());
+    await promise;
+
+    expect(process.exit).not.toHaveBeenCalledWith(1);
+  });
+
+  it("reconnects on transport error during lease acquire and continues", async () => {
+    const transportErr = new Error("Failed query: update scheduler_state", {
+      cause: new Error("D1_ERROR: internal error; reference = v0dri"),
+    });
+    const store = makeStore();
+    mockRemoteHandle(store);
+
+    let acquireCalls = 0;
+    store.tryAcquireTickLease.mockImplementation(async () => {
+      acquireCalls++;
+      if (acquireCalls === 1) throw transportErr;
+      if (acquireCalls >= 3) {
+        process.emit("SIGTERM");
+        await new Promise((r) => setImmediate(r));
+      }
+      return acquireCalls === 2;
+    });
+
+    const promise = runRemoteSidecar(minimalConfig(), ["run", "--remote"]);
+    await vi.waitFor(() => expect(reconnectRemoteProductionStoreMock).toHaveBeenCalled());
+    await vi.waitFor(() => expect(runIndexerTickMock).toHaveBeenCalled());
+    await promise;
+
+    expect(process.exit).not.toHaveBeenCalledWith(1);
+  });
+
+  it("backs off and stays alive when reconnect fails", async () => {
+    const transportErr = new Error("Failed query: select", {
+      cause: new Error("D1_ERROR: internal error; reference = abc"),
+    });
+    const store = makeStore();
+    mockRemoteHandle(store);
+    reconnectRemoteProductionStoreMock.mockRejectedValue(new Error("reconnect failed"));
+
+    let acquireCalls = 0;
+    store.tryAcquireTickLease.mockImplementation(async () => {
+      acquireCalls++;
+      if (acquireCalls === 1) throw transportErr;
+      if (acquireCalls === 2) {
+        process.emit("SIGTERM");
+        await new Promise((r) => setImmediate(r));
+      }
+      return false;
+    });
+
+    const promise = runRemoteSidecar(minimalConfig(), ["run", "--remote"]);
+    await vi.waitFor(() => expect(reconnectRemoteProductionStoreMock).toHaveBeenCalled(), {
+      timeout: 8_000,
+    });
+    await promise;
+
+    expect(process.exit).not.toHaveBeenCalledWith(1);
+  }, 12_000);
 });

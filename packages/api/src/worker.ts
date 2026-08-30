@@ -2,6 +2,7 @@ import { createD1Store } from "@cointrace/db/d1";
 import {
   assertProductionSecrets,
   ChainRouter,
+  clearTickLeaseSafe,
   loadConfig,
   logCronError,
   runIndexerTick,
@@ -70,26 +71,6 @@ function buildApp(env: WorkerEnv) {
   return { config, store, router, app };
 }
 
-async function clearTickLeaseLogged(
-  store: { clearTickLease(): Promise<void> },
-  logColor: boolean,
-): Promise<void> {
-  try {
-    await store.clearTickLease();
-  } catch (error) {
-    const err = error as Error & { cause?: unknown };
-    logCronError(`[cron] clearTickLease failed: ${err.message}`, logColor);
-    if (err.cause != null) {
-      logCronError(`[cron] clearTickLease cause: ${String(err.cause)}`, logColor);
-      if (err.cause instanceof Error && err.cause.stack) {
-        logCronError(`[cron] clearTickLease cause stack: ${err.cause.stack}`, logColor);
-      }
-    } else if (err.stack) {
-      logCronError(`[cron] clearTickLease stack: ${err.stack}`, logColor);
-    }
-  }
-}
-
 function withSecurityHeaders(res: Response): Response {
   const headers = new Headers(res.headers);
   headers.set("X-Content-Type-Options", "nosniff");
@@ -143,7 +124,9 @@ const worker = {
         jobDetails: config.indexerJobDetails,
       });
     } finally {
-      await clearTickLeaseLogged(store, config.indexerLogColor);
+      await clearTickLeaseSafe(store, (msg) =>
+        logCronError(`[cron] clearTickLease failed: ${msg}`, config.indexerLogColor),
+      );
     }
   },
 };

@@ -58,3 +58,11 @@ export async function openRemoteProductionStore(config: AppConfig): Promise<Remo
     },
   };
 }
+
+export async function reconnectRemoteProductionStore(
+  config: AppConfig,
+  current: RemoteProductionStore | null,
+): Promise<RemoteProductionStore> {
+  if (current) await current.dispose();
+  return openRemoteProductionStore(config);
+}

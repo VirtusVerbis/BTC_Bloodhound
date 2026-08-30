@@ -1,6 +1,6 @@
 import type { Store } from "@cointrace/db";
 import type { AppConfig } from "@cointrace/core";
-import { colorizeIndexerLogLine, type IndexerLogColorMode } from "@cointrace/core";
+import { colorizeIndexerLogLine, formatErrorMessage, type IndexerLogColorMode } from "@cointrace/core";
 
 function emitSidecarLog(
   fn: (message: string) => void,
@@ -17,6 +17,15 @@ export function logSidecar(message: string, color: boolean, mode: IndexerLogColo
 
 export function logSidecarError(message: string, color: boolean, mode: IndexerLogColorMode): void {
   emitSidecarLog(console.error, message, color, mode);
+}
+
+export function logSidecarErrorFrom(
+  prefix: string,
+  err: unknown,
+  color: boolean,
+  mode: IndexerLogColorMode,
+): void {
+  logSidecarError(`${prefix}${formatErrorMessage(err)}`, color, mode);
 }
 
 function formatElapsed(ms: number): string {
