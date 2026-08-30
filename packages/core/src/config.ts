@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import dotenv from "dotenv";
+import type { IndexerLogColorMode } from "./indexer/logColor.js";
 
 export const JOB_PRIORITY = {
   PROCESS_TX_REBUILD: 11,
@@ -110,6 +111,10 @@ export interface AppConfig {
   indexerJobDetails: boolean;
   /** ANSI-colorize indexer log prefixes and key labels in console output. */
   indexerLogColor: boolean;
+  /** Log color scheme: default (rainbow labels) or sidecar (white/grey, red errors). */
+  indexerLogColorMode: IndexerLogColorMode;
+  /** Sidecar heartbeat interval in seconds. */
+  sidecarHeartbeatSec: number;
   /** Defer ingest jobs after this many consecutive RateLimitNotReadyError failures. */
   jobDeferAfterAttempts: number;
   /** How long deferred ingest jobs stay out of the claim queue (seconds). */
@@ -263,6 +268,8 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     queueSoftThrottleDepth: Number(env.QUEUE_SOFT_THROTTLE_DEPTH ?? 80),
     indexerJobDetails: env.INDEXER_JOB_DETAILS === "1",
     indexerLogColor: env.INDEXER_LOG_COLOR === "1",
+    indexerLogColorMode: env.INDEXER_LOG_COLOR_MODE === "sidecar" ? "sidecar" : "default",
+    sidecarHeartbeatSec: Math.max(5, Number(env.SIDECAR_HEARTBEAT_SEC ?? 30)),
     jobDeferAfterAttempts: Number(env.JOB_DEFER_AFTER_ATTEMPTS ?? 20),
     jobDeferSec: Number(env.JOB_DEFER_SEC ?? 86400),
     subrequestLimitPerInvocation: Number(env.SUBREQUEST_LIMIT_PER_INVOCATION ?? 0),

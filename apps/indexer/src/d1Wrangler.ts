@@ -510,3 +510,58 @@ WHERE status IN ('pending', 'running')
     edgesRemoved,
   };
 }
+
+export interface CronStatusSnapshot {
+  cronIndexerPaused: boolean;
+  tickLeaseUntil: string | null;
+  queueDepth: number;
+  pending: number;
+  running: number;
+  apiBackoff: string;
+}
+
+function resolveApiBackoffFromRow(row: Row): string {
+  const now = Date.now();
+  const esplora = row.esplora_retry_after_at != null ? String(row.esplora_retry_after_at) : null;
+  const mempool = row.mempool_retry_after_at != null ? String(row.mempool_retry_after_at) : null;
+  if (esplora && new Date(esplora).getTime() > now) return "esplora";
+  if (mempool && new Date(mempool).getTime() > now) return "mempool";
+  return "none";
+}
+
+export function pauseCronRemote(client: D1WranglerClient): void {
+  client.execute("UPDATE scheduler_state SET cron_indexer_paused = 1 WHERE id = 1;");
+}
+
+export function resumeCronRemote(client: D1WranglerClient): void {
+  client.execute("UPDATE scheduler_state SET cron_indexer_paused = 0 WHERE id = 1;");
+}
+
+export function getCronStatusRemote(client: D1WranglerClient): CronStatusSnapshot {
+  const sched = client.query(
+    "SELECT cron_indexer_paused, tick_lease_until, esplora_retry_after_at, mempool_retry_after_at FROM scheduler_state WHERE id = 1 LIMIT 1;",
+  );
+  const row = sched[0] ?? {};
+  const counts = client.query(
+    "SELECT status, COUNT(*) AS c FROM jobs WHERE status IN ('pending','running') GROUP BY status;",
+  );
+  let pending = 0;
+  let running = 0;
+  for (const r of counts) {
+    if (r.status === "pending") pending = Number(r.c ?? 0);
+    if (r.status === "running") running = Number(r.c ?? 0);
+  }
+  const runnable = client.query(
+    "SELECT COUNT(*) AS c FROM jobs WHERE status = 'pending' AND run_after <= datetime('now');",
+  );
+  const queueDepth = Number(runnable[0]?.c ?? 0);
+
+  return {
+    cronIndexerPaused: asBool(row.cron_indexer_paused),
+    tickLeaseUntil: row.tick_lease_until != null ? String(row.tick_lease_until) : null,
+    queueDepth,
+    pending,
+    running,
+    apiBackoff: resolveApiBackoffFromRow(row),
+  };
+}

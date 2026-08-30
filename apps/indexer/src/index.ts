@@ -29,15 +29,25 @@ import {
   addHackerRemote,
   clearQueueRemote,
   D1WranglerClient,
+  getCronStatusRemote,
   listQueueRemote,
+  pauseCronRemote,
   pruneInvalidAddressesRemote,
   removeHackerRemote,
+  resumeCronRemote,
 } from "./d1Wrangler.js";
+import { runRemoteSidecar } from "./runRemote.js";
+import { formatCronStatusSummary, readCronStatusFromStore } from "./sidecarLog.js";
 
-const config = loadConfig();
 const argv = process.argv.slice(2);
 const cmd = argv[0] ?? "run";
 const remote = argv.includes("--remote");
+
+if (cmd === "run" && remote && !process.env.DOTENV_CONFIG_PATH?.trim()) {
+  process.env.DOTENV_CONFIG_PATH = path.resolve(process.cwd(), "config/sidecar.env");
+}
+
+const config = loadConfig();
 
 function flagValue(flag: string): string | undefined {
   const idx = argv.indexOf(flag);
@@ -215,6 +225,38 @@ async function main() {
     );
     return;
   }
+  if (cmd === "pause-cron") {
+    if (remote) {
+      const client = remoteClient();
+      pauseCronRemote(client);
+      console.log(formatCronStatusSummary(getCronStatusRemote(client)));
+    } else {
+      const store = openLocalStore();
+      await store.setCronIndexerPaused(true);
+      console.log(formatCronStatusSummary(await readCronStatusFromStore(store)));
+    }
+    return;
+  }
+  if (cmd === "resume-cron") {
+    if (remote) {
+      const client = remoteClient();
+      resumeCronRemote(client);
+      console.log(formatCronStatusSummary(getCronStatusRemote(client)));
+    } else {
+      const store = openLocalStore();
+      await store.setCronIndexerPaused(false);
+      console.log(formatCronStatusSummary(await readCronStatusFromStore(store)));
+    }
+    return;
+  }
+  if (cmd === "cron-status") {
+    if (remote) {
+      console.log(formatCronStatusSummary(getCronStatusRemote(remoteClient())));
+    } else {
+      console.log(formatCronStatusSummary(await readCronStatusFromStore(openLocalStore())));
+    }
+    return;
+  }
   if (cmd === "re-backfill-hackers") {
     const store = openLocalStore();
     const router = openChainRouter(store);
@@ -274,6 +316,10 @@ async function main() {
     return;
   }
   if (cmd === "run") {
+    if (remote) {
+      await runRemoteSidecar(config, argv);
+      return;
+    }
     const store = openLocalStore();
     const router = openChainRouter(store);
     const jobDetails = argv.includes("--job-details") || config.indexerJobDetails;

@@ -284,6 +284,19 @@ export class Store {
     return true;
   }
 
+  async setCronIndexerPaused(paused: boolean): Promise<void> {
+    await this.db
+      .update(schedulerState)
+      .set({ cronIndexerPaused: paused ? 1 : 0 })
+      .where(eq(schedulerState.id, 1))
+      .run();
+  }
+
+  async isCronIndexerPaused(): Promise<boolean> {
+    const state = await this.getSchedulerState();
+    return (state?.cronIndexerPaused ?? 0) !== 0;
+  }
+
   async setQueueSchedulingPaused(paused: boolean): Promise<void> {
     await this.db
       .update(schedulerState)
@@ -1541,6 +1554,7 @@ export class Store {
     d1ReadRetryAfterAt?: string | null;
     d1WriteRetryAfterAt?: string | null;
     queueSchedulingPaused?: number;
+    cronIndexerPaused?: number;
     backfillHealAuditIndex?: number;
     hackerPollIndex?: number;
     maintenanceCronCounter?: number;

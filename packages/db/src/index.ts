@@ -234,6 +234,9 @@ export function runMigrations(sqlite: Database.Database): void {
   if (!schedulerCols.some((c) => c.name === "recent_hackers_json")) {
     sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN recent_hackers_json TEXT`);
   }
+  if (!schedulerCols.some((c) => c.name === "cron_indexer_paused")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN cron_indexer_paused INTEGER NOT NULL DEFAULT 0`);
+  }
 
   const syncCols = sqlite.prepare("PRAGMA table_info(sync_state)").all() as Array<{ name: string }>;
   if (!syncCols.some((c) => c.name === "backfill_state_json")) {

@@ -107,6 +107,7 @@ export const schedulerState = sqliteTable("scheduler_state", {
   d1ReadRetryAfterAt: text("d1_read_retry_after_at"),
   d1WriteRetryAfterAt: text("d1_write_retry_after_at"),
   recentHackersJson: text("recent_hackers_json"),
+  cronIndexerPaused: integer("cron_indexer_paused").notNull().default(0),
 });
 
 export const rateLimits = sqliteTable("rate_limits", {

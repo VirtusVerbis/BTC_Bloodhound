@@ -128,6 +128,8 @@ const worker = {
 
   async scheduled(_event: unknown, env: WorkerEnv): Promise<void> {
     const { store, router, config } = buildIndexer(env);
+    if (await store.isCronIndexerPaused()) return;
+
     const leaseMs = config.tickBudgetMs + TICK_LEASE_SKEW_MS;
     const acquired = await store.tryAcquireTickLease(leaseMs);
     if (!acquired) return;

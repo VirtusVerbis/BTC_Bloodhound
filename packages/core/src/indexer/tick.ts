@@ -3,6 +3,7 @@ import type { AppConfig } from "../config.js";
 import type { ChainRouter } from "../chain/router.js";
 import { scheduleBtcUsdPriceRefresh, scheduleDownstreamCrawl } from "./crawl.js";
 import { logCronDetail } from "./jobLog.js";
+import type { IndexerLogColorMode } from "./logColor.js";
 import { processJobs } from "./processor.js";
 import {
   createSubrequestBudget,
@@ -22,6 +23,7 @@ export interface IndexerTickOptions {
   schedule?: boolean;
   jobDetails?: boolean;
   logColor?: boolean;
+  logColorMode?: IndexerLogColorMode;
 }
 
 /** Extra lease time beyond tickBudgetMs so clearTickLease can run after the budget. */
@@ -43,6 +45,7 @@ async function runSchedulePhase(
   budget: SubrequestBudget,
   jobDetails: boolean,
   logColor: boolean,
+  logColorMode?: IndexerLogColorMode,
 ): Promise<number> {
   const maintCounter = (await store.getSchedulerState())?.maintenanceCronCounter ?? 0;
   const reserve = scheduleSubrequestReserve({
@@ -59,6 +62,7 @@ async function runSchedulePhase(
     jobDetails,
     formatCronScheduleDoneLine({ ...crawlStats, btc }, budget, schedSubreq),
     logColor,
+    logColorMode,
   );
   return schedSubreq;
 }
@@ -77,6 +81,7 @@ export async function runIndexerTick(
   const schedule = opts?.schedule ?? true;
   const jobDetails = opts?.jobDetails ?? false;
   const logColor = opts?.logColor ?? config.indexerLogColor;
+  const logColorMode = opts?.logColorMode ?? config.indexerLogColorMode;
   const startedAt = Date.now();
   let jobsProcessed = 0;
   let tickStop: TickStopReason = "idle";
@@ -88,12 +93,12 @@ export async function runIndexerTick(
 
   await store.clearExpiredD1QuotaPause();
   if (await store.isD1QuotaBlocked()) {
-    logCronDetail(jobDetails, "[cron] tick skipped d1_quota", logColor);
+    logCronDetail(jobDetails, "[cron] tick skipped d1_quota", logColor, logColorMode);
     store.setSubrequestBudget(undefined);
     return { scheduled: schedule, jobsProcessed: 0 };
   }
 
-  logCronDetail(jobDetails, "[cron] tick start", logColor);
+  logCronDetail(jobDetails, "[cron] tick start", logColor, logColorMode);
   try {
     const queueDepth = await store.getQueueDepth();
     const continuationPending = schedule ? await store.hasPendingIngestContinuation() : false;
@@ -116,12 +121,14 @@ export async function runIndexerTick(
         queue: queueDepth,
       }),
       logColor,
+      logColorMode,
     );
     const deadlineMs = Date.now() + config.tickBudgetMs;
     const jobOpts = {
       deadlineMs,
       jobDetails,
       logColor,
+      logColorMode,
       subrequestBudget: budget,
       jobsPerTick: jobsCap,
     };
@@ -132,17 +139,18 @@ export async function runIndexerTick(
       tickStop = jobResult.stopReason;
 
       if (schedule && budget.remaining() > config.scheduleSubrequestReserve) {
-        schedSubreq = await runSchedulePhase(store, router, config, budget, jobDetails, logColor);
+        schedSubreq = await runSchedulePhase(store, router, config, budget, jobDetails, logColor, logColorMode);
       } else if (schedule) {
         logCronDetail(
           jobDetails,
           `[cron] schedule skipped drainFirst=true budget=low`,
           logColor,
+          logColorMode,
         );
       }
     } else {
       if (schedule) {
-        schedSubreq = await runSchedulePhase(store, router, config, budget, jobDetails, logColor);
+        schedSubreq = await runSchedulePhase(store, router, config, budget, jobDetails, logColor, logColorMode);
       }
       const jobResult = await processJobs(store, router, config, jobOpts);
       jobsProcessed = jobResult.processed;
@@ -172,6 +180,7 @@ export async function runIndexerTick(
         jobsCapReason,
       }),
       logColor,
+      logColorMode,
     );
   }
 }

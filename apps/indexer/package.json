@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "@cointrace/core": "workspace:*",
-    "@cointrace/db": "workspace:*"
+    "@cointrace/db": "workspace:*",
+    "wrangler": "^4.14.0"
   },
   "devDependencies": {
     "typescript": "^5.7.2",

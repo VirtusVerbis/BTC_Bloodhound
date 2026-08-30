@@ -2,7 +2,7 @@ import type { Job } from "@cointrace/db";
 import { D1QuotaExceededError } from "@cointrace/db";
 import { RateLimitNotReadyError } from "../chain/router.js";
 import { summarizeJobPayload } from "../ops/queue.js";
-import { colorizeIndexerLogLine } from "./logColor.js";
+import { colorizeIndexerLogLine, type IndexerLogColorMode } from "./logColor.js";
 import type { JobWeightTier, JobWorkPhase } from "./jobWeight.js";
 import { formatJobRunStatsSuffix, type JobRunStats } from "./tickStats.js";
 
@@ -14,7 +14,18 @@ export interface JobClaimMeta {
 
 export interface JobLogOpts {
   color?: boolean;
+  colorMode?: IndexerLogColorMode;
   claimMeta?: JobClaimMeta;
+}
+
+let activeLogColorMode: IndexerLogColorMode = "default";
+
+export function setIndexerLogColorMode(mode: IndexerLogColorMode): void {
+  activeLogColorMode = mode;
+}
+
+export function getIndexerLogColorMode(): IndexerLogColorMode {
+  return activeLogColorMode;
 }
 
 function parsePayload(job: Job): Record<string, unknown> {
@@ -58,8 +69,8 @@ function formatProgressSuffix(details: Record<string, unknown>): string {
   return parts.length > 0 ? ` ${parts.join(" ")}` : "";
 }
 
-function emitLog(fn: (message: string) => void, message: string, color = false): void {
-  fn(colorizeIndexerLogLine(message, color));
+function emitLog(fn: (message: string) => void, message: string, color = false, colorMode?: IndexerLogColorMode): void {
+  fn(colorizeIndexerLogLine(message, color, colorMode ?? activeLogColorMode));
 }
 
 function formatClaimMetaSuffix(meta?: JobClaimMeta): string {
@@ -88,7 +99,7 @@ export function formatJobDoneLine(
 }
 
 export function logJobStart(job: Job, opts?: JobLogOpts): void {
-  emitLog(console.log, formatJobStartLine(job, opts?.claimMeta), opts?.color ?? false);
+  emitLog(console.log, formatJobStartLine(job, opts?.claimMeta), opts?.color ?? false, opts?.colorMode);
 }
 
 export function logJobDone(
@@ -101,22 +112,28 @@ export function logJobDone(
     console.log,
     formatJobDoneLine(job, duration, queueDepth, opts?.runStats, opts?.workSubreq),
     opts?.color ?? false,
+    opts?.colorMode,
   );
 }
 
-export function logCronDetail(enabled: boolean, message: string, color = false): void {
+export function logCronDetail(
+  enabled: boolean,
+  message: string,
+  color = false,
+  colorMode?: IndexerLogColorMode,
+): void {
   if (!enabled) return;
-  emitLog(console.log, message, color);
+  emitLog(console.log, message, color, colorMode);
 }
 
-export function logCronError(message: string, color = false): void {
-  emitLog(console.error, message, color);
+export function logCronError(message: string, color = false, colorMode?: IndexerLogColorMode): void {
+  emitLog(console.error, message, color, colorMode);
 }
 
 export function logJobFail(
   job: Job,
   err: unknown,
-  opts?: { attempt?: number; color?: boolean },
+  opts?: { attempt?: number; color?: boolean; colorMode?: IndexerLogColorMode },
 ): void {
   const payload = parsePayload(job);
   const details = summarizeJobPayload(job.type, payload);
@@ -132,12 +149,13 @@ export function logJobFail(
     console.error,
     `[job] fail id=${job.id} type=${job.type} attempts=${attempt}${formatDetailSuffix(details)}${reasonSuffix} error=${message}`,
     opts?.color ?? false,
+    opts?.colorMode,
   );
 }
 
 export function logJobDefer(
   job: Job,
-  opts: { attempt: number; deferSec: number; runAfter: string; color?: boolean },
+  opts: { attempt: number; deferSec: number; runAfter: string; color?: boolean; colorMode?: IndexerLogColorMode },
 ): void {
   const payload = parsePayload(job);
   const details = summarizeJobPayload(job.type, payload);
@@ -145,5 +163,6 @@ export function logJobDefer(
     console.warn,
     `[job] defer id=${job.id} type=${job.type} attempts=${opts.attempt} deferSec=${opts.deferSec} run_after=${opts.runAfter}${formatDetailSuffix(details)}`,
     opts.color ?? false,
+    opts.colorMode,
   );
 }

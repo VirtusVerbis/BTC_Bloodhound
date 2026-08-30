@@ -65,8 +65,33 @@ pnpm dev:web
 | `node apps/indexer/dist/index.js clear-queue [--remote]` | Delete pending/running jobs only (queue depth → 0) |
 | `node apps/indexer/dist/index.js list-queue [--remote] [--status active\|pending\|running\|all] [--type <jobType>] [--limit N] [--summary] [--next-cron]` | Read-only queue audit (JSON by default; `--summary` prints ASCII type counts sorted by priority high→low) |
 | `node apps/indexer/dist/index.js prune-invalid-addresses [--remote] [--dry-run]` | Scan all address roles; remove rows that fail mainnet checksum validation |
+| `node apps/indexer/dist/index.js pause-cron [--remote]` | Set `cron_indexer_paused=1` so Worker cron skips indexer ticks (no redeploy) |
+| `node apps/indexer/dist/index.js resume-cron [--remote]` | Clear cron pause; Worker cron resumes indexer ticks |
+| `node apps/indexer/dist/index.js cron-status [--remote]` | Print pause flag, tick lease, queue depth, pending/running counts, API backoff |
 
 Bitcoin addresses are validated with checksum decoding (`bitcoinjs-lib`) at ingest and via the API. Scrapers use regex only as finders; invalid candidates are dropped before insert/enqueue.
+
+### Remote indexer sidecar (prod D1 drain)
+
+When Cloudflare Workers Free CPU limits stall cron ingest, run the indexer locally against **production D1** while cron is paused. The public HTTP API (`fetch`) keeps serving reads; only `scheduled()` indexer ticks are disabled.
+
+**Prerequisites:** `npx wrangler login` (same Cloudflare account as prod). Apply migration `0018_cron_indexer_paused` on prod D1 (`pnpm db:d1:migrate:remote`). Production D1 uses `remote = true` on `[[env.production.d1_databases]]` so `getPlatformProxy` proxies to prod (not empty local `.wrangler` D1).
+
+**Playbook:**
+
+```bash
+pnpm -r run build
+node apps/indexer/dist/index.js pause-cron --remote
+node apps/indexer/dist/index.js cron-status --remote   # verify cron_indexer_paused=1
+node apps/indexer/dist/index.js run --remote           # Ctrl+C to stop
+node apps/indexer/dist/index.js resume-cron --remote
+```
+
+`run --remote` loads `config/sidecar.env` by default (see `config/sidecar.env.example`). Defaults: `RATE_LIMIT_MS=8000`, `MAX_CHAIN_CALLS_PER_JOB=3`, verbose logging with **sidecar** color mode (white labels, grey values, red errors), and a **30s heartbeat** (`[sidecar] heartbeat queue=… pending=… running=…`). Pass `--no-job-details` / `--no-log-color` to disable. Refuses to start unless cron is paused (unless `--allow-cron-active`).
+
+Esplora/Mempool 429 backoff is stored in prod `scheduler_state` (`esplora_retry_after_at`, `mempool_retry_after_at`) — shared with cron when you resume. Sidecar uses `sleepOnRateLimit: true` so ticks wait on provider pacing instead of failing immediately.
+
+**Do not** run sidecar while cron is actively ticking (default guard). **Do not** enqueue ops jobs during sidecar without understanding overlap.
 
 ### Dev & deploy
 

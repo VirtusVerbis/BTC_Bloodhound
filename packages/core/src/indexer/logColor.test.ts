@@ -85,3 +85,35 @@ describe("colorizeIndexerLogLine", () => {
     expect(out).toContain("\x1b[34mpagesExhausted=");
   });
 });
+
+describe("colorizeIndexerLogLine sidecar mode", () => {
+  const sampleFail =
+    "[job] fail id=42 type=backfill_hacker_address error=Provider pacing: next call allowed at 2026-08-13T05:51:05.846Z";
+
+  it("returns input unchanged when disabled", () => {
+    expect(colorizeIndexerLogLine(sampleFail, false, "sidecar")).toBe(sampleFail);
+  });
+
+  it("uses white labels and grey values on normal lines", () => {
+    const out = colorizeIndexerLogLine("[cron] tick done processed=1 queue=310", true, "sidecar");
+    expect(out).toMatch(/\x1b\[97m\[cron\] tick done\x1b\[0m/);
+    expect(out).toContain("\x1b[97mprocessed=");
+    expect(out).toContain("\x1b[90m1");
+    expect(out).toContain("\x1b[97mqueue=");
+    expect(out).toContain("\x1b[90m310");
+  });
+
+  it("uses red prefix and red error= on fail lines", () => {
+    const out = colorizeIndexerLogLine(sampleFail, true, "sidecar");
+    expect(out).toMatch(/\x1b\[31m\[job\] fail\x1b\[0m/);
+    expect(out).toMatch(/\x1b\[31merror=/);
+    expect(out).toContain("Provider pacing");
+  });
+
+  it("uses red prefix on defer and sidecar error lines", () => {
+    const defer = "[job] defer id=1 type=expand_downstream attempts=3 deferSec=86400 run_after=2026-08-14T00:00:00.000Z";
+    const sidecarErr = "[sidecar] error cron not paused";
+    expect(colorizeIndexerLogLine(defer, true, "sidecar")).toMatch(/\x1b\[31m\[job\] defer\x1b\[0m/);
+    expect(colorizeIndexerLogLine(sidecarErr, true, "sidecar")).toMatch(/\x1b\[31m\[sidecar\] error\x1b\[0m/);
+  });
+});

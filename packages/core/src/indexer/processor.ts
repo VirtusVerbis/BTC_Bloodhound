@@ -23,6 +23,7 @@ import {
 import { fetchMempoolBtcUsd } from "../price/mempoolPrices.js";
 import { normalizeBitcoinAddress } from "../util/address.js";
 import { logJobDefer, logJobDone, logJobFail, logJobStart } from "./jobLog.js";
+import type { IndexerLogColorMode } from "./logColor.js";
 import { isIngestJobType } from "./jobClass.js";
 import {
   jobClaimMeta,
@@ -1445,15 +1446,16 @@ export async function handleJobFailure(
   job: Job,
   err: unknown,
   logColor = false,
+  logColorMode?: IndexerLogColorMode,
 ): Promise<boolean> {
   const attempt = job.attempts + 1;
-  logJobFail(job, err, { attempt, color: logColor });
+  logJobFail(job, err, { attempt, color: logColor, colorMode: logColorMode });
 
   if (err instanceof RateLimitNotReadyError) {
     if (isIngestJobType(job.type) && attempt >= config.jobDeferAfterAttempts) {
       const runAfter = new Date(Date.now() + config.jobDeferSec * 1000).toISOString();
       await store.deferJob(job.id, err.message, runAfter);
-      logJobDefer(job, { attempt, deferSec: config.jobDeferSec, runAfter, color: logColor });
+      logJobDefer(job, { attempt, deferSec: config.jobDeferSec, runAfter, color: logColor, colorMode: logColorMode });
     } else {
       await store.failJob(job.id, err.message, err.retryAt);
     }
@@ -1491,12 +1493,14 @@ export async function processJobs(
     deadlineMs?: number;
     jobDetails?: boolean;
     logColor?: boolean;
+    logColorMode?: IndexerLogColorMode;
     subrequestBudget?: SubrequestBudget;
     jobsPerTick?: number;
   },
 ): Promise<ProcessJobsResult> {
   const jobDetails = opts?.jobDetails ?? false;
   const logColor = opts?.logColor ?? false;
+  const logColorMode = opts?.logColorMode;
   const budget = opts?.subrequestBudget;
   const jobsPerTick = opts?.jobsPerTick ?? config.jobsPerTick;
   let processed = 0;
@@ -1538,7 +1542,7 @@ export async function processJobs(
     }
     claimedIds.push(job.id);
     if (jobDetails) {
-      logJobStart(job, { color: logColor, claimMeta: jobClaimMeta(job, config, i) });
+      logJobStart(job, { color: logColor, colorMode: logColorMode, claimMeta: jobClaimMeta(job, config, i) });
     }
     if (isIngestJobType(job.type) && !cachedHackers) {
       cachedHackers = await getHackerAddressSet(store);
@@ -1573,6 +1577,7 @@ export async function processJobs(
       const queueDepth = await store.getQueueDepth();
       logJobDone(job, formatJobDurationMs(jobDurationMs(job)), queueDepth, {
         color: logColor,
+        colorMode: logColorMode,
         runStats,
         workSubreq: budget && budget.limit() > 0 ? workSubreq : undefined,
       });
@@ -1584,7 +1589,7 @@ export async function processJobs(
         chainSlotUsed = true;
       }
     } catch (err) {
-      if (await handleJobFailure(store, config, job, err, logColor)) {
+      if (await handleJobFailure(store, config, job, err, logColor, logColorMode)) {
         if (err instanceof RateLimitNotReadyError) {
           stopReason = "pacing";
           chainSlotUsed = true;

@@ -50,6 +50,8 @@ binding = "DB"
 database_name = "cointrace"
 database_id = "72198afb-c475-4b32-a0fc-53fa34614a97"
 migrations_dir = "migrations"
+# Sidecar `run --remote` (getPlatformProxy) proxies to prod D1 when remote = true.
+remote = true
 
 [env.production.triggers]
 crons = ["*/1 * * * *"]
