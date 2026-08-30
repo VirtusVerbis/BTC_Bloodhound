@@ -41,7 +41,7 @@ describe("hackerGroups recent cache", () => {
 
   it("groups recent hackers at top of dropdown", () => {
     const groups = groupHackersForDropdown(hackers, recentHackers);
-    expect(groups[0]?.label).toBe("Recently updated");
+    expect(groups[0]?.label).toBe("Last activity");
     expect(groups[0]?.items[0]?.address).toBe("bc1qh1");
     expect(groups.some((g) => g.items.some((h) => h.address === "bc1qh1") && g.source !== "__recent__")).toBe(
       false,

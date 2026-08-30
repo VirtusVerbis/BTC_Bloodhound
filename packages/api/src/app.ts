@@ -135,7 +135,6 @@ export function createApp(store: Store, config: AppConfig) {
       maxGraphDownstream: config.maxGraphDownstream,
       graphPageSizeDefault: config.graphPageSizeDefault,
       graphPageSizeMax: config.graphPageSizeMax,
-      graphActivityWindowHours: config.graphActivityWindowHours,
       recentHackersLimit: config.recentHackersLimit,
       hackersPollMs: resolveHackersPollMs(config, cronIndexerPaused),
       cronIndexerPaused,
@@ -145,7 +144,7 @@ export function createApp(store: Store, config: AppConfig) {
   app.get("/api/hackers", async (c) => {
     const q = c.req.query("q");
     const hackers = await store.listHackers(q, true);
-    const recentHackers = await store.getRecentHackersActivity(config.graphActivityWindowHours);
+    const recentHackers = await store.getRecentHackersActivity();
     const recentByAddress = new Map(recentHackers.map((entry) => [entry.address, entry]));
     return c.json({
       recentHackers,

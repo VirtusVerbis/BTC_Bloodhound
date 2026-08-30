@@ -19,7 +19,6 @@ import {
   type Transaction,
 } from "./schema.js";
 import {
-  filterRecentHackersByWindow,
   mergeRecentHackerActivity,
   parseRecentHackersJson,
   recentHackersEqual,
@@ -2299,17 +2298,13 @@ export class Store {
     this.recentHackerActivityBuffer = undefined;
   }
 
-  async getRecentHackersActivity(windowHours?: number): Promise<RecentHackerEntry[]> {
+  async getRecentHackersActivity(): Promise<RecentHackerEntry[]> {
     const row = await this.db
       .select({ json: schedulerState.recentHackersJson })
       .from(schedulerState)
       .where(eq(schedulerState.id, 1))
       .get();
-    const parsed = parseRecentHackersJson(row?.json);
-    if (windowHours != null && windowHours > 0) {
-      return filterRecentHackersByWindow(parsed, windowHours);
-    }
-    return parsed;
+    return parseRecentHackersJson(row?.json);
   }
 
   async flushRecentHackerActivity(limit: number): Promise<boolean> {

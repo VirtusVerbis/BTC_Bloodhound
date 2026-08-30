@@ -91,8 +91,6 @@ export interface AppConfig {
   graphPageSizeMax: number;
   maxGraphVictims: number;
   maxGraphDownstream: number;
-  /** Hours for recent victim/downstream counts on hacker list. */
-  graphActivityWindowHours: number;
   /** Top N hacker addresses in global recent-activity cache. */
   recentHackersLimit: number;
   /** Client poll interval for /api/hackers (ms). */
@@ -260,7 +258,6 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     graphPageSizeMax: Number(env.GRAPH_PAGE_SIZE_MAX ?? 1000),
     maxGraphVictims: Number(env.MAX_GRAPH_VICTIMS ?? 10000),
     maxGraphDownstream: Number(env.MAX_GRAPH_DOWNSTREAM ?? 10000),
-    graphActivityWindowHours: Number(env.GRAPH_ACTIVITY_WINDOW_HOURS ?? 168),
     recentHackersLimit: Math.max(1, Number(env.RECENT_HACKERS_LIMIT ?? 5)),
     hackersPollMs: Math.max(3_600_000, Number(env.HACKERS_POLL_MS ?? 3_600_000)),
     hackersPollMsSidecar: Math.max(60_000, Number(env.HACKERS_POLL_MS_SIDECAR ?? 60_000)),

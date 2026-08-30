@@ -87,8 +87,13 @@ export function planTickJobs(
   }
 
   if (configuredMax > 1 && pairableCount >= 2) {
+    const workersPairCap = 2;
+    const pairCap =
+      config.subrequestLimitPerInvocation <= 0
+        ? configuredMax
+        : Math.min(workersPairCap, configuredMax);
     return {
-      jobsCap: Math.min(2, configuredMax),
+      jobsCap: Math.min(pairCap, pairableCount),
       reason: "pair_light",
       headWeight,
       pairableCount,

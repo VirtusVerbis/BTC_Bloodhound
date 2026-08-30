@@ -114,7 +114,7 @@ export function groupHackersForDropdown(
   if (recentItems.length > 0) {
     groups.push({
       source: RECENT_GROUP_SOURCE,
-      label: "Recently updated",
+      label: "Last activity",
       items: recentItems,
     });
   }

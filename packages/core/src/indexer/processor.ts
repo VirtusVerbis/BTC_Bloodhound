@@ -22,6 +22,7 @@ import {
 } from "../sources/coldcardSweepWatch.js";
 import { fetchMempoolBtcUsd } from "../price/mempoolPrices.js";
 import { normalizeBitcoinAddress } from "../util/address.js";
+import { formatErrorMessage } from "../util/error.js";
 import { logJobDefer, logJobDone, logJobFail, logJobStart } from "./jobLog.js";
 import type { IndexerLogColorMode } from "./logColor.js";
 import { isIngestJobType } from "./jobClass.js";
@@ -1449,26 +1450,26 @@ export async function handleJobFailure(
   logColorMode?: IndexerLogColorMode,
 ): Promise<boolean> {
   const attempt = job.attempts + 1;
+  const message = formatErrorMessage(err);
   logJobFail(job, err, { attempt, color: logColor, colorMode: logColorMode });
 
   if (err instanceof RateLimitNotReadyError) {
     if (isIngestJobType(job.type) && attempt >= config.jobDeferAfterAttempts) {
       const runAfter = new Date(Date.now() + config.jobDeferSec * 1000).toISOString();
-      await store.deferJob(job.id, err.message, runAfter);
+      await store.deferJob(job.id, message, runAfter);
       logJobDefer(job, { attempt, deferSec: config.jobDeferSec, runAfter, color: logColor, colorMode: logColorMode });
     } else {
-      await store.failJob(job.id, err.message, err.retryAt);
+      await store.failJob(job.id, message, err.retryAt);
     }
     return true;
   }
 
   if (err instanceof D1QuotaExceededError) {
     await store.setD1QuotaPaused(err.kind, err.retryAt);
-    await store.failJob(job.id, err.message, err.retryAt);
+    await store.failJob(job.id, message, err.retryAt);
     return true;
   }
 
-  const message = err instanceof Error ? err.message : String(err);
   if (isRateLimitError(err)) {
     const state = await store.getSchedulerState();
     const otherAvailable = store.hasAvailableChainProvider(state);

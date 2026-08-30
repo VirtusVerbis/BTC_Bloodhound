@@ -84,7 +84,7 @@ function makeIngestJob(id: number, payload: Record<string, unknown>): Job {
 }
 
 describe("planTickJobs", () => {
-  const config = baseConfig({
+  const workersConfig = baseConfig({
     jobsPerTick: 2,
     jobsPerTickMax: 2,
     queueDepthPerExtraJob: 50,
@@ -94,22 +94,70 @@ describe("planTickJobs", () => {
     maxSubrequestsPerJob: 6,
   }) as AppConfig;
 
+  const sidecarConfig = baseConfig({
+    jobsPerTick: 3,
+    jobsPerTickMax: 3,
+    queueDepthPerExtraJob: 50,
+    backfillTxsPerJob: 10,
+    subrequestLimitPerInvocation: 0,
+  }) as AppConfig;
+
   it("caps at 1 when head is heavy", () => {
     const candidates = [
       makeIngestJob(1, { address: "bc1qheavy", chainCursor: "abc" }),
     ];
-    const plan = planTickJobs(config, 100, candidates);
+    const plan = planTickJobs(workersConfig, 100, candidates);
     expect(plan.jobsCap).toBe(1);
     expect(plan.reason).toBe("heavy_head");
     expect(plan.headWeight).toBe("heavy");
   });
 
-  it("allows pair when two process-only light jobs exist", () => {
+  it("allows pair when two process-only light jobs exist (Workers cap)", () => {
     const candidates = [
       makeIngestJob(1, { address: "bc1qa", pendingTxids: ["tx1"], processedIndex: 0 }),
       makeIngestJob(2, { address: "bc1qb", pendingTxids: ["tx2"], processedIndex: 0 }),
     ];
+    const plan = planTickJobs(workersConfig, 100, candidates);
+    expect(plan.jobsCap).toBe(2);
+    expect(plan.reason).toBe("pair_light");
+    expect(plan.pairableCount).toBe(2);
+  });
+
+  it("caps pair_light at 2 on Workers even when jobsPerTickMax is higher", () => {
+    const config = {
+      ...workersConfig,
+      jobsPerTick: 2,
+      jobsPerTickMax: 4,
+    } as AppConfig;
+    const candidates = [
+      makeIngestJob(1, { address: "bc1qa", pendingTxids: ["tx1"], processedIndex: 0 }),
+      makeIngestJob(2, { address: "bc1qb", pendingTxids: ["tx2"], processedIndex: 0 }),
+      makeIngestJob(3, { address: "bc1qc", pendingTxids: ["tx3"], processedIndex: 0 }),
+    ];
     const plan = planTickJobs(config, 100, candidates);
+    expect(plan.jobsCap).toBe(2);
+    expect(plan.reason).toBe("pair_light");
+    expect(plan.pairableCount).toBe(3);
+  });
+
+  it("allows three-pair on sidecar when three process-only light jobs exist", () => {
+    const candidates = [
+      makeIngestJob(1, { address: "bc1qa", pendingTxids: ["tx1"], processedIndex: 0 }),
+      makeIngestJob(2, { address: "bc1qb", pendingTxids: ["tx2"], processedIndex: 0 }),
+      makeIngestJob(3, { address: "bc1qc", pendingTxids: ["tx3"], processedIndex: 0 }),
+    ];
+    const plan = planTickJobs(sidecarConfig, 100, candidates);
+    expect(plan.jobsCap).toBe(3);
+    expect(plan.reason).toBe("pair_light");
+    expect(plan.pairableCount).toBe(3);
+  });
+
+  it("clamps sidecar pair_light to pairableCount when only two candidates exist", () => {
+    const candidates = [
+      makeIngestJob(1, { address: "bc1qa", pendingTxids: ["tx1"], processedIndex: 0 }),
+      makeIngestJob(2, { address: "bc1qb", pendingTxids: ["tx2"], processedIndex: 0 }),
+    ];
+    const plan = planTickJobs(sidecarConfig, 100, candidates);
     expect(plan.jobsCap).toBe(2);
     expect(plan.reason).toBe("pair_light");
     expect(plan.pairableCount).toBe(2);

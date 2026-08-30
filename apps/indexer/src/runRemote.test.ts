@@ -53,7 +53,6 @@ function minimalConfig(): AppConfig {
     graphPageSizeMax: 1000,
     maxGraphVictims: 10000,
     maxGraphDownstream: 10000,
-    graphActivityWindowHours: 168,
     recentHackersLimit: 5,
     hackersPollMs: 3600000,
     hackersPollMsSidecar: 60000,

@@ -53,7 +53,6 @@ interface AppConfig {
   maxGraphDownstream?: number;
   graphPageSizeDefault?: number;
   graphPageSizeMax?: number;
-  graphActivityWindowHours?: number;
   recentHackersLimit?: number;
   hackersPollMs?: number;
   cronIndexerPaused?: boolean;

@@ -117,7 +117,7 @@ export function logSidecarStartup(
 ): void {
   logSidecar("[sidecar] remote D1 connected", color, mode);
   logSidecar(
-    `[sidecar] config cron_indexer_paused=${cronIndexerPaused ? 1 : 0} RATE_LIMIT_MS=${config.rateLimitMs} MAX_CHAIN_CALLS_PER_JOB=${config.maxChainCallsPerJob} TICK_BUDGET_MS=${config.tickBudgetMs}`,
+    `[sidecar] config cron_indexer_paused=${cronIndexerPaused ? 1 : 0} RATE_LIMIT_MS=${config.rateLimitMs} MAX_CHAIN_CALLS_PER_JOB=${config.maxChainCallsPerJob} JOBS_PER_TICK=${config.jobsPerTick} JOBS_PER_TICK_MAX=${config.jobsPerTickMax} TICK_BUDGET_MS=${config.tickBudgetMs}`,
     color,
     mode,
   );

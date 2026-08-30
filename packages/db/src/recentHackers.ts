@@ -38,21 +38,6 @@ export function parseRecentHackersJson(raw: string | null | undefined): RecentHa
   }
 }
 
-export function filterRecentHackersByWindow(
-  entries: RecentHackerEntry[],
-  windowHours: number,
-  nowIso?: string,
-): RecentHackerEntry[] {
-  if (windowHours <= 0) return entries;
-  const nowMs = nowIso ? new Date(nowIso).getTime() : Date.now();
-  if (!Number.isFinite(nowMs)) return entries;
-  const cutoffMs = nowMs - windowHours * 3600 * 1000;
-  return entries.filter((e) => {
-    const atMs = new Date(e.at).getTime();
-    return Number.isFinite(atMs) && atMs >= cutoffMs;
-  });
-}
-
 export function mergeRecentHackerActivity(
   existing: RecentHackerEntry[],
   updates: Map<string, RecentHackerActivityDelta>,

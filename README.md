@@ -87,9 +87,11 @@ node apps/indexer/dist/index.js run --remote           # Ctrl+C to stop
 node apps/indexer/dist/index.js resume-cron --remote
 ```
 
-`run --remote` loads `config/sidecar.env` by default (see `config/sidecar.env.example`). Tuned defaults: `RATE_LIMIT_MS=6500`, `BACKFILL_TXS_PER_JOB=10`, `JOBS_PER_TICK=2`, `CRON_INTERVAL_SEC=300`, `MAX_CHAIN_CALLS_PER_JOB=3`. Verbose logging uses **sidecar** color mode: white `[sidecar]` lines; `[job]`/`[cron]` lines use prod cron label colors with highlighted progress fields (`pendingTxidsCount`, `processedIndex`, `progress`, `pagesFetched`, `apiBackoff`). A **30s heartbeat** reports `queue`, `pending`, `running`, and `apiBackoff`. Pass `--no-job-details` / `--no-log-color` to disable. Refuses to start unless cron is paused (unless `--allow-cron-active`). After changing `sidecar.env`, restart the sidecar and watch `apiBackoff` in heartbeats; roll `RATE_LIMIT_MS` back to `8000` on any 429.
+`run --remote` loads `config/sidecar.env` by default (see `config/sidecar.env.example`). Tuned defaults: `RATE_LIMIT_MS=6500`, `BACKFILL_TXS_PER_JOB=10`, `JOBS_PER_TICK=3`, `CRON_INTERVAL_SEC=300`, `MAX_CHAIN_CALLS_PER_JOB=5`. Sidecar allows up to **3** paired light jobs per tick when `SUBREQUEST_LIMIT_PER_INVOCATION=0` (prod cron stays capped at 2). Verbose logging uses **sidecar** color mode: white `[sidecar]` lines; `[job]`/`[cron]` lines use prod cron label colors with highlighted progress fields (`pendingTxidsCount`, `processedIndex`, `progress`, `pagesFetched`, `apiBackoff`). A **30s heartbeat** reports `queue`, `pending`, `running`, and `apiBackoff`. Pass `--no-job-details` / `--no-log-color` to disable. Refuses to start unless cron is paused (unless `--allow-cron-active`). After changing `sidecar.env`, restart the sidecar and watch `apiBackoff` in heartbeats; roll `RATE_LIMIT_MS` back to `8000` on any 429.
 
-While `cron_indexer_paused=1`, production `/api/config` returns `hackersPollMs: 60000` so the hacker dropdown **"Recently updated"** group refreshes every **1 minute** (requires Worker + web deploy). After `resume-cron --remote`, polling returns to **1 hour** automatically. Refresh the browser tab after pausing/resuming cron to pick up the new interval immediately.
+While `cron_indexer_paused=1`, production `/api/config` returns `hackersPollMs: 60000` so the hacker dropdown **"Last activity"** group refreshes every **1 minute** (requires Worker + web deploy). After `resume-cron --remote`, polling returns to **1 hour** automatically. Refresh the browser tab after pausing/resuming cron to pick up the new interval immediately.
+
+`/api/hackers` returns the stored top-N (`RECENT_HACKERS_LIMIT`, default `5`) hackers by last graph-ingest timestamp with no age cutoff.
 
 Esplora/Mempool 429 backoff is stored in prod `scheduler_state` (`esplora_retry_after_at`, `mempool_retry_after_at`) — shared with cron when you resume. Sidecar uses `sleepOnRateLimit: true` so ticks wait on provider pacing instead of failing immediately.
 
@@ -148,7 +150,6 @@ Fair scheduling keeps graph ingest ahead of maintenance work. Cloudflare cron ru
 | `MAX_SUBREQUESTS_PER_JOB` | D1/fetch cap per job (production `6`) |
 | `JOB_CPU_GUARD_MS` | Cumulative sync-CPU budget per job; early continuation (production `7`) |
 | `RECENT_HACKERS_LIMIT` | Top N hacker addresses in global recent-activity cache (default `5`) |
-| `GRAPH_ACTIVITY_WINDOW_HOURS` | Hide recent-activity entries older than this on `/api/hackers` (default `168`) |
 
 **Validate in `wrangler tail`:** healthy ticks end with `[cron] tick done`; jobs show `[job] done continued=true traceEdge=X/Y edgesApplied=N` on fanout traces. Missing `[cron] tick done` after `[job] start` indicates a hard CPU kill mid-job. Optional `[job] done … cpuGuard=1` means the job stopped early via `JOB_CPU_GUARD_MS` and enqueued a continuation.
 

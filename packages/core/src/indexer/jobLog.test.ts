@@ -148,6 +148,22 @@ describe("jobLog", () => {
     spy.mockRestore();
   });
 
+  it("logJobFail includes cause for wrapped Drizzle-like errors", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const job = makeJob({
+      type: "expand_downstream",
+      payloadJson: JSON.stringify({ address: "bc1qtest" }),
+    });
+    const drizzleLike = new Error("Failed query: select ...\nparams: 1", {
+      cause: new Error("D1 read limit exceeded"),
+    });
+    logJobFail(job, drizzleLike, { attempt: 1 });
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringContaining("error=Failed query: select ... params: 1; cause: D1 read limit exceeded"),
+    );
+    spy.mockRestore();
+  });
+
   it("logJobFail emits ANSI color when enabled", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const job = makeJob({

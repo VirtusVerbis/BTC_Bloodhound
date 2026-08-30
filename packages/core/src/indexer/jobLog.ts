@@ -2,6 +2,7 @@ import type { Job } from "@cointrace/db";
 import { D1QuotaExceededError } from "@cointrace/db";
 import { RateLimitNotReadyError } from "../chain/router.js";
 import { summarizeJobPayload } from "../ops/queue.js";
+import { formatErrorMessage } from "../util/error.js";
 import { colorizeIndexerLogLine, type IndexerLogColorMode } from "./logColor.js";
 import { isIngestJobType } from "./jobClass.js";
 import type { JobWeightTier, JobWorkPhase } from "./jobWeight.js";
@@ -159,7 +160,7 @@ export function logJobFail(
 ): void {
   const payload = parsePayload(job);
   const details = summarizeJobPayload(job.type, payload);
-  const message = err instanceof Error ? err.message : String(err);
+  const message = formatErrorMessage(err);
   const attempt = opts?.attempt ?? job.attempts + 1;
   const reasonSuffix =
     err instanceof RateLimitNotReadyError

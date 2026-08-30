@@ -41,10 +41,10 @@ describe("recent hackers buffer", () => {
     expect(await store.flushRecentHackerActivity(5)).toBe(false);
   });
 
-  it("getRecentHackersActivity applies window filter", async () => {
+  it("getRecentHackersActivity returns all stored entries", async () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);
-    const windowStore = new Store(db);
+    const activityStore = new Store(db);
     sqlite
       .prepare("UPDATE scheduler_state SET recent_hackers_json = ? WHERE id = 1")
       .run(
@@ -54,7 +54,7 @@ describe("recent hackers buffer", () => {
         ]),
       );
 
-    const recent = await windowStore.getRecentHackersActivity(168);
-    expect(recent.map((e) => e.address)).toEqual(["new"]);
+    const recent = await activityStore.getRecentHackersActivity();
+    expect(recent.map((e) => e.address).sort()).toEqual(["new", "old"]);
   });
 });

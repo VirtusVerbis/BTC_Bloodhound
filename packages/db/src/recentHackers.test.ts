@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  filterRecentHackersByWindow,
   mergeRecentHackerActivity,
   parseRecentHackersJson,
   recentHackersEqual,
@@ -51,14 +50,5 @@ describe("recentHackers", () => {
     ];
     expect(recentHackersEqual(a, b)).toBe(true);
     expect(recentHackersEqual(a, [{ ...b[0]!, victims: 2 }])).toBe(false);
-  });
-
-  it("filterRecentHackersByWindow drops stale entries", () => {
-    const entries: RecentHackerEntry[] = [
-      { address: "old", at: "2020-01-01T00:00:00.000Z", victims: 1, downstream: 0 },
-      { address: "new", at: "2026-08-27T00:00:00.000Z", victims: 1, downstream: 0 },
-    ];
-    const filtered = filterRecentHackersByWindow(entries, 168, "2026-08-28T00:00:00.000Z");
-    expect(filtered.map((e) => e.address)).toEqual(["new"]);
   });
 });
