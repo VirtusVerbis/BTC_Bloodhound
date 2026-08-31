@@ -3,6 +3,7 @@ import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { SQLiteAsyncDialect } from "drizzle-orm/sqlite-core";
 import type { D1Binding } from "./d1.js";
 import type { D1QuotaKind } from "./d1Quota.js";
+import type { D1RowMeter } from "./d1RowMeter.js";
 import * as schema from "./schema.js";
 import {
   addresses,
@@ -190,6 +191,7 @@ export interface StoreOptions {
   maxQueueDepth?: number;
   d1BatchSize?: number;
   d1?: D1Binding;
+  d1RowMeter?: D1RowMeter;
   subrequestBudget?: { canConsume(n: number): boolean; consume(n: number): void };
 }
 

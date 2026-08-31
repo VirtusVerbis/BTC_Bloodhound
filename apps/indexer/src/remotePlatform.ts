@@ -1,10 +1,14 @@
 import path from "node:path";
 import { getPlatformProxy } from "wrangler";
 import { createD1Store, type D1Binding } from "@cointrace/db/d1";
-import type { Store } from "@cointrace/db";
+import type { D1RowMeter, Store } from "@cointrace/db";
 import { withTimeout, type AppConfig } from "@cointrace/core";
 
 export const RECONNECT_OP_TIMEOUT_MS = 30_000;
+
+export interface RemoteProductionStoreOptions {
+  d1RowMeter?: D1RowMeter;
+}
 
 export interface RemoteProductionStore {
   store: Store;
@@ -36,7 +40,10 @@ export async function verifyRemoteProductionStore(store: Store): Promise<void> {
   }
 }
 
-export async function openRemoteProductionStore(config: AppConfig): Promise<RemoteProductionStore> {
+export async function openRemoteProductionStore(
+  config: AppConfig,
+  opts?: RemoteProductionStoreOptions,
+): Promise<RemoteProductionStore> {
   const configPath = path.resolve(process.cwd(), "wrangler.toml");
   const { env, dispose } = await getPlatformProxy({
     configPath,
@@ -49,6 +56,7 @@ export async function openRemoteProductionStore(config: AppConfig): Promise<Remo
   const store = createD1Store(env.DB as D1Binding, {
     maxQueueDepth: config.maxQueueDepth,
     d1BatchSize: config.d1BatchSize,
+    d1RowMeter: opts?.d1RowMeter,
   });
 
   await verifyRemoteProductionStore(store);
@@ -64,9 +72,10 @@ export async function openRemoteProductionStore(config: AppConfig): Promise<Remo
 export async function reconnectRemoteProductionStore(
   config: AppConfig,
   current: RemoteProductionStore | null,
+  opts?: RemoteProductionStoreOptions,
 ): Promise<RemoteProductionStore> {
   if (current) {
     await withTimeout(current.dispose(), RECONNECT_OP_TIMEOUT_MS, "dispose remote D1 proxy");
   }
-  return withTimeout(openRemoteProductionStore(config), RECONNECT_OP_TIMEOUT_MS, "open remote D1 proxy");
+  return withTimeout(openRemoteProductionStore(config, opts), RECONNECT_OP_TIMEOUT_MS, "open remote D1 proxy");
 }

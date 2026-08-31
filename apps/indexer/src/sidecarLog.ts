@@ -1,6 +1,8 @@
 import type { Store } from "@cointrace/db";
+import type { D1RowMeter } from "@cointrace/db";
 import type { AppConfig } from "@cointrace/core";
 import { colorizeIndexerLogLine, formatErrorMessage, type IndexerLogColorMode } from "@cointrace/core";
+import { formatSidecarD1QuotaLine, type SidecarD1QuotaLimits } from "./sidecarD1Quota.js";
 
 function emitSidecarLog(
   fn: (message: string) => void,
@@ -54,6 +56,8 @@ export async function formatSidecarHeartbeat(
   store: Store,
   jobsSinceStart: number,
   elapsedMs: number,
+  meter?: D1RowMeter,
+  quotaLimits?: SidecarD1QuotaLimits,
 ): Promise<string> {
   const queue = await store.getQueueDepth();
   const summary = await store.getActiveJobSummary({ statuses: ["pending", "running"] });
@@ -65,7 +69,9 @@ export async function formatSidecarHeartbeat(
   }
   const state = await store.getSchedulerState();
   const apiBackoff = resolveApiBackoff(state);
-  return `[sidecar] heartbeat queue=${queue} pending=${pending} running=${running} apiBackoff=${apiBackoff} jobsSinceStart=${jobsSinceStart} elapsed=${formatElapsed(elapsedMs)}`;
+  const d1Quota =
+    meter && quotaLimits ? ` ${formatSidecarD1QuotaLine(meter, quotaLimits)}` : "";
+  return `[sidecar] heartbeat queue=${queue} pending=${pending} running=${running} apiBackoff=${apiBackoff} jobsSinceStart=${jobsSinceStart} elapsed=${formatElapsed(elapsedMs)}${d1Quota}`;
 }
 
 export async function emitSidecarHeartbeat(
@@ -74,8 +80,10 @@ export async function emitSidecarHeartbeat(
   elapsedMs: number,
   color: boolean,
   mode: IndexerLogColorMode,
+  meter?: D1RowMeter,
+  quotaLimits?: SidecarD1QuotaLimits,
 ): Promise<void> {
-  const line = await formatSidecarHeartbeat(store, jobsSinceStart, elapsedMs);
+  const line = await formatSidecarHeartbeat(store, jobsSinceStart, elapsedMs, meter, quotaLimits);
   logSidecar(line, color, mode);
 }
 
@@ -123,6 +131,8 @@ export function logSidecarStartup(
   cronIndexerPaused: boolean,
   color: boolean,
   mode: IndexerLogColorMode,
+  meter?: D1RowMeter,
+  quotaLimits?: SidecarD1QuotaLimits,
 ): void {
   logSidecar("[sidecar] remote D1 connected", color, mode);
   logSidecar(
@@ -130,4 +140,11 @@ export function logSidecarStartup(
     color,
     mode,
   );
+  if (meter && quotaLimits) {
+    logSidecar(
+      `[sidecar] D1 meter (sidecar today UTC, not full account): ${formatSidecarD1QuotaLine(meter, quotaLimits)}`,
+      color,
+      mode,
+    );
+  }
 }

@@ -84,6 +84,28 @@ describe("instrumentD1Binding", () => {
     await d1.exec?.("SELECT 1");
     expect(count).toBe(3);
   });
+
+  it("records rows_read and rows_written into rowMeter", async () => {
+    const { D1RowMeter } = await import("./d1RowMeter.js");
+    const meter = new D1RowMeter("2026-08-31");
+    const d1 = instrumentD1Binding(
+      {
+        prepare: () => ({
+          bind: () => ({
+            run: async () => ({ meta: { rows_read: 10, rows_written: 2 } }),
+            all: async () => ({ meta: { rows_read: 5, rows_written: 1 } }),
+            first: async () => ({ meta: { rows_read: 3, rows_written: 0 } }),
+          }),
+        }),
+      },
+      { rowMeter: meter },
+    );
+
+    await (d1.prepare("SELECT 1") as { bind(): { run(): Promise<unknown> } }).bind().run();
+    await (d1.prepare("SELECT 1") as { bind(): { all(): Promise<unknown> } }).bind().all();
+    expect(meter.snapshot().rowsRead).toBe(15);
+    expect(meter.snapshot().rowsWritten).toBe(3);
+  });
 });
 
 describe("Store subrequest metering", () => {

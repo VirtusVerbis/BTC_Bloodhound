@@ -314,6 +314,13 @@ export * from "./recentHackers.js";
 // D1 helper is also available via `@cointrace/db/d1` (avoids bundling better-sqlite3 in Workers).
 export { createD1Store, instrumentD1Binding, type D1Binding, type D1Db, type D1SubrequestSink } from "./d1.js";
 export {
+  D1RowMeter,
+  recordD1BatchMeta,
+  recordD1ResultMeta,
+  todayUtcDate,
+  type D1RowMeterSnapshot,
+} from "./d1RowMeter.js";
+export {
   D1QuotaExceededError,
   classifyD1Error,
   nextUtcMidnightIso,

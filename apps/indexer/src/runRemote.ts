@@ -1,3 +1,5 @@
+import readline from "node:readline/promises";
+import { stdin as input, stdout as output } from "node:process";
 import type { AppConfig } from "@cointrace/core";
 import {
   ChainRouter,
@@ -8,13 +10,24 @@ import {
   TICK_LEASE_SKEW_MS,
   type IndexerLogColorMode,
 } from "@cointrace/core";
-import type { Store } from "@cointrace/db";
+import type { D1RowMeter, Store } from "@cointrace/db";
 import {
   openRemoteProductionStore,
   reconnectRemoteProductionStore,
   type RemoteProductionStore,
 } from "./remotePlatform.js";
 import { ReconnectCoordinator } from "./remoteReconnect.js";
+import {
+  createDebouncedMeterFlush,
+  defaultSidecarD1MeterPath,
+  flushSidecarD1Meter,
+  loadSidecarD1Meter,
+} from "./sidecarD1MeterStore.js";
+import {
+  parseSidecarD1QuotaLimits,
+  promptContinueOnWriteQuota,
+  shouldWarnWrites,
+} from "./sidecarD1Quota.js";
 import {
   emitSidecarHeartbeat,
   logSidecar,
@@ -73,11 +86,30 @@ export async function runRemoteSidecar(config: AppConfig, argv: string[]): Promi
   const jobDetails = !argv.includes("--no-job-details");
   const logColor = !argv.includes("--no-log-color");
   const logColorMode = config.indexerLogColorMode;
+  const quotaLimits = parseSidecarD1QuotaLimits();
+  const meterPath = defaultSidecarD1MeterPath();
 
   if (logColor) {
     setIndexerLogColorMode(logColorMode);
   }
 
+  const loaded = loadSidecarD1Meter(meterPath);
+  const d1RowMeter: D1RowMeter = loaded.meter;
+  if (loaded.warning) {
+    logSidecarError(`[sidecar] D1 meter: ${loaded.warning}`, logColor, logColorMode);
+  } else if (!loaded.loadedFromFile) {
+    logSidecar("[sidecar] D1 meter: starting fresh for today UTC", logColor, logColorMode);
+  }
+
+  const meterFlush = createDebouncedMeterFlush(d1RowMeter, meterPath);
+  d1RowMeter.onRecord(() => meterFlush.flush());
+  d1RowMeter.onRollover(() => {
+    meterFlush.flushNow();
+    writeQuotaAcknowledged = false;
+    logSidecar("[sidecar] UTC day rollover — D1 meter counters reset", logColor, logColorMode);
+  });
+
+  let writeQuotaAcknowledged = false;
   let shuttingDown = false;
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   let remoteHandle: RemoteProductionStore | null = null;
@@ -85,6 +117,7 @@ export async function runRemoteSidecar(config: AppConfig, argv: string[]): Promi
   let router: ChainRouter | null = null;
   let reconnectBackoffMs = RECONNECT_BACKOFF_INITIAL_MS;
   let reconnectInFlight: Promise<void> | null = null;
+  const remoteOpts = { d1RowMeter };
 
   const reconnectCoord = new ReconnectCoordinator({
     onDeferred: () => logSidecar("[sidecar] reconnect deferred (tick in progress)", logColor, logColorMode),
@@ -104,7 +137,7 @@ export async function runRemoteSidecar(config: AppConfig, argv: string[]): Promi
     const tickAbandoned = reconnectCoord.consumeTickAbandoned();
     reconnectInFlight = (async () => {
       try {
-        remoteHandle = await reconnectRemoteProductionStore(config, remoteHandle);
+        remoteHandle = await reconnectRemoteProductionStore(config, remoteHandle, remoteOpts);
         store = remoteHandle.store;
         router = openSidecarChainRouter(store, config);
         reconnectBackoffMs = RECONNECT_BACKOFF_INITIAL_MS;
@@ -151,10 +184,44 @@ export async function runRemoteSidecar(config: AppConfig, argv: string[]): Promi
       await clearLeaseSafe(store);
       logSidecar("[sidecar] tick lease cleared", logColor, logColorMode);
     }
+    flushSidecarD1Meter(d1RowMeter, meterPath);
+    meterFlush.dispose();
     if (remoteHandle) {
       await remoteHandle.dispose();
     }
     process.exit(0);
+  };
+
+  const ensureWriteQuotaAllowed = async (): Promise<boolean> => {
+    const rolled = d1RowMeter.rolloverIfNeeded();
+    if (rolled) {
+      meterFlush.flushNow();
+      writeQuotaAcknowledged = false;
+    }
+    if (!shouldWarnWrites(d1RowMeter, quotaLimits.writeDailyLimit, quotaLimits.writeWarnPct)) {
+      return true;
+    }
+    if (writeQuotaAcknowledged) return true;
+
+    const rl = readline.createInterface({ input, output });
+    try {
+      const continueRun = await promptContinueOnWriteQuota({
+        meter: d1RowMeter,
+        limits: quotaLimits,
+        ask: (q) => rl.question(q),
+        isTty: Boolean(input.isTTY),
+        log: (msg) => logSidecar(msg, logColor, logColorMode),
+        logWarn: (msg) => logSidecarError(msg, logColor, logColorMode),
+      });
+      if (!continueRun) {
+        await shutdown("D1_WRITE_QUOTA_DECLINED");
+        return false;
+      }
+      writeQuotaAcknowledged = true;
+      return true;
+    } finally {
+      rl.close();
+    }
   };
 
   process.on("SIGINT", () => {
@@ -175,7 +242,7 @@ export async function runRemoteSidecar(config: AppConfig, argv: string[]): Promi
   });
 
   try {
-    remoteHandle = await openRemoteProductionStore(config);
+    remoteHandle = await openRemoteProductionStore(config, remoteOpts);
     store = remoteHandle.store;
     router = openSidecarChainRouter(store, config);
 
@@ -186,12 +253,14 @@ export async function runRemoteSidecar(config: AppConfig, argv: string[]): Promi
         logColor,
         logColorMode,
       );
+      meterFlush.dispose();
       await remoteHandle.dispose();
       remoteHandle = null;
       process.exit(1);
     }
 
-    logSidecarStartup(config, paused, logColor, logColorMode);
+    logSidecarStartup(config, paused, logColor, logColorMode, d1RowMeter, quotaLimits);
+    flushSidecarD1Meter(d1RowMeter, meterPath);
 
     const { reclaimed } = await store.resetRunningJobs(config.runningJobStaleMs, {
       jobReclaimDeferAfter: config.jobReclaimDeferAfter,
@@ -208,12 +277,22 @@ export async function runRemoteSidecar(config: AppConfig, argv: string[]): Promi
 
     heartbeatTimer = setInterval(() => {
       if (!store || reconnectCoord.tickInProgress) return;
-      emitSidecarHeartbeat(store, jobsSinceStart, Date.now() - startTime, logColor, logColorMode).catch(
-        (err) => {
+      emitSidecarHeartbeat(
+        store,
+        jobsSinceStart,
+        Date.now() - startTime,
+        logColor,
+        logColorMode,
+        d1RowMeter,
+        quotaLimits,
+      )
+        .then(() => {
+          meterFlush.flushNow();
+        })
+        .catch((err) => {
           logSidecarErrorFrom("[sidecar] error heartbeat=", err, logColor, logColorMode);
           void requestReconnect(err);
-        },
-      );
+        });
     }, heartbeatMs);
 
     let lastCron = 0;
@@ -237,6 +316,10 @@ export async function runRemoteSidecar(config: AppConfig, argv: string[]): Promi
       if (!acquired) {
         await sleep(LOOP_SLEEP_MS);
         continue;
+      }
+
+      if (!(await ensureWriteQuotaAllowed())) {
+        break;
       }
 
       reconnectCoord.tickInProgress = true;
@@ -273,6 +356,7 @@ export async function runRemoteSidecar(config: AppConfig, argv: string[]): Promi
         reconnectCoord.tickInProgress = false;
         await flushReconnectIfPending();
         await clearLeaseSafe(store);
+        meterFlush.flush();
       }
     }
   } catch (err) {
@@ -280,6 +364,7 @@ export async function runRemoteSidecar(config: AppConfig, argv: string[]): Promi
     if (err instanceof Error && err.stack) {
       console.error(err.stack);
     }
+    meterFlush.dispose();
     if (remoteHandle) {
       await remoteHandle.dispose();
     }
