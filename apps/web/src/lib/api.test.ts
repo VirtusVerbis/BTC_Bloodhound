@@ -61,6 +61,21 @@ describe("sanitizeApiErrorBody", () => {
       sanitizeApiErrorBody(JSON.stringify({ error: "not found" }), 404, "application/json"),
     ).toBe("not found");
   });
+
+  it("returns friendly message for D1 quota 503", () => {
+    expect(
+      sanitizeApiErrorBody(
+        JSON.stringify({
+          error: "Database temporarily unavailable. Please try again after midnight UTC.",
+          code: "d1_quota_exceeded",
+          kind: "read",
+          retryAfterAt: "2026-09-02T00:00:00.000Z",
+        }),
+        503,
+        "application/json",
+      ),
+    ).toBe("Database temporarily unavailable. Please try again after midnight UTC.");
+  });
 });
 
 describe("ApiError", () => {

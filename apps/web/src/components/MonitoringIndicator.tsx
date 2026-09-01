@@ -51,6 +51,16 @@ export function formatCountdown(seconds: number | null | undefined): string {
   return `${minutes}:${String(secs).padStart(2, "0")}`;
 }
 
+/** Format seconds as HH:MM:SS for long countdowns (e.g. D1 quota until midnight). */
+export function formatHoursMinutesCountdown(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return "00:00:00";
+  const total = Math.ceil(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
+
 /** Format job execution duration for monitoring display. */
 export function formatJobDuration(ms: number | null | undefined): string {
   if (ms == null || !Number.isFinite(ms) || ms < 0) return "—";

@@ -3,9 +3,13 @@ import { AboutPage } from "./components/AboutPage";
 import { HackElapsedLabel } from "./components/HackElapsedLabel";
 import { HackGraph } from "./components/HackGraph";
 import { AddressDetailDrawer } from "./components/AddressDetailDrawer";
-import { MonitoringIndicator, type MonitoringSyncStatus } from "./components/MonitoringIndicator";
+import {
+  formatHoursMinutesCountdown,
+  MonitoringIndicator,
+  type MonitoringSyncStatus,
+} from "./components/MonitoringIndicator";
 import { BtcUsdProvider } from "./context/BtcUsdContext";
-import { api, formatBtcSpotUsd, formatUsd, satsToBtc, satsToUsd, ApiError } from "./lib/api";
+import { api, formatBtcSpotUsd, formatUsd, satsToBtc, satsToUsd, ApiError, secondsUntilIso } from "./lib/api";
 import {
   clampGraphNodeCount,
   commitGraphNodeDraft,
@@ -44,6 +48,11 @@ interface SyncStatus extends MonitoringSyncStatus {
   crawlPendingCount: number;
   treeNodeCount?: number;
   downstreamPollDueCount?: number;
+  d1Quota?: {
+    blocked: boolean;
+    readRetryAfterAt: string | null;
+    writeRetryAfterAt: string | null;
+  };
 }
 
 interface AppConfig {
@@ -79,6 +88,17 @@ function commitOnEnter(e: KeyboardEvent<HTMLInputElement>, commit: () => void) {
   }
 }
 
+function latestD1QuotaRetryAfterAt(d1Quota: SyncStatus["d1Quota"]): string | null {
+  if (!d1Quota?.blocked) return null;
+  const candidates = [d1Quota.readRetryAfterAt, d1Quota.writeRetryAfterAt].filter(
+    (iso): iso is string => iso != null && iso !== "",
+  );
+  if (candidates.length === 0) return null;
+  return candidates.reduce((latest, iso) =>
+    new Date(iso).getTime() > new Date(latest).getTime() ? iso : latest,
+  );
+}
+
 export default function App() {
   const [hackers, setHackers] = useState<Hacker[]>([]);
   const [selected, setSelected] = useState("");
@@ -89,6 +109,7 @@ export default function App() {
   const [expandVictims, setExpandVictims] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [rateLimitSecondsLeft, setRateLimitSecondsLeft] = useState<number | null>(null);
+  const [d1QuotaSecondsLeft, setD1QuotaSecondsLeft] = useState<number | null>(null);
   const [apiThresholdSecondsLeft, setApiThresholdSecondsLeft] = useState<number | null>(null);
   const [minEdgeSats, setMinEdgeSats] = useState(DEFAULT_MIN_EDGE_SATS);
   const [statsPollMs, setStatsPollMs] = useState(DEFAULT_STATS_POLL_MS);
@@ -108,13 +129,11 @@ export default function App() {
   const [recentHackers, setRecentHackers] = useState<RecentHackerEntry[]>([]);
   const [hackersPollMs, setHackersPollMs] = useState(DEFAULT_HACKERS_POLL_MS);
   const [hackersLoading, setHackersLoading] = useState(false);
-  const [hackersError, setHackersError] = useState<string | null>(null);
   const prevApiThresholdRef = useRef(false);
   const minAmountFocusedRef = useRef(false);
 
   const loadHackers = useCallback(async (q?: string) => {
     setHackersLoading(true);
-    setHackersError(null);
     try {
       const params = q ? `?q=${encodeURIComponent(q)}` : "";
       const res = await api<{ hackers: Hacker[]; recentHackers: RecentHackerEntry[] }>(
@@ -129,12 +148,12 @@ export default function App() {
         setSelected(visible[0]?.address ?? "");
       }
     } catch (e) {
-      const message =
-        e instanceof ApiError && e.message ? e.message : "Failed to load hackers. Try again.";
-      setHackersError(message);
-      window.dispatchEvent(
-        new CustomEvent("cointrace-toast", { detail: "Failed to load hackers. Try again." }),
-      );
+      const isD1Quota = e instanceof ApiError && e.code === "d1_quota_exceeded";
+      if (!isD1Quota) {
+        window.dispatchEvent(
+          new CustomEvent("cointrace-toast", { detail: "Failed to load hackers. Try again." }),
+        );
+      }
     } finally {
       setHackersLoading(false);
     }
@@ -239,6 +258,10 @@ export default function App() {
           setApiThresholdSecondsLeft(
             thresholdLeft != null && thresholdLeft > 0 ? Math.ceil(thresholdLeft) : null,
           );
+          const d1RetryAt = latestD1QuotaRetryAfterAt(status.d1Quota);
+          if (d1RetryAt) {
+            setD1QuotaSecondsLeft(secondsUntilIso(d1RetryAt));
+          }
           setSync(status);
         })
         .catch(console.error);
@@ -258,13 +281,25 @@ export default function App() {
       const sec = (e as CustomEvent<{ retryAfterSec?: number }>).detail?.retryAfterSec;
       setRateLimitSecondsLeft(Math.max(1, Number(sec) || 60));
     };
+    const onD1Quota = (e: Event) => {
+      const detail = (e as CustomEvent<{ retryAfterSec?: number; retryAfterAt?: string | null }>)
+        .detail;
+      const retryAfterAt = detail?.retryAfterAt;
+      const sec =
+        retryAfterAt != null
+          ? secondsUntilIso(retryAfterAt)
+          : Math.max(1, Number(detail?.retryAfterSec) || 60);
+      setD1QuotaSecondsLeft(sec);
+    };
     window.addEventListener("cointrace-toast", onToast);
     window.addEventListener("cointrace-expand-victims", onExpandVictims);
     window.addEventListener("cointrace-rate-limit", onRateLimit);
+    window.addEventListener("cointrace-d1-quota", onD1Quota);
     return () => {
       window.removeEventListener("cointrace-toast", onToast);
       window.removeEventListener("cointrace-expand-victims", onExpandVictims);
       window.removeEventListener("cointrace-rate-limit", onRateLimit);
+      window.removeEventListener("cointrace-d1-quota", onD1Quota);
     };
   }, []);
 
@@ -275,6 +310,7 @@ export default function App() {
   }, [toast]);
 
   const rateLimitActive = rateLimitSecondsLeft != null && rateLimitSecondsLeft > 0;
+  const d1QuotaActive = d1QuotaSecondsLeft != null && d1QuotaSecondsLeft > 0;
   const thresholdCountdownActive = apiThresholdSecondsLeft != null && apiThresholdSecondsLeft > 0;
   useEffect(() => {
     if (!rateLimitActive) return;
@@ -286,6 +322,17 @@ export default function App() {
     }, 1000);
     return () => clearInterval(t);
   }, [rateLimitActive]);
+
+  useEffect(() => {
+    if (!d1QuotaActive) return;
+    const t = setInterval(() => {
+      setD1QuotaSecondsLeft((prev) => {
+        if (prev == null || prev <= 1) return null;
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(t);
+  }, [d1QuotaActive]);
 
   useEffect(() => {
     if (!thresholdCountdownActive) return;
@@ -428,6 +475,12 @@ export default function App() {
               Rate limit active — too many requests. Try again in {rateLimitSecondsLeft}s.
             </div>
           )}
+          {d1QuotaActive && (
+            <div className="rate-limit-banner" role="status">
+              Database temporarily unavailable — try again in{" "}
+              {formatHoursMinutesCountdown(d1QuotaSecondsLeft)} (resets midnight UTC).
+            </div>
+          )}
           {sync && (
             <span className="sync-stats">
               <span title="Background indexer jobs waiting to run (polls, expansions, and sync tasks).">
@@ -483,14 +536,6 @@ export default function App() {
           {hackersLoading && hackers.length === 0 && (
             <span className="inline-status" role="status">
               Loading hackers…
-            </span>
-          )}
-          {hackersError && (
-            <span className="inline-error" role="alert">
-              {hackersError}{" "}
-              <button type="button" onClick={() => loadHackers(filter)}>
-                Retry
-              </button>
             </span>
           )}
           <input

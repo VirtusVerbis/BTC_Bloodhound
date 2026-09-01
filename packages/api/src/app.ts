@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
-import type { Store } from "@cointrace/db";
+import { classifyD1Error, D1QuotaExceededError, type Store } from "@cointrace/db";
 import type { AppConfig } from "@cointrace/core";
 import {
   buildGraph,
@@ -38,6 +38,26 @@ const UUID_RE =
 
 function isValidLoadId(loadId: string | undefined): loadId is string {
   return loadId != null && UUID_RE.test(loadId);
+}
+
+const D1_QUOTA_USER_MESSAGE =
+  "Database temporarily unavailable. Please try again after midnight UTC.";
+
+function d1QuotaResponse(store: Store, err: D1QuotaExceededError) {
+  const retryAfterSec = Math.max(
+    1,
+    Math.ceil((new Date(err.retryAt).getTime() - Date.now()) / 1000),
+  );
+  void store.setD1QuotaPaused(err.kind, err.retryAt).catch(console.error);
+  return {
+    body: {
+      error: D1_QUOTA_USER_MESSAGE,
+      code: "d1_quota_exceeded",
+      kind: err.kind,
+      retryAfterAt: err.retryAt,
+    },
+    retryAfterSec,
+  };
 }
 
 async function applyRateLimit(
@@ -79,6 +99,11 @@ export function createApp(store: Store, config: AppConfig) {
 
   app.onError((err, c) => {
     console.error(err);
+    const quotaErr = err instanceof D1QuotaExceededError ? err : classifyD1Error(err);
+    if (quotaErr) {
+      const { body, retryAfterSec } = d1QuotaResponse(store, quotaErr);
+      return c.json(body, 503, { "Retry-After": String(retryAfterSec) });
+    }
     if (config.environment === "production") {
       return c.json({ error: "internal error" }, 500);
     }
