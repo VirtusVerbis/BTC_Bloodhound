@@ -178,13 +178,21 @@ export function logJobFail(
 
 export function logJobDefer(
   job: Job,
-  opts: { attempt: number; deferSec: number; runAfter: string; color?: boolean; colorMode?: IndexerLogColorMode },
+  opts: {
+    attempt: number;
+    deferSec: number;
+    runAfter: string;
+    reason?: string;
+    color?: boolean;
+    colorMode?: IndexerLogColorMode;
+  },
 ): void {
   const payload = parsePayload(job);
   const details = summarizeJobPayload(job.type, payload);
+  const reasonPart = opts.reason ? ` reason=${opts.reason}` : "";
   emitLog(
     console.warn,
-    `[job] defer id=${job.id} type=${job.type} attempts=${opts.attempt} deferSec=${opts.deferSec} run_after=${opts.runAfter}${formatDetailSuffix(details)}`,
+    `[job] defer id=${job.id} type=${job.type} attempts=${opts.attempt} deferSec=${opts.deferSec} run_after=${opts.runAfter}${reasonPart}${formatDetailSuffix(details)}`,
     opts.color ?? false,
     opts.colorMode,
   );

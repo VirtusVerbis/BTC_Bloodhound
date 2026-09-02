@@ -60,7 +60,12 @@ function baseConfig(): AppConfig {
     maxGraphVictims: 1000,
     maxGraphDownstream: 1000,
     maxQueueDepth: 360,
-    indexerJobDetails: false,
+    queueSchedulingResumeDepth: 180,
+    maxPendingExpandPerAddress: 2,
+    maxPendingExpandGlobal: 40,
+    pollSliceEveryNCrons: 4,
+    hackersPollMs: 3_600_000,
+    hackersPollMsSidecar: 60_000,
     indexerLogColor: false,
     jobDeferAfterAttempts: 20,
     jobDeferSec: 86400,
@@ -103,10 +108,12 @@ function mockStore(overrides: Record<string, unknown> = {}): Store {
     listPendingIngestCandidates: vi.fn().mockResolvedValue([]),
     claimIngestJobById: vi.fn().mockResolvedValue(null),
     claimNextJob: vi.fn().mockResolvedValue(null),
-    getSchedulerState: vi.fn().mockResolvedValue({}),
+    getSchedulerState: vi.fn().mockResolvedValue({ maintenanceCronCounter: 1 }),
     canUseSubrequests: vi.fn().mockReturnValue(true),
     maybeClearQueueSchedulingPause: vi.fn(),
     getQueueDepth: vi.fn().mockResolvedValue(0),
+    flushRecentHackerActivity: vi.fn(),
+    failJob: vi.fn(),
     ...overrides,
   } as unknown as Store;
 }
@@ -279,5 +286,48 @@ describe("processJobs fair scheduling", () => {
     expect(failJob).toHaveBeenCalledWith(pollJob.id, "429 Too Many Requests", providerRetryAt);
     expect(completeJob).not.toHaveBeenCalled();
     expect(claimNextJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("claims poll on poll-slice tick when expand ingest and poll are both pending", async () => {
+    const expandJob = makeJob({
+      id: 11,
+      type: "expand_downstream",
+      payloadJson: JSON.stringify({ address: "bc1qexpand", cron: true }),
+      priority: JOB_PRIORITY.CRON_EXPAND,
+    });
+    const pollJob = makeJob({
+      id: 20,
+      type: "poll_hacker_address",
+      payloadJson: JSON.stringify({ address: "bc1qhack" }),
+      priority: JOB_PRIORITY.POLL_HACKER,
+    });
+
+    const claimNextJob = vi.fn().mockResolvedValue(pollJob);
+    const completeJob = vi.fn();
+
+    const store = mockStore({
+      listPendingIngestCandidates: vi.fn().mockResolvedValue([expandJob]),
+      getSchedulerState: vi.fn().mockResolvedValue({ maintenanceCronCounter: 4 }),
+      claimNextJob,
+      completeJob,
+      getSyncState: vi.fn().mockResolvedValue(null),
+      listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack" }]),
+      touchSyncPoll: vi.fn(),
+    });
+
+    const router = {
+      withProvider: vi.fn(async (fn: (p: { getAddressTxs: () => Promise<[]> }) => unknown) =>
+        fn({ getAddressTxs: async () => [] }),
+      ),
+    } as unknown as ChainRouter;
+
+    const { processed: n } = await processJobs(store, router, {
+      ...baseConfig(),
+      pollSliceEveryNCrons: 4,
+    });
+
+    expect(n).toBe(1);
+    expect(claimNextJob).toHaveBeenCalled();
+    expect(completeJob).toHaveBeenCalledWith(pollJob.id);
   });
 });

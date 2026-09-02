@@ -202,18 +202,26 @@ export async function scheduleDownstreamCrawl(
     return { ...emptyStats, skipNonCritical: false, maintTick: isMaintTick, throttled };
   }
 
-  const frontier = await store.getDownstreamFrontier(config.crawlEnqueuePerCron, config.maxCrawlDepth);
-  for (const row of frontier) {
-    const jobId = await store.enqueueJobIfAbsent(
-      "expand_downstream",
-      { address: row.address, cron: true },
-      JOB_PRIORITY.CRON_EXPAND,
-      undefined,
-      { address: row.address },
+  const hackers = await store.listHackers();
+  if (hackers.length > 0) {
+    const idx = await store.claimNextHackerPollIndex(hackers.length);
+    const frontier = await store.getCrawlEnqueueCandidates(
+      hackers[idx]!.address,
+      config.crawlEnqueuePerCron,
+      config.maxCrawlDepth,
     );
-    if (jobId != null) {
-      crawlEnqueued++;
-      await store.setExpandStatus(row.address, "queued");
+    for (const row of frontier) {
+      const jobId = await store.enqueueJobIfAbsent(
+        "expand_downstream",
+        { address: row.address, cron: true },
+        JOB_PRIORITY.CRON_EXPAND,
+        undefined,
+        { address: row.address },
+      );
+      if (jobId != null) {
+        crawlEnqueued++;
+        await store.setExpandStatus(row.address, "queued");
+      }
     }
   }
 

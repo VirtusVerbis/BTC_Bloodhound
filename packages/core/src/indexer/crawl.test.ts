@@ -76,10 +76,14 @@ function baseConfig(): AppConfig {
     maxGraphVictims: 1000,
     maxGraphDownstream: 1000,
     maxQueueDepth: 360,
+    queueSchedulingResumeDepth: 180,
     queueDrainFirstDepth: 1,
     jobsPerTickMax: 3,
     queueDepthPerExtraJob: 40,
     queueSoftThrottleDepth: 80,
+    maxPendingExpandPerAddress: 2,
+    maxPendingExpandGlobal: 40,
+    pollSliceEveryNCrons: 4,
     indexerJobDetails: false,
     indexerLogColor: false,
     jobDeferAfterAttempts: 20,
@@ -111,7 +115,7 @@ function mockStore(overrides: Partial<Store> = {}): Store {
     getSchedulerState: vi.fn().mockResolvedValue(null),
     getQueueDepth: vi.fn().mockResolvedValue(0),
     getSourceSync: vi.fn().mockResolvedValue(null),
-    getDownstreamFrontier: vi.fn().mockResolvedValue([]),
+    getCrawlEnqueueCandidates: vi.fn().mockResolvedValue([]),
     listDownstreamForPoll: vi.fn().mockResolvedValue([]),
     setExpandStatus: vi.fn().mockResolvedValue(undefined),
     setBtcUsdRefreshAttemptAt: vi.fn().mockResolvedValue(undefined),
@@ -229,7 +233,7 @@ describe("scheduleDownstreamCrawl", () => {
       countActiveJobs: vi.fn().mockResolvedValue(5),
       listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack", liveBalanceAt: null }]),
       getSourceSync: vi.fn().mockResolvedValue(null),
-      getDownstreamFrontier: vi.fn().mockResolvedValue([{ address: "bc1qdown" }]),
+      getCrawlEnqueueCandidates: vi.fn().mockResolvedValue([{ address: "bc1qdown" }]),
       listDownstreamForPoll: vi.fn().mockResolvedValue([{ address: "bc1qdown2" }]),
     });
 
@@ -243,13 +247,14 @@ describe("scheduleDownstreamCrawl", () => {
       incrementMaintenanceCronCounter: vi.fn().mockResolvedValue(7),
       listHackers: vi.fn().mockResolvedValue([{ address: "bc1qa" }]),
       getSourceSync: vi.fn().mockResolvedValue({ lastSyncAt: new Date().toISOString() }),
-      getDownstreamFrontier: vi.fn().mockResolvedValue([]),
+      getCrawlEnqueueCandidates: vi.fn().mockResolvedValue([]),
       listDownstreamForPoll: vi.fn().mockResolvedValue([]),
     });
 
     await scheduleDownstreamCrawl(store, baseConfig(), unlimitedBudget, 0);
 
-    expect(store.listHackers).not.toHaveBeenCalled();
+    expect(store.listHackers).toHaveBeenCalled();
+    expect(store.getBackfillState).not.toHaveBeenCalled();
   });
 
   it("skips poll when backfill is not complete on maintenance tick", async () => {
@@ -258,7 +263,7 @@ describe("scheduleDownstreamCrawl", () => {
       getBackfillState: vi.fn().mockResolvedValue({ backfillComplete: false }),
       getSourceSync: vi.fn().mockResolvedValue({ lastSyncAt: new Date().toISOString() }),
       claimNextHackerPollIndex: vi.fn().mockResolvedValue(0),
-      getDownstreamFrontier: vi.fn().mockResolvedValue([]),
+      getCrawlEnqueueCandidates: vi.fn().mockResolvedValue([]),
       listDownstreamForPoll: vi.fn().mockResolvedValue([]),
     });
 
@@ -283,7 +288,7 @@ describe("scheduleDownstreamCrawl", () => {
       getSyncState,
       getSourceSync: vi.fn().mockResolvedValue({ lastSyncAt: new Date().toISOString() }),
       claimNextHackerPollIndex: vi.fn().mockResolvedValue(0),
-      getDownstreamFrontier: vi.fn().mockResolvedValue([]),
+      getCrawlEnqueueCandidates: vi.fn().mockResolvedValue([]),
       listDownstreamForPoll: vi.fn().mockResolvedValue([]),
     });
 
@@ -308,7 +313,7 @@ describe("scheduleDownstreamCrawl", () => {
       getSyncState: vi.fn().mockResolvedValue(null),
       getSourceSync: vi.fn().mockResolvedValue({ lastSyncAt: new Date().toISOString() }),
       claimNextHackerPollIndex: vi.fn().mockResolvedValue(1),
-      getDownstreamFrontier: vi.fn().mockResolvedValue([]),
+      getCrawlEnqueueCandidates: vi.fn().mockResolvedValue([]),
       listDownstreamForPoll: vi.fn().mockResolvedValue([]),
     });
 
@@ -337,7 +342,7 @@ describe("scheduleDownstreamCrawl", () => {
       }),
       getSourceSync: vi.fn().mockResolvedValue({ lastSyncAt: new Date().toISOString() }),
       claimNextHackerPollIndex: vi.fn().mockResolvedValue(0),
-      getDownstreamFrontier: vi.fn().mockResolvedValue([]),
+      getCrawlEnqueueCandidates: vi.fn().mockResolvedValue([]),
       listDownstreamForPoll: vi.fn().mockResolvedValue([]),
     });
 
@@ -361,7 +366,7 @@ describe("scheduleDownstreamCrawl", () => {
       getBackfillState: vi.fn().mockResolvedValue({ backfillComplete: true }),
       getSyncState: vi.fn().mockResolvedValue(null),
       getSourceSync: vi.fn().mockResolvedValue({ lastSyncAt: new Date().toISOString() }),
-      getDownstreamFrontier: vi.fn().mockResolvedValue([{ address: "bc1qdown" }]),
+      getCrawlEnqueueCandidates: vi.fn().mockResolvedValue([{ address: "bc1qdown" }]),
       listDownstreamForPoll: vi.fn().mockResolvedValue([{ address: "bc1qdown2" }]),
     });
 
@@ -370,7 +375,7 @@ describe("scheduleDownstreamCrawl", () => {
     expect(stats.throttled).toBe(true);
     expect(stats.crawlEnqueued).toBe(0);
     expect(stats.pollEnqueued).toBe(0);
-    expect(store.getDownstreamFrontier).not.toHaveBeenCalled();
+    expect(store.getCrawlEnqueueCandidates).not.toHaveBeenCalled();
     expect(store.listDownstreamForPoll).not.toHaveBeenCalled();
     expect(store.enqueueJobIfAbsent).toHaveBeenCalledWith(
       "poll_hacker_address",
@@ -386,8 +391,10 @@ describe("scheduleDownstreamCrawl", () => {
       getQueueDepth: vi.fn().mockResolvedValue(10),
       getSchedulerState: vi.fn().mockResolvedValue({ queueSchedulingPaused: 0 }),
       incrementMaintenanceCronCounter: vi.fn().mockResolvedValue(11),
+      listHackers: vi.fn().mockResolvedValue([{ address: "bc1qh1" }]),
+      claimNextHackerPollIndex: vi.fn().mockResolvedValue(0),
       getSourceSync: vi.fn().mockResolvedValue({ lastSyncAt: new Date().toISOString() }),
-      getDownstreamFrontier: vi.fn().mockResolvedValue([{ address: "bc1qdown" }]),
+      getCrawlEnqueueCandidates: vi.fn().mockResolvedValue([{ address: "bc1qdown" }]),
       listDownstreamForPoll: vi.fn().mockResolvedValue([{ address: "bc1qdown2" }]),
       enqueueJobIfAbsent: vi
         .fn()
@@ -400,7 +407,7 @@ describe("scheduleDownstreamCrawl", () => {
     expect(stats.throttled).toBe(false);
     expect(stats.crawlEnqueued).toBe(1);
     expect(stats.pollEnqueued).toBe(1);
-    expect(store.getDownstreamFrontier).toHaveBeenCalled();
+    expect(store.getCrawlEnqueueCandidates).toHaveBeenCalledWith("bc1qh1", 5, 5);
     expect(store.listDownstreamForPoll).toHaveBeenCalled();
   });
 

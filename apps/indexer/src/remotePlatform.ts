@@ -55,6 +55,9 @@ export async function openRemoteProductionStore(
 
   const store = createD1Store(env.DB as D1Binding, {
     maxQueueDepth: config.maxQueueDepth,
+    queueSchedulingResumeDepth: config.queueSchedulingResumeDepth,
+    maxPendingExpandPerAddress: config.maxPendingExpandPerAddress,
+    maxPendingExpandGlobal: config.maxPendingExpandGlobal,
     d1BatchSize: config.d1BatchSize,
     d1RowMeter: opts?.d1RowMeter,
   });

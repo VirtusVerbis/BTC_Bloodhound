@@ -49,6 +49,25 @@ import { detectSweepRelay } from "./sweepRelay.js";
 import { processClassifiedPendingTx, type TraceProcessState } from "./txProcess.js";
 import type { PendingTxRuntime } from "./txPage.js";
 
+/** Thrown when continuation enqueue is blocked by expand caps or queue scheduling latch. */
+export class EnqueueBlockedError extends Error {
+  readonly reason: "expand_cap" | "queue_paused";
+
+  constructor(reason: "expand_cap" | "queue_paused") {
+    super(reason);
+    this.name = "EnqueueBlockedError";
+    this.reason = reason;
+  }
+}
+
+async function enqueueExpandContinuation(store: Store, payload: Record<string, unknown>): Promise<void> {
+  const id = await store.enqueueJob("expand_downstream", payload, JOB_PRIORITY.CRON_EXPAND);
+  if (id == null) {
+    const paused = await store.isQueueSchedulingPaused();
+    throw new EnqueueBlockedError(paused ? "queue_paused" : "expand_cap");
+  }
+}
+
 async function withD1QuotaContinuationSave<T>(
   saveContinuation: () => Promise<unknown>,
   fn: () => Promise<T>,
@@ -1085,10 +1104,9 @@ async function expandDownstream(
           newestBlockHeight,
           pagesFetched,
         };
-        await store.enqueueJob(
-          "expand_downstream",
+        await enqueueExpandContinuation(
+          store,
           nextPayload as unknown as Record<string, unknown>,
-          JOB_PRIORITY.CRON_EXPAND,
         );
         return { continued: true };
       }
@@ -1111,24 +1129,20 @@ async function expandDownstream(
     const entry = pending[processedIndex]!;
     const result = await withD1QuotaContinuationSave(
       () =>
-        store.enqueueJob(
-          "expand_downstream",
-          {
-            address,
-            chainCursor,
-            ...writePendingPayload(pending, processedIndex),
-            pagesExhausted,
-            newestTxid,
-            newestBlockHeight,
-            pagesFetched,
-            traceTxid,
-            traceEdgeIndex,
-            traceEdgesPending,
-            traceEdgeTotal,
-            traceEdgesFlat,
-          } as unknown as Record<string, unknown>,
-          JOB_PRIORITY.CRON_EXPAND,
-        ),
+        enqueueExpandContinuation(store, {
+          address,
+          chainCursor,
+          ...writePendingPayload(pending, processedIndex),
+          pagesExhausted,
+          newestTxid,
+          newestBlockHeight,
+          pagesFetched,
+          traceTxid,
+          traceEdgeIndex,
+          traceEdgesPending,
+          traceEdgeTotal,
+          traceEdgesFlat,
+        } as unknown as Record<string, unknown>),
       () =>
         processClassifiedPendingTx(
           store,
@@ -1145,20 +1159,16 @@ async function expandDownstream(
     if (result.chainCallsUsed > 0) budget.consume();
     processed++;
     if (result.continued) {
-      await store.enqueueJob(
-        "expand_downstream",
-        {
-          address,
-          chainCursor,
-          ...writePendingPayload(pending, processedIndex),
-          pagesExhausted,
-          newestTxid,
-          newestBlockHeight,
-          pagesFetched,
-          ...traceFieldsFromState(result.traceState),
-        } as unknown as Record<string, unknown>,
-        JOB_PRIORITY.CRON_EXPAND,
-      );
+      await enqueueExpandContinuation(store, {
+        address,
+        chainCursor,
+        ...writePendingPayload(pending, processedIndex),
+        pagesExhausted,
+        newestTxid,
+        newestBlockHeight,
+        pagesFetched,
+        ...traceFieldsFromState(result.traceState),
+      } as unknown as Record<string, unknown>);
       return jobStatsFromTrace(
         {
           traceComplete: false,
@@ -1198,11 +1208,7 @@ async function expandDownstream(
   };
 
   if (needsMore) {
-    await store.enqueueJob(
-      "expand_downstream",
-      nextPayload as unknown as Record<string, unknown>,
-      JOB_PRIORITY.CRON_EXPAND,
-    );
+    await enqueueExpandContinuation(store, nextPayload as unknown as Record<string, unknown>);
     return { continued: true };
   }
 
@@ -1405,11 +1411,17 @@ async function claimJobForSlot(
   };
 
   if (slot === 0) {
-    const pick = pickIngestCandidate(candidates, config, {
-      ...pickOpts,
-      preferContinuation: true,
-    });
-    if (pick) return await store.claimIngestJobById(pick.id);
+    const schedState = await store.getSchedulerState();
+    const maintCounter = schedState?.maintenanceCronCounter ?? 0;
+    const pollSlice =
+      config.pollSliceEveryNCrons > 0 && maintCounter % config.pollSliceEveryNCrons === 0;
+    if (!pollSlice) {
+      const pick = pickIngestCandidate(candidates, config, {
+        ...pickOpts,
+        preferContinuation: true,
+      });
+      if (pick) return await store.claimIngestJobById(pick.id);
+    }
     return await store.claimNextJob();
   }
 
@@ -1590,6 +1602,22 @@ export async function processJobs(
         chainSlotUsed = true;
       }
     } catch (err) {
+      if (err instanceof EnqueueBlockedError) {
+        const deferSec = 90;
+        const runAfter = new Date(Date.now() + deferSec * 1000).toISOString();
+        const message =
+          err.reason === "queue_paused" ? "queue_scheduling_paused" : "expand_enqueue_cap";
+        await store.deferJob(job.id, message, runAfter);
+        logJobDefer(job, {
+          attempt: job.attempts + 1,
+          deferSec,
+          runAfter,
+          reason: err.reason,
+          color: logColor,
+          colorMode: logColorMode,
+        });
+        continue;
+      }
       if (await handleJobFailure(store, config, job, err, logColor, logColorMode)) {
         if (err instanceof RateLimitNotReadyError) {
           stopReason = "pacing";

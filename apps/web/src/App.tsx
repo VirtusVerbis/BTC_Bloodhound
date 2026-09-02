@@ -493,8 +493,15 @@ export default function App() {
         <div className="stats-row">
           {stats && (
             <>
-              <span>{stats.victimCount} victims indexed</span>
-              <span className="stats-hacker-count">{stats.hackerCount} hacker addresses</span>
+              <span title="Victim wallet addresses stored in the database, from public trackers and on-chain tracing. Does not include downstream addresses.">
+                {stats.victimCount} victims indexed
+              </span>
+              <span
+                className="stats-hacker-count"
+                title="Flagged consolidation addresses that received stolen funds from victims."
+              >
+                {stats.hackerCount} hacker addresses
+              </span>
               <span className="stats-hack-btc">
                 {satsToBtc(stats.totalInSats)} BTC stolen =
                 {stats.btcUsdPrice != null && (

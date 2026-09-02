@@ -190,6 +190,9 @@ export interface ChainApiStatus {
 
 export interface StoreOptions {
   maxQueueDepth?: number;
+  queueSchedulingResumeDepth?: number;
+  maxPendingExpandPerAddress?: number;
+  maxPendingExpandGlobal?: number;
   d1BatchSize?: number;
   d1?: D1Binding;
   d1RowMeter?: D1RowMeter;
@@ -227,13 +230,15 @@ function providerStrikeCount(
   return provider === "esplora" ? (state.esploraStrikeCount ?? 0) : (state.mempoolStrikeCount ?? 0);
 }
 
-function ingestContinuationExempt(type: string, payloadJson: string): boolean {
-  if (type !== "backfill_hacker_address" && type !== "expand_downstream") return false;
-  return isIngestContinuation(payloadJson);
+function expandPayloadAddress(payload: Record<string, unknown>): string | undefined {
+  return typeof payload.address === "string" ? payload.address : undefined;
 }
 
 export class Store {
   private maxQueueDepth: number;
+  private queueSchedulingResumeDepth: number;
+  private maxPendingExpandPerAddress: number;
+  private maxPendingExpandGlobal: number;
   private d1BatchSize: number;
   private d1?: D1Binding;
   private subrequestBudget?: StoreOptions["subrequestBudget"];
@@ -244,6 +249,10 @@ export class Store {
     options?: StoreOptions,
   ) {
     this.maxQueueDepth = options?.maxQueueDepth ?? 360;
+    this.queueSchedulingResumeDepth =
+      options?.queueSchedulingResumeDepth ?? Math.floor(this.maxQueueDepth / 2);
+    this.maxPendingExpandPerAddress = options?.maxPendingExpandPerAddress ?? 2;
+    this.maxPendingExpandGlobal = options?.maxPendingExpandGlobal ?? 40;
     this.d1BatchSize = options?.d1BatchSize ?? 8;
     this.d1 = options?.d1;
     this.subrequestBudget = options?.subrequestBudget;
@@ -273,15 +282,31 @@ export class Store {
   ): Promise<boolean> {
     if (opts?.bypassQueueCap) return true;
     const payloadJson = JSON.stringify(payload);
-    if (ingestContinuationExempt(type, payloadJson)) return true;
+    const continuation = isIngestContinuation(payloadJson);
+
+    if (type === "expand_downstream") {
+      const address = expandPayloadAddress(payload);
+      if (address) {
+        const perAddr = await this.countActiveJobsForAddress("expand_downstream", address);
+        if (perAddr >= this.maxPendingExpandPerAddress) return false;
+      }
+      const globalExpand = await this.countActiveJobs("expand_downstream");
+      if (globalExpand >= this.maxPendingExpandGlobal) return false;
+    }
 
     const state = await this.getSchedulerState();
-    if ((state?.queueSchedulingPaused ?? 0) !== 0) return false;
+    const schedulingPaused = (state?.queueSchedulingPaused ?? 0) !== 0;
+    if (schedulingPaused) {
+      if (type === "expand_downstream") return false;
+      if (type === "backfill_hacker_address" && continuation) return true;
+      return false;
+    }
 
     const depth = await this.getQueueDepth();
     if (depth >= this.maxQueueDepth) {
       await this.setQueueSchedulingPaused(true);
-      return false;
+      if (!continuation) return false;
+      return true;
     }
     return true;
   }
@@ -314,7 +339,7 @@ export class Store {
 
   async maybeClearQueueSchedulingPause(): Promise<void> {
     const depth = await this.getQueueDepth();
-    if (depth === 0) {
+    if (depth <= this.queueSchedulingResumeDepth) {
       await this.setQueueSchedulingPaused(false);
     }
   }
@@ -1124,6 +1149,21 @@ export class Store {
       )
       .get();
     return row?.count ?? 0;
+  }
+
+  async countActiveJobsForAddress(type: string, address: string): Promise<number> {
+    const row = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.type, type),
+          or(eq(jobs.status, "pending"), eq(jobs.status, "running")),
+          jobPayloadAddressEq(address),
+        ),
+      )
+      .get();
+    return Number(row?.count ?? 0);
   }
 
   async hasPendingJob(type: string, address?: string) {
@@ -2046,6 +2086,54 @@ export class Store {
       .orderBy(asc(addresses.hopFromHacker), asc(addresses.lastSeenAt))
       .limit(limit)
       .all();
+  }
+
+  /** Pending expand candidates for one flagged hacker (self + hop-1 downstream). */
+  async getCrawlEnqueueCandidates(hacker: string, limit: number, maxDepth: number) {
+    if (limit <= 0) return [];
+    const out: { address: string }[] = [];
+    const seen = new Set<string>();
+
+    const hackerRow = await this.getAddress(hacker);
+    if (hackerRow?.isFlaggedHacker) {
+      const status = hackerRow.expandStatus ?? "pending";
+      if (status === "pending" || status === "backfilling") {
+        out.push({ address: hacker });
+        seen.add(hacker);
+      }
+    }
+
+    if (out.length < limit && maxDepth > 1) {
+      const hop1 = await this.db
+        .select({ address: addresses.address })
+        .from(addresses)
+        .innerJoin(
+          edges,
+          and(
+            eq(edges.fromAddress, hacker),
+            eq(edges.toAddress, addresses.address),
+            eq(edges.direction, "out_from_hacker"),
+          ),
+        )
+        .where(
+          and(
+            eq(addresses.expandStatus, "pending"),
+            eq(addresses.hopFromHacker, 1),
+            sql`${addresses.hopFromHacker} < ${maxDepth}`,
+          ),
+        )
+        .orderBy(asc(addresses.lastSeenAt))
+        .limit(limit - out.length)
+        .all();
+      for (const row of hop1) {
+        if (!seen.has(row.address)) {
+          out.push(row);
+          seen.add(row.address);
+        }
+      }
+    }
+
+    return out;
   }
 
   async listDownstreamForPoll(limit: number, maxDepth: number, minIntervalSec: number) {

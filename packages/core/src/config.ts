@@ -6,7 +6,7 @@ import type { IndexerLogColorMode } from "./indexer/logColor.js";
 export const JOB_PRIORITY = {
   PROCESS_TX_REBUILD: 11,
   BACKFILL_HACKER: 10,
-  CRON_EXPAND: 8,
+  CRON_EXPAND: 5,
   POLL_HACKER: 6,
   POLL_DOWNSTREAM: 5,
   PROCESS_TX: 4,
@@ -97,8 +97,10 @@ export interface AppConfig {
   hackersPollMs: number;
   /** Client poll interval while cron_indexer_paused=1 (sidecar drain). */
   hackersPollMsSidecar: number;
-  /** Pause cron/discovery enqueue when pending queue reaches this depth; resume when depth hits 0. */
+  /** Pause cron/discovery enqueue when pending queue reaches this depth. */
   maxQueueDepth: number;
+  /** Clear queueSchedulingPaused latch when pending depth is at or below this. */
+  queueSchedulingResumeDepth: number;
   /** Run jobs before schedule when queue depth is at or above this (default 1). */
   queueDrainFirstDepth: number;
   /** Burst ceiling for jobs processed per tick when queue is deep. */
@@ -160,6 +162,12 @@ export interface AppConfig {
   d1ReadDailyLimit: number;
   d1WriteDailyLimit: number;
   workersRequestDailyLimit: number;
+  /** Max pending+running expand_downstream jobs per address. */
+  maxPendingExpandPerAddress: number;
+  /** Max pending+running expand_downstream jobs account-wide. */
+  maxPendingExpandGlobal: number;
+  /** Every N maintenance cron ticks, ingest slot 0 skips ingest pick (poll slice). */
+  pollSliceEveryNCrons: number;
 }
 
 let envFileLoaded = false;
@@ -267,6 +275,11 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     hackersPollMs: Math.max(3_600_000, Number(env.HACKERS_POLL_MS ?? 3_600_000)),
     hackersPollMsSidecar: Math.max(60_000, Number(env.HACKERS_POLL_MS_SIDECAR ?? 60_000)),
     maxQueueDepth: Number(env.MAX_QUEUE_DEPTH ?? 360),
+    queueSchedulingResumeDepth:
+      env.QUEUE_SCHEDULING_RESUME_DEPTH != null &&
+      Number.isFinite(Number(env.QUEUE_SCHEDULING_RESUME_DEPTH))
+        ? Number(env.QUEUE_SCHEDULING_RESUME_DEPTH)
+        : Math.floor(Number(env.MAX_QUEUE_DEPTH ?? 360) / 2),
     queueDrainFirstDepth: Number(env.QUEUE_DRAIN_FIRST_DEPTH ?? 1),
     jobsPerTickMax: Number(env.JOBS_PER_TICK_MAX ?? 3),
     queueDepthPerExtraJob: Number(env.QUEUE_DEPTH_PER_EXTRA_JOB ?? 40),
@@ -304,6 +317,9 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     d1ReadDailyLimit: Math.max(1, Number(env.D1_READ_DAILY_LIMIT ?? 5_000_000)),
     d1WriteDailyLimit: Math.max(1, Number(env.D1_WRITE_DAILY_LIMIT ?? 100_000)),
     workersRequestDailyLimit: Math.max(1, Number(env.WORKERS_REQUEST_DAILY_LIMIT ?? 100_000)),
+    maxPendingExpandPerAddress: Math.max(1, Number(env.MAX_PENDING_EXPAND_PER_ADDRESS ?? 2)),
+    maxPendingExpandGlobal: Math.max(1, Number(env.MAX_PENDING_EXPAND_GLOBAL ?? 40)),
+    pollSliceEveryNCrons: Math.max(1, Number(env.POLL_SLICE_EVERY_N_CRONS ?? 4)),
   };
 }
 

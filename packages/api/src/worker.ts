@@ -67,6 +67,9 @@ function buildIndexer(
   assertProductionSecrets(config);
   const store = createD1Store(env.DB, {
     maxQueueDepth: config.maxQueueDepth,
+    queueSchedulingResumeDepth: config.queueSchedulingResumeDepth,
+    maxPendingExpandPerAddress: config.maxPendingExpandPerAddress,
+    maxPendingExpandGlobal: config.maxPendingExpandGlobal,
     d1BatchSize: config.d1BatchSize,
     d1RowMeter,
   });

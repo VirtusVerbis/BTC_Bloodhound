@@ -23,6 +23,9 @@ importers:
       '@cointrace/db':
         specifier: workspace:*
         version: link:../../packages/db
+      wrangler:
+        specifier: ^4.14.0
+        version: 4.120.0
     devDependencies:
       typescript:
         specifier: ^5.7.2
