@@ -237,6 +237,27 @@ export function runMigrations(sqlite: Database.Database): void {
   if (!schedulerCols.some((c) => c.name === "cron_indexer_paused")) {
     sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN cron_indexer_paused INTEGER NOT NULL DEFAULT 0`);
   }
+  if (!schedulerCols.some((c) => c.name === "quota_day_utc")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN quota_day_utc TEXT`);
+  }
+  if (!schedulerCols.some((c) => c.name === "d1_rows_read_total")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN d1_rows_read_total INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!schedulerCols.some((c) => c.name === "d1_rows_written_total")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN d1_rows_written_total INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!schedulerCols.some((c) => c.name === "workers_requests_total")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN workers_requests_total INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!schedulerCols.some((c) => c.name === "d1_rows_read_cron")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN d1_rows_read_cron INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!schedulerCols.some((c) => c.name === "d1_rows_written_cron")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN d1_rows_written_cron INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!schedulerCols.some((c) => c.name === "workers_requests_cron")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN workers_requests_cron INTEGER NOT NULL DEFAULT 0`);
+  }
 
   const syncCols = sqlite.prepare("PRAGMA table_info(sync_state)").all() as Array<{ name: string }>;
   if (!syncCols.some((c) => c.name === "backfill_state_json")) {

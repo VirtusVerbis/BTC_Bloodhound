@@ -33,3 +33,4 @@ export * from "./indexer/tickLease.js";
 export * from "./ops/hackers.js";
 export * from "./ops/queue.js";
 export * from "./ops/addresses.js";
+export * from "./quota/dailyPace.js";

@@ -1,11 +1,16 @@
 import { createD1Store } from "@cointrace/db/d1";
+import { D1RowMeter } from "@cointrace/db";
 import {
   assertProductionSecrets,
   ChainRouter,
   clearTickLeaseSafe,
+  formatCronPaceSkipLine,
+  formatUtcResetCountdown,
   loadConfig,
+  logCronDetail,
   logCronError,
   runIndexerTick,
+  shouldPaceCron,
   TICK_LEASE_SKEW_MS,
   type AppConfig,
   type EnvMap,
@@ -42,7 +47,18 @@ function envMap(env: WorkerEnv): EnvMap {
   return map;
 }
 
-function buildIndexer(env: WorkerEnv): {
+function quotaLimits(config: AppConfig) {
+  return {
+    rowsReadLimit: config.d1ReadDailyLimit,
+    rowsWrittenLimit: config.d1WriteDailyLimit,
+    workersRequestsLimit: config.workersRequestDailyLimit,
+  };
+}
+
+function buildIndexer(
+  env: WorkerEnv,
+  d1RowMeter?: D1RowMeter,
+): {
   config: AppConfig;
   store: Store;
   router: ChainRouter;
@@ -52,6 +68,7 @@ function buildIndexer(env: WorkerEnv): {
   const store = createD1Store(env.DB, {
     maxQueueDepth: config.maxQueueDepth,
     d1BatchSize: config.d1BatchSize,
+    d1RowMeter,
   });
   const router = new ChainRouter(config.esploraBase, config.mempoolBase, store, config.rateLimitMs, {
     sleepOnRateLimit: false,
@@ -65,9 +82,9 @@ function buildIndexer(env: WorkerEnv): {
   return { config, store, router };
 }
 
-function buildApp(env: WorkerEnv) {
-  const { config, store, router } = buildIndexer(env);
-  const app = createApp(store, config);
+function buildApp(env: WorkerEnv, d1RowMeter?: D1RowMeter) {
+  const { config, store, router } = buildIndexer(env, d1RowMeter);
+  const app = createApp(store, config, { d1RowMeter });
   return { config, store, router, app };
 }
 
@@ -94,9 +111,24 @@ function withSecurityHeaders(res: Response): Response {
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }
 
+async function flushCronQuota(
+  store: Store,
+  d1RowMeter: D1RowMeter,
+  meterStart: { rowsRead: number; rowsWritten: number },
+): Promise<void> {
+  d1RowMeter.rolloverIfNeeded();
+  const snap = d1RowMeter.snapshot();
+  await store.flushQuotaUsage("cron", {
+    reads: snap.rowsRead - meterStart.rowsRead,
+    writes: snap.rowsWritten - meterStart.rowsWritten,
+    requests: 1,
+  });
+}
+
 const worker = {
   async fetch(request: Request, env: WorkerEnv): Promise<Response> {
-    const { app } = buildApp(env);
+    const d1RowMeter = new D1RowMeter();
+    const { app } = buildApp(env, d1RowMeter);
     const url = new URL(request.url);
     if (url.pathname.startsWith("/api")) {
       return app.fetch(request);
@@ -108,25 +140,51 @@ const worker = {
   },
 
   async scheduled(_event: unknown, env: WorkerEnv): Promise<void> {
-    const { store, router, config } = buildIndexer(env);
-    if (await store.isCronIndexerPaused()) return;
-
-    const leaseMs = config.tickBudgetMs + TICK_LEASE_SKEW_MS;
-    const acquired = await store.tryAcquireTickLease(leaseMs);
-    if (!acquired) return;
+    const d1RowMeter = new D1RowMeter();
+    const { store, router, config } = buildIndexer(env, d1RowMeter);
     try {
-      await store.resetRunningJobs(config.runningJobStaleMs, {
-        jobReclaimDeferAfter: config.jobReclaimDeferAfter,
-        jobReclaimDeferSec: config.jobReclaimDeferSec,
+      if (await store.isCronIndexerPaused()) return;
+
+      const snapshot = await store.getQuotaSnapshot();
+      const pace = shouldPaceCron(snapshot, quotaLimits(config), {
+        cronUtilizationPct: config.cronQuotaUtilizationPct,
       });
-      await runIndexerTick(store, router, config, {
-        schedule: true,
-        jobDetails: config.indexerJobDetails,
-      });
-    } finally {
-      await clearTickLeaseSafe(store, (msg) =>
-        logCronError(`[cron] clearTickLease failed: ${msg}`, config.indexerLogColor),
-      );
+      if (pace.paced) {
+        logCronDetail(
+          config.indexerJobDetails,
+          formatCronPaceSkipLine(pace, snapshot, formatUtcResetCountdown()),
+          config.indexerLogColor,
+        );
+        return;
+      }
+
+      const leaseMs = config.tickBudgetMs + TICK_LEASE_SKEW_MS;
+      const acquired = await store.tryAcquireTickLease(leaseMs);
+      if (!acquired) return;
+
+      d1RowMeter.rolloverIfNeeded();
+      const meterStart = d1RowMeter.snapshot();
+      try {
+        await store.resetRunningJobs(config.runningJobStaleMs, {
+          jobReclaimDeferAfter: config.jobReclaimDeferAfter,
+          jobReclaimDeferSec: config.jobReclaimDeferSec,
+        });
+        await runIndexerTick(store, router, config, {
+          schedule: true,
+          jobDetails: config.indexerJobDetails,
+        });
+      } finally {
+        try {
+          await flushCronQuota(store, d1RowMeter, meterStart);
+        } catch (err) {
+          logCronError(`[cron] flushQuotaUsage failed: ${String(err)}`, config.indexerLogColor);
+        }
+        await clearTickLeaseSafe(store, (msg) =>
+          logCronError(`[cron] clearTickLease failed: ${msg}`, config.indexerLogColor),
+        );
+      }
+    } catch (err) {
+      logCronError(`[cron] scheduled failed: ${String(err)}`, config.indexerLogColor);
     }
   },
 };

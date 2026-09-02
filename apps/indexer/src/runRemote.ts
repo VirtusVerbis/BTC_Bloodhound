@@ -175,6 +175,17 @@ export async function runRemoteSidecar(config: AppConfig, argv: string[]): Promi
     }
   };
 
+  let lastRemoteQuotaFlush = { rowsRead: 0, rowsWritten: 0 };
+  const flushSidecarQuotaToRemote = async (targetStore: Store): Promise<void> => {
+    d1RowMeter.rolloverIfNeeded();
+    const snap = d1RowMeter.snapshot();
+    const reads = snap.rowsRead - lastRemoteQuotaFlush.rowsRead;
+    const writes = snap.rowsWritten - lastRemoteQuotaFlush.rowsWritten;
+    if (reads === 0 && writes === 0) return;
+    await targetStore.flushQuotaUsage("api", { reads, writes, requests: 0 });
+    lastRemoteQuotaFlush = { rowsRead: snap.rowsRead, rowsWritten: snap.rowsWritten };
+  };
+
   const shutdown = async (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
@@ -185,6 +196,13 @@ export async function runRemoteSidecar(config: AppConfig, argv: string[]): Promi
       logSidecar("[sidecar] tick lease cleared", logColor, logColorMode);
     }
     flushSidecarD1Meter(d1RowMeter, meterPath);
+    if (store) {
+      try {
+        await flushSidecarQuotaToRemote(store);
+      } catch (err) {
+        logSidecarErrorFrom("[sidecar] error flushRemoteQuota=", err, logColor, logColorMode);
+      }
+    }
     meterFlush.dispose();
     if (remoteHandle) {
       await remoteHandle.dispose();
@@ -286,8 +304,11 @@ export async function runRemoteSidecar(config: AppConfig, argv: string[]): Promi
         d1RowMeter,
         quotaLimits,
       )
-        .then(() => {
+        .then(async () => {
           meterFlush.flushNow();
+          if (store) {
+            await flushSidecarQuotaToRemote(store);
+          }
         })
         .catch((err) => {
           logSidecarErrorFrom("[sidecar] error heartbeat=", err, logColor, logColorMode);
@@ -357,6 +378,11 @@ export async function runRemoteSidecar(config: AppConfig, argv: string[]): Promi
         await flushReconnectIfPending();
         await clearLeaseSafe(store);
         meterFlush.flush();
+        try {
+          await flushSidecarQuotaToRemote(store);
+        } catch (err) {
+          logSidecarErrorFrom("[sidecar] error flushRemoteQuota=", err, logColor, logColorMode);
+        }
       }
     }
   } catch (err) {

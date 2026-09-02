@@ -4,6 +4,7 @@ import { SQLiteAsyncDialect } from "drizzle-orm/sqlite-core";
 import type { D1Binding } from "./d1.js";
 import type { D1QuotaKind } from "./d1Quota.js";
 import type { D1RowMeter } from "./d1RowMeter.js";
+import { todayUtcDate } from "./d1RowMeter.js";
 import * as schema from "./schema.js";
 import {
   addresses,
@@ -1563,6 +1564,13 @@ export class Store {
     btcUsdPrice?: number;
     btcUsdPriceAt?: string;
     btcUsdRefreshAttemptAt?: string;
+    quotaDayUtc?: string | null;
+    d1RowsReadTotal?: number;
+    d1RowsWrittenTotal?: number;
+    workersRequestsTotal?: number;
+    d1RowsReadCron?: number;
+    d1RowsWrittenCron?: number;
+    workersRequestsCron?: number;
   }) {
     await this.db
       .update(schedulerState)
@@ -1615,16 +1623,124 @@ export class Store {
     return readBlocked || writeBlocked;
   }
 
-  async getD1QuotaStatus(): Promise<{
+  async getD1QuotaStatus(limits?: {
+    rowsReadLimit: number;
+    rowsWrittenLimit: number;
+    workersRequestsLimit: number;
+  }): Promise<{
     readRetryAfterAt: string | null;
     writeRetryAfterAt: string | null;
     blocked: boolean;
+    rowsRead: number;
+    rowsWritten: number;
+    workersRequests: number;
+    rowsReadLimit: number;
+    rowsWrittenLimit: number;
+    workersRequestsLimit: number;
   }> {
+    const snapshot = await this.getQuotaSnapshot();
     const state = await this.getSchedulerState();
     const readRetryAfterAt = state?.d1ReadRetryAfterAt ?? null;
     const writeRetryAfterAt = state?.d1WriteRetryAfterAt ?? null;
     const blocked = await this.isD1QuotaBlocked();
-    return { readRetryAfterAt, writeRetryAfterAt, blocked };
+    return {
+      readRetryAfterAt,
+      writeRetryAfterAt,
+      blocked,
+      rowsRead: snapshot.rowsReadTotal,
+      rowsWritten: snapshot.rowsWrittenTotal,
+      workersRequests: snapshot.workersRequestsTotal,
+      rowsReadLimit: limits?.rowsReadLimit ?? 5_000_000,
+      rowsWrittenLimit: limits?.rowsWrittenLimit ?? 100_000,
+      workersRequestsLimit: limits?.workersRequestsLimit ?? 100_000,
+    };
+  }
+
+  async getQuotaSnapshot(): Promise<{
+    quotaDayUtc: string;
+    rowsReadTotal: number;
+    rowsWrittenTotal: number;
+    workersRequestsTotal: number;
+    rowsReadCron: number;
+    rowsWrittenCron: number;
+    workersRequestsCron: number;
+  }> {
+    const today = todayUtcDate();
+    const state = await this.getSchedulerState();
+    if (!state) {
+      return {
+        quotaDayUtc: today,
+        rowsReadTotal: 0,
+        rowsWrittenTotal: 0,
+        workersRequestsTotal: 0,
+        rowsReadCron: 0,
+        rowsWrittenCron: 0,
+        workersRequestsCron: 0,
+      };
+    }
+    if (state.quotaDayUtc !== today) {
+      await this.updateSchedulerState({
+        quotaDayUtc: today,
+        d1RowsReadTotal: 0,
+        d1RowsWrittenTotal: 0,
+        workersRequestsTotal: 0,
+        d1RowsReadCron: 0,
+        d1RowsWrittenCron: 0,
+        workersRequestsCron: 0,
+      });
+      return {
+        quotaDayUtc: today,
+        rowsReadTotal: 0,
+        rowsWrittenTotal: 0,
+        workersRequestsTotal: 0,
+        rowsReadCron: 0,
+        rowsWrittenCron: 0,
+        workersRequestsCron: 0,
+      };
+    }
+    return {
+      quotaDayUtc: state.quotaDayUtc ?? today,
+      rowsReadTotal: state.d1RowsReadTotal ?? 0,
+      rowsWrittenTotal: state.d1RowsWrittenTotal ?? 0,
+      workersRequestsTotal: state.workersRequestsTotal ?? 0,
+      rowsReadCron: state.d1RowsReadCron ?? 0,
+      rowsWrittenCron: state.d1RowsWrittenCron ?? 0,
+      workersRequestsCron: state.workersRequestsCron ?? 0,
+    };
+  }
+
+  async flushQuotaUsage(
+    source: "cron" | "api",
+    delta: { reads: number; writes: number; requests: number },
+  ): Promise<void> {
+    const reads = Math.max(0, Math.floor(delta.reads));
+    const writes = Math.max(0, Math.floor(delta.writes));
+    const requests = Math.max(0, Math.floor(delta.requests));
+    if (reads === 0 && writes === 0 && requests === 0) return;
+
+    await this.getQuotaSnapshot();
+    if (source === "cron") {
+      await this.db.run(sql`
+        UPDATE scheduler_state
+        SET
+          d1_rows_read_total = d1_rows_read_total + ${reads},
+          d1_rows_written_total = d1_rows_written_total + ${writes},
+          workers_requests_total = workers_requests_total + ${requests},
+          d1_rows_read_cron = d1_rows_read_cron + ${reads},
+          d1_rows_written_cron = d1_rows_written_cron + ${writes},
+          workers_requests_cron = workers_requests_cron + ${requests}
+        WHERE id = 1
+      `);
+      return;
+    }
+    await this.db.run(sql`
+      UPDATE scheduler_state
+      SET
+        d1_rows_read_total = d1_rows_read_total + ${reads},
+        d1_rows_written_total = d1_rows_written_total + ${writes},
+        workers_requests_total = workers_requests_total + ${requests}
+      WHERE id = 1
+    `);
   }
 
   async getBtcUsdPrice(): Promise<{ usd: number; at: string } | null> {

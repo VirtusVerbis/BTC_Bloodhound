@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
-import { classifyD1Error, D1QuotaExceededError, type Store } from "@cointrace/db";
+import { classifyD1Error, D1QuotaExceededError, type D1RowMeter, type Store } from "@cointrace/db";
 import type { AppConfig } from "@cointrace/core";
 import {
   buildGraph,
@@ -43,18 +43,33 @@ function isValidLoadId(loadId: string | undefined): loadId is string {
 const D1_QUOTA_USER_MESSAGE =
   "Database temporarily unavailable. Please try again after midnight UTC.";
 
-function d1QuotaResponse(store: Store, err: D1QuotaExceededError) {
+function quotaLimits(config: AppConfig) {
+  return {
+    rowsReadLimit: config.d1ReadDailyLimit,
+    rowsWrittenLimit: config.d1WriteDailyLimit,
+    workersRequestsLimit: config.workersRequestDailyLimit,
+  };
+}
+
+async function d1QuotaResponse(store: Store, err: D1QuotaExceededError, config: AppConfig) {
   const retryAfterSec = Math.max(
     1,
     Math.ceil((new Date(err.retryAt).getTime() - Date.now()) / 1000),
   );
   void store.setD1QuotaPaused(err.kind, err.retryAt).catch(console.error);
+  const usage = await store.getD1QuotaStatus(quotaLimits(config)).catch(() => null);
   return {
     body: {
       error: D1_QUOTA_USER_MESSAGE,
       code: "d1_quota_exceeded",
       kind: err.kind,
       retryAfterAt: err.retryAt,
+      rowsRead: usage?.rowsRead ?? 0,
+      rowsWritten: usage?.rowsWritten ?? 0,
+      workersRequests: usage?.workersRequests ?? 0,
+      rowsReadLimit: usage?.rowsReadLimit ?? config.d1ReadDailyLimit,
+      rowsWrittenLimit: usage?.rowsWrittenLimit ?? config.d1WriteDailyLimit,
+      workersRequestsLimit: usage?.workersRequestsLimit ?? config.workersRequestDailyLimit,
     },
     retryAfterSec,
   };
@@ -78,8 +93,9 @@ async function applyRateLimit(
   return null;
 }
 
-export function createApp(store: Store, config: AppConfig) {
+export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?: D1RowMeter }) {
   const app = new Hono();
+  const d1RowMeter = opts?.d1RowMeter;
 
   app.use("*", securityHeadersMiddleware);
 
@@ -97,11 +113,11 @@ export function createApp(store: Store, config: AppConfig) {
     }),
   );
 
-  app.onError((err, c) => {
+  app.onError(async (err, c) => {
     console.error(err);
     const quotaErr = err instanceof D1QuotaExceededError ? err : classifyD1Error(err);
     if (quotaErr) {
-      const { body, retryAfterSec } = d1QuotaResponse(store, quotaErr);
+      const { body, retryAfterSec } = await d1QuotaResponse(store, quotaErr, config);
       return c.json(body, 503, { "Retry-After": String(retryAfterSec) });
     }
     if (config.environment === "production") {
@@ -111,6 +127,27 @@ export function createApp(store: Store, config: AppConfig) {
   });
 
   app.get("/api/health", (c) => c.json({ ok: true }));
+
+  app.use("/api/*", async (c, next) => {
+    d1RowMeter?.rolloverIfNeeded();
+    const meterStart = d1RowMeter
+      ? { rowsRead: d1RowMeter.snapshot().rowsRead, rowsWritten: d1RowMeter.snapshot().rowsWritten }
+      : null;
+    try {
+      await next();
+    } finally {
+      if (d1RowMeter && meterStart) {
+        const snap = d1RowMeter.snapshot();
+        void store
+          .flushQuotaUsage("api", {
+            reads: snap.rowsRead - meterStart.rowsRead,
+            writes: snap.rowsWritten - meterStart.rowsWritten,
+            requests: 1,
+          })
+          .catch(console.error);
+      }
+    }
+  });
 
   app.use("/api/*", async (c, next) => {
     if (c.req.method !== "GET") return next();
@@ -381,11 +418,21 @@ export function createApp(store: Store, config: AppConfig) {
 
     let queueDepth = 0;
     let pendingQueueDepthAll = 0;
-    let d1Quota = { readRetryAfterAt: null as string | null, writeRetryAfterAt: null as string | null, blocked: false };
+    let d1Quota = {
+      readRetryAfterAt: null as string | null,
+      writeRetryAfterAt: null as string | null,
+      blocked: false,
+      rowsRead: 0,
+      rowsWritten: 0,
+      workersRequests: 0,
+      rowsReadLimit: config.d1ReadDailyLimit,
+      rowsWrittenLimit: config.d1WriteDailyLimit,
+      workersRequestsLimit: config.workersRequestDailyLimit,
+    };
     try {
       queueDepth = await store.getQueueDepth();
       pendingQueueDepthAll = await store.getPendingQueueDepthAll();
-      d1Quota = await store.getD1QuotaStatus();
+      d1Quota = await store.getD1QuotaStatus(quotaLimits(config));
     } catch (err) {
       console.error("sync/status getQueueDepth failed", err);
     }

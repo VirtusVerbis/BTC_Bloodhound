@@ -10,6 +10,7 @@ import {
 } from "./components/MonitoringIndicator";
 import { BtcUsdProvider } from "./context/BtcUsdContext";
 import { api, formatBtcSpotUsd, formatUsd, satsToBtc, satsToUsd, ApiError, secondsUntilIso } from "./lib/api";
+import { formatQuotaUsageLine, type QuotaUsageDisplay } from "./lib/quotaFormat";
 import {
   clampGraphNodeCount,
   commitGraphNodeDraft,
@@ -52,6 +53,12 @@ interface SyncStatus extends MonitoringSyncStatus {
     blocked: boolean;
     readRetryAfterAt: string | null;
     writeRetryAfterAt: string | null;
+    rowsRead: number;
+    rowsWritten: number;
+    workersRequests: number;
+    rowsReadLimit: number;
+    rowsWrittenLimit: number;
+    workersRequestsLimit: number;
   };
 }
 
@@ -110,6 +117,7 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [rateLimitSecondsLeft, setRateLimitSecondsLeft] = useState<number | null>(null);
   const [d1QuotaSecondsLeft, setD1QuotaSecondsLeft] = useState<number | null>(null);
+  const [d1QuotaUsage, setD1QuotaUsage] = useState<QuotaUsageDisplay | null>(null);
   const [apiThresholdSecondsLeft, setApiThresholdSecondsLeft] = useState<number | null>(null);
   const [minEdgeSats, setMinEdgeSats] = useState(DEFAULT_MIN_EDGE_SATS);
   const [statsPollMs, setStatsPollMs] = useState(DEFAULT_STATS_POLL_MS);
@@ -262,6 +270,16 @@ export default function App() {
           if (d1RetryAt) {
             setD1QuotaSecondsLeft(secondsUntilIso(d1RetryAt));
           }
+          if (status.d1Quota?.blocked) {
+            setD1QuotaUsage({
+              rowsRead: status.d1Quota.rowsRead,
+              rowsWritten: status.d1Quota.rowsWritten,
+              workersRequests: status.d1Quota.workersRequests,
+              rowsReadLimit: status.d1Quota.rowsReadLimit,
+              rowsWrittenLimit: status.d1Quota.rowsWrittenLimit,
+              workersRequestsLimit: status.d1Quota.workersRequestsLimit,
+            });
+          }
           setSync(status);
         })
         .catch(console.error);
@@ -282,14 +300,38 @@ export default function App() {
       setRateLimitSecondsLeft(Math.max(1, Number(sec) || 60));
     };
     const onD1Quota = (e: Event) => {
-      const detail = (e as CustomEvent<{ retryAfterSec?: number; retryAfterAt?: string | null }>)
-        .detail;
+      const detail = (
+        e as CustomEvent<{
+          retryAfterSec?: number;
+          retryAfterAt?: string | null;
+          rowsRead?: number;
+          rowsWritten?: number;
+          workersRequests?: number;
+          rowsReadLimit?: number;
+          rowsWrittenLimit?: number;
+          workersRequestsLimit?: number;
+        }>
+      ).detail;
       const retryAfterAt = detail?.retryAfterAt;
       const sec =
         retryAfterAt != null
           ? secondsUntilIso(retryAfterAt)
           : Math.max(1, Number(detail?.retryAfterSec) || 60);
       setD1QuotaSecondsLeft(sec);
+      if (
+        detail?.rowsReadLimit != null &&
+        detail?.rowsWrittenLimit != null &&
+        detail?.workersRequestsLimit != null
+      ) {
+        setD1QuotaUsage({
+          rowsRead: detail.rowsRead ?? 0,
+          rowsWritten: detail.rowsWritten ?? 0,
+          workersRequests: detail.workersRequests ?? 0,
+          rowsReadLimit: detail.rowsReadLimit,
+          rowsWrittenLimit: detail.rowsWrittenLimit,
+          workersRequestsLimit: detail.workersRequestsLimit,
+        });
+      }
     };
     window.addEventListener("cointrace-toast", onToast);
     window.addEventListener("cointrace-expand-victims", onExpandVictims);
@@ -479,6 +521,12 @@ export default function App() {
             <div className="rate-limit-banner" role="status">
               Database temporarily unavailable — try again in{" "}
               {formatHoursMinutesCountdown(d1QuotaSecondsLeft)} (resets midnight UTC).
+              {d1QuotaUsage && (
+                <>
+                  <br />
+                  {formatQuotaUsageLine(d1QuotaUsage)}
+                </>
+              )}
             </div>
           )}
           {sync && (

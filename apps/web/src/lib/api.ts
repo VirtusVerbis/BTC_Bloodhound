@@ -101,6 +101,23 @@ type ApiErrorJson = {
   error?: string;
   code?: string;
   retryAfterAt?: string;
+  rowsRead?: number;
+  rowsWritten?: number;
+  workersRequests?: number;
+  rowsReadLimit?: number;
+  rowsWrittenLimit?: number;
+  workersRequestsLimit?: number;
+};
+
+export type D1QuotaUsageDetail = {
+  retryAfterSec: number;
+  retryAfterAt: string | null;
+  rowsRead?: number;
+  rowsWritten?: number;
+  workersRequests?: number;
+  rowsReadLimit?: number;
+  rowsWrittenLimit?: number;
+  workersRequestsLimit?: number;
 };
 
 function parseApiErrorJson(body: string): ApiErrorJson | null {
@@ -214,7 +231,16 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
           : Math.max(1, retryAfterSec ?? 60);
       window.dispatchEvent(
         new CustomEvent("cointrace-d1-quota", {
-          detail: { retryAfterSec: sec, retryAfterAt: retryAfterAt ?? null },
+          detail: {
+            retryAfterSec: sec,
+            retryAfterAt: retryAfterAt ?? null,
+            rowsRead: parsed.rowsRead,
+            rowsWritten: parsed.rowsWritten,
+            workersRequests: parsed.workersRequests,
+            rowsReadLimit: parsed.rowsReadLimit,
+            rowsWrittenLimit: parsed.rowsWrittenLimit,
+            workersRequestsLimit: parsed.workersRequestsLimit,
+          } satisfies D1QuotaUsageDetail,
         }),
       );
     }

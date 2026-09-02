@@ -108,6 +108,13 @@ export const schedulerState = sqliteTable("scheduler_state", {
   d1WriteRetryAfterAt: text("d1_write_retry_after_at"),
   recentHackersJson: text("recent_hackers_json"),
   cronIndexerPaused: integer("cron_indexer_paused").notNull().default(0),
+  quotaDayUtc: text("quota_day_utc"),
+  d1RowsReadTotal: integer("d1_rows_read_total").notNull().default(0),
+  d1RowsWrittenTotal: integer("d1_rows_written_total").notNull().default(0),
+  workersRequestsTotal: integer("workers_requests_total").notNull().default(0),
+  d1RowsReadCron: integer("d1_rows_read_cron").notNull().default(0),
+  d1RowsWrittenCron: integer("d1_rows_written_cron").notNull().default(0),
+  workersRequestsCron: integer("workers_requests_cron").notNull().default(0),
 });
 
 export const rateLimits = sqliteTable("rate_limits", {

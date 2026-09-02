@@ -155,6 +155,11 @@ export interface AppConfig {
   syncAddressesPerJob: number;
   /** Cumulative sync-CPU budget per job (ms); 0 = disabled. */
   jobCpuGuardMs: number;
+  /** Max share of daily D1/request quota cron may consume (0–100). */
+  cronQuotaUtilizationPct: number;
+  d1ReadDailyLimit: number;
+  d1WriteDailyLimit: number;
+  workersRequestDailyLimit: number;
 }
 
 let envFileLoaded = false;
@@ -292,6 +297,13 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     d1BatchSize: Number(env.D1_BATCH_SIZE ?? 8),
     syncAddressesPerJob: Number(env.SYNC_ADDRESSES_PER_JOB ?? 5),
     jobCpuGuardMs: Number(env.JOB_CPU_GUARD_MS ?? 0),
+    cronQuotaUtilizationPct: Math.min(
+      100,
+      Math.max(0, Number(env.CRON_QUOTA_UTILIZATION_PCT ?? 100)),
+    ),
+    d1ReadDailyLimit: Math.max(1, Number(env.D1_READ_DAILY_LIMIT ?? 5_000_000)),
+    d1WriteDailyLimit: Math.max(1, Number(env.D1_WRITE_DAILY_LIMIT ?? 100_000)),
+    workersRequestDailyLimit: Math.max(1, Number(env.WORKERS_REQUEST_DAILY_LIMIT ?? 100_000)),
   };
 }
 
