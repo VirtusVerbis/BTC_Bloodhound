@@ -247,6 +247,12 @@ body {
   margin-top: 0.5rem;
 }
 
+.about-monitoring-stale {
+  color: #ffb74d;
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+}
+
 .monitoring-dot {
   width: 0.55rem;
   height: 0.55rem;

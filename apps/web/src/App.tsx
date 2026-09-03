@@ -10,6 +10,12 @@ import {
 } from "./components/MonitoringIndicator";
 import { BtcUsdProvider } from "./context/BtcUsdContext";
 import { api, formatBtcSpotUsd, formatUsd, satsToBtc, satsToUsd, ApiError, secondsUntilIso } from "./lib/api";
+import {
+  extractMonitoringSnapshot,
+  hasMeaningfulMonitoring,
+  saveMonitoringCache,
+  saveMonitoringCacheFromD1Quota,
+} from "./lib/monitoringCache";
 import { formatQuotaUsageLine, type QuotaUsageDisplay } from "./lib/quotaFormat";
 import {
   clampGraphNodeCount,
@@ -280,6 +286,9 @@ export default function App() {
               workersRequestsLimit: status.d1Quota.workersRequestsLimit,
             });
           }
+          if (hasMeaningfulMonitoring(status)) {
+            saveMonitoringCache(extractMonitoringSnapshot(status));
+          }
           setSync(status);
         })
         .catch(console.error);
@@ -330,6 +339,15 @@ export default function App() {
           rowsReadLimit: detail.rowsReadLimit,
           rowsWrittenLimit: detail.rowsWrittenLimit,
           workersRequestsLimit: detail.workersRequestsLimit,
+        });
+        saveMonitoringCacheFromD1Quota({
+          rowsRead: detail.rowsRead ?? 0,
+          rowsWritten: detail.rowsWritten ?? 0,
+          workersRequests: detail.workersRequests ?? 0,
+          rowsReadLimit: detail.rowsReadLimit,
+          rowsWrittenLimit: detail.rowsWrittenLimit,
+          workersRequestsLimit: detail.workersRequestsLimit,
+          blocked: true,
         });
       }
     };

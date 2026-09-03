@@ -11,13 +11,18 @@ import {
   openSourceRepoUrl,
   purposeText,
 } from "../content/aboutContent";
+import { formatQuotaCount } from "../lib/quotaFormat";
+import {
+  loadMonitoringCache,
+  mergeMonitoringForAbout,
+  type AboutMonitoringInput,
+} from "../lib/monitoringCache";
 import {
   formatCountdown,
   formatJobDuration,
   formatMonitoringTime,
   formatSourceLabel,
   type ChainApiStatus,
-  type MonitoringSyncStatus,
 } from "./MonitoringIndicator";
 
 function ExternalLinkList({ links }: { links: { label: string; url: string; description?: string }[] }) {
@@ -36,10 +41,14 @@ function ExternalLinkList({ links }: { links: { label: string; url: string; desc
 }
 
 interface AboutPageProps {
-  sync?: MonitoringSyncStatus | null;
+  sync?: AboutMonitoringInput | null;
 }
 
 export function AboutPage({ sync }: AboutPageProps) {
+  const display = mergeMonitoringForAbout(sync, loadMonitoringCache());
+  const monitoring = display.data;
+  const isCached = display.source === "cached";
+
   return (
     <div className="about-panel">
       <section className="about-section about-disclaimer">
@@ -100,29 +109,52 @@ export function AboutPage({ sync }: AboutPageProps) {
             </li>
           ))}
         </ul>
-        {sync && (
+        {monitoring && (
           <div className="about-monitoring-status">
+            {isCached && display.retrievedAt && (
+              <p className="about-monitoring-stale" role="status">
+                Database unavailable — values last retrieved{" "}
+                {formatMonitoringTime(display.retrievedAt)}
+              </p>
+            )}
             <p>
-              <strong>Status:</strong> {sync.monitoringActive !== false ? "Active" : "Paused (no recent activity)"}
+              <strong>Status:</strong>{" "}
+              {monitoring.monitoringActive !== false ? "Active" : "Paused (no recent activity)"}
             </p>
             <p>
-              <strong>Last activity:</strong> {formatMonitoringTime(sync.lastActivityAt)}
+              <strong>Last activity:</strong> {formatMonitoringTime(monitoring.lastActivityAt)}
             </p>
             <ul className="about-link-list about-monitoring-breakdown">
-              <li>Chain API: {formatMonitoringTime(sync.lastChainApiAt)}</li>
-              <li>External sync: {formatMonitoringTime(sync.lastExternalSyncAt)}</li>
-              <li>Indexer jobs: {formatMonitoringTime(sync.lastJobAt)}</li>
+              <li>Chain API: {formatMonitoringTime(monitoring.lastChainApiAt)}</li>
+              <li>External sync: {formatMonitoringTime(monitoring.lastExternalSyncAt)}</li>
+              <li>Indexer jobs: {formatMonitoringTime(monitoring.lastJobAt)}</li>
               <li>
-                Last job completed: {sync.lastCompletedJobType?.trim() || "—"}
+                Last job completed: {monitoring.lastCompletedJobType?.trim() || "—"}
                 {" · "}
-                Duration: {formatJobDuration(sync.lastCompletedJobDurationMs)}
+                Duration: {formatJobDuration(monitoring.lastCompletedJobDurationMs)}
               </li>
+              {monitoring.d1Quota && (
+                <>
+                  <li>
+                    D1 reads: {formatQuotaCount(monitoring.d1Quota.rowsRead)}/
+                    {formatQuotaCount(monitoring.d1Quota.rowsReadLimit)}
+                  </li>
+                  <li>
+                    D1 writes: {formatQuotaCount(monitoring.d1Quota.rowsWritten)}/
+                    {formatQuotaCount(monitoring.d1Quota.rowsWrittenLimit)}
+                  </li>
+                  <li>
+                    Requests: {formatQuotaCount(monitoring.d1Quota.workersRequests)}/
+                    {formatQuotaCount(monitoring.d1Quota.workersRequestsLimit)}
+                  </li>
+                </>
+              )}
             </ul>
-            {sync.externalSources && sync.externalSources.length > 0 && (
+            {monitoring.externalSources && monitoring.externalSources.length > 0 && (
               <>
                 <p>Per-source last sync:</p>
                 <ul className="about-link-list about-monitoring-breakdown">
-                  {sync.externalSources.map((s) => (
+                  {monitoring.externalSources.map((s) => (
                     <li key={s.source}>
                       {formatSourceLabel(s.source)}: {formatMonitoringTime(s.lastSyncAt)}
                       {s.lastAddressCount != null ? ` (${s.lastAddressCount} addresses)` : ""}
@@ -131,16 +163,22 @@ export function AboutPage({ sync }: AboutPageProps) {
                 </ul>
               </>
             )}
-            {sync.chainApis && sync.chainApis.length > 0 && (
+            {monitoring.chainApis && monitoring.chainApis.length > 0 && (
               <>
                 <p>Chain API status:</p>
                 <ul className="about-link-list about-monitoring-breakdown about-chain-api-status">
-                  {sync.chainApis.map((api: ChainApiStatus) => (
+                  {monitoring.chainApis.map((api: ChainApiStatus) => (
                     <li key={api.id}>
                       <strong>{api.label}:</strong>{" "}
                       {api.thresholdExceeded ? (
                         <span className="chain-api-threshold">
-                          Rate limited — retry in {formatCountdown(api.thresholdSecondsLeft)}
+                          {isCached ? (
+                            <>Rate limited (at last check)</>
+                          ) : (
+                            <>
+                              Rate limited — retry in {formatCountdown(api.thresholdSecondsLeft)}
+                            </>
+                          )}
                           {api.strikeCount != null && api.strikeCount > 0
                             ? ` (strike ${api.strikeCount})`
                             : ""}
@@ -159,9 +197,9 @@ export function AboutPage({ sync }: AboutPageProps) {
                 </ul>
               </>
             )}
-            {sync.queueSchedulingPaused && (
+            {monitoring.queueSchedulingPaused && (
               <p className="about-queue-draining">
-                Queue scheduling is paused (cap {sync.maxQueueDepth ?? "—"}) until the pending job
+                Queue scheduling is paused (cap {monitoring.maxQueueDepth ?? "—"}) until the pending job
                 backlog drains to zero.
               </p>
             )}
