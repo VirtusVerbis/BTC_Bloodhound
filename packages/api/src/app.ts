@@ -7,10 +7,14 @@ import {
   buildGraphL1Page,
   buildGraphL2Page,
   buildVictimGraph,
+  enrichQueueJob,
   isRebuildActive,
+  listQueue,
   normalizeBitcoinAddress,
   resolveHackersPollMs,
+  type EnrichedQueueJob,
 } from "@cointrace/core";
+import type { Job } from "@cointrace/db";
 import {
   clampInt,
   clientIp,
@@ -464,6 +468,45 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
       ...monitor,
       ...monitoring,
     });
+  });
+
+  function sortQueueJobs(jobs: Job[]): Job[] {
+    return [...jobs].sort((a, b) => {
+      if (b.priority !== a.priority) return b.priority - a.priority;
+      return a.runAfter.localeCompare(b.runAfter);
+    });
+  }
+
+  app.get("/api/queue", async (c) => {
+    const limit = clampInt(Number(c.req.query("limit") ?? 10), 1, 25);
+    try {
+      const base = await listQueue(store, config, { limit: 0 });
+      const runningRows = sortQueueJobs(
+        await store.listActiveJobs({ statuses: ["running"], limit }),
+      );
+      const pendingLimit = Math.max(0, limit - runningRows.length);
+      const pendingRows = sortQueueJobs(
+        await store.listActiveJobs({ statuses: ["pending"], limit: pendingLimit }),
+      );
+      const merged = [...runningRows, ...pendingRows];
+      const jobs: EnrichedQueueJob[] = merged.map((job) => enrichQueueJob(job));
+      const totalMatching = await store.countActiveJobsMatching({
+        statuses: ["pending", "running"],
+      });
+      const scheduler = await store.getSchedulerState();
+      return c.json({
+        summary: base.summary,
+        context: {
+          ...base.context,
+          queueSchedulingPaused: (scheduler?.queueSchedulingPaused ?? 0) !== 0,
+        },
+        jobs,
+        truncated: totalMatching > jobs.length,
+      });
+    } catch (err) {
+      console.error("queue list failed", err);
+      return c.json({ error: "failed to load queue" }, 500);
+    }
   });
 
   return app;

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { AboutPage } from "./components/AboutPage";
+import { QueuePage } from "./components/QueuePage";
 import { HackElapsedLabel } from "./components/HackElapsedLabel";
 import { HackGraph } from "./components/HackGraph";
 import { AddressDetailDrawer } from "./components/AddressDetailDrawer";
@@ -17,6 +18,8 @@ import {
   saveMonitoringCacheFromD1Quota,
 } from "./lib/monitoringCache";
 import { formatQuotaUsageLine, type QuotaUsageDisplay } from "./lib/quotaFormat";
+import { fetchQueueSnapshot, type QueueSnapshot } from "./lib/queueApi";
+import { shouldRefetchQueueOnCompletion } from "./lib/queueRefresh";
 import {
   clampGraphNodeCount,
   commitGraphNodeDraft,
@@ -38,7 +41,7 @@ import {
   type RecentHackerEntry,
 } from "./lib/hackerGroups";
 
-type AppTab = "tracker" | "about";
+type AppTab = "tracker" | "about" | "queue";
 
 interface Stats {
   victimCount: number;
@@ -140,11 +143,31 @@ export default function App() {
   const [victimSearchInput, setVictimSearchInput] = useState("");
   const [activeVictimSearch, setActiveVictimSearch] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<AppTab>("tracker");
+  const [queueSnapshot, setQueueSnapshot] = useState<QueueSnapshot | null>(null);
+  const [queueFetchedAt, setQueueFetchedAt] = useState<number | null>(null);
+  const [queueLoading, setQueueLoading] = useState(false);
+  const [queueError, setQueueError] = useState<string | null>(null);
+  const lastSeenCompletedJobAtRef = useRef<string | null>(null);
   const [recentHackers, setRecentHackers] = useState<RecentHackerEntry[]>([]);
   const [hackersPollMs, setHackersPollMs] = useState(DEFAULT_HACKERS_POLL_MS);
   const [hackersLoading, setHackersLoading] = useState(false);
   const prevApiThresholdRef = useRef(false);
   const minAmountFocusedRef = useRef(false);
+
+  const loadQueueSnapshot = useCallback(async () => {
+    setQueueLoading(true);
+    setQueueError(null);
+    try {
+      const snapshot = await fetchQueueSnapshot(10);
+      setQueueSnapshot(snapshot);
+      setQueueFetchedAt(Date.now());
+    } catch (e) {
+      const message = e instanceof ApiError ? e.message : "Failed to load queue";
+      setQueueError(message);
+    } finally {
+      setQueueLoading(false);
+    }
+  }, []);
 
   const loadHackers = useCallback(async (q?: string) => {
     setHackersLoading(true);
@@ -300,6 +323,36 @@ export default function App() {
       clearInterval(iv);
     };
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== "queue") return;
+    void loadQueueSnapshot();
+  }, [activeTab, loadQueueSnapshot]);
+
+  useEffect(() => {
+    if (activeTab !== "queue") return;
+    const completedAt = sync?.lastCompletedJobAt ?? null;
+    if (
+      shouldRefetchQueueOnCompletion(lastSeenCompletedJobAtRef.current, completedAt) &&
+      lastSeenCompletedJobAtRef.current != null
+    ) {
+      void loadQueueSnapshot();
+    }
+    if (completedAt) {
+      lastSeenCompletedJobAtRef.current = completedAt;
+    }
+  }, [activeTab, sync?.lastCompletedJobAt, loadQueueSnapshot]);
+
+  useEffect(() => {
+    if (activeTab !== "queue") return;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        void loadQueueSnapshot();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [activeTab, loadQueueSnapshot]);
 
   useEffect(() => {
     const onToast = (e: Event) => setToast((e as CustomEvent).detail as string);
@@ -507,6 +560,15 @@ export default function App() {
           >
             About
           </button>
+          <button
+            type="button"
+            role="tab"
+            className={`app-tab${activeTab === "queue" ? " active" : ""}`}
+            aria-selected={activeTab === "queue"}
+            onClick={() => setActiveTab("queue")}
+          >
+            Queue
+          </button>
         </nav>
         <div className="stats-row">
           {stats && (
@@ -556,7 +618,19 @@ export default function App() {
           )}
           {sync && (
             <span className="sync-stats">
-              <span title="Background indexer jobs waiting to run (polls, expansions, and sync tasks).">
+              <span
+                className="sync-stats-queue-link"
+                title="Background indexer jobs waiting to run (polls, expansions, and sync tasks). Click to open Queue tab."
+                onClick={() => setActiveTab("queue")}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setActiveTab("queue");
+                  }
+                }}
+                role="button"
+                tabIndex={0}
+              >
                 Queue: {sync.queueDepth}
               </span>
               {" · "}
@@ -709,8 +783,17 @@ export default function App() {
         </div>
       )}
         </>
-      ) : (
+      ) : activeTab === "about" ? (
         <AboutPage sync={sync} />
+      ) : (
+        <QueuePage
+          sync={sync}
+          snapshot={queueSnapshot}
+          snapshotFetchedAt={queueFetchedAt}
+          loading={queueLoading}
+          error={queueError}
+          onRetry={() => void loadQueueSnapshot()}
+        />
       )}
 
       {drawerAddr && <AddressDetailDrawer address={drawerAddr} onClose={() => setDrawerAddr(null)} />}
