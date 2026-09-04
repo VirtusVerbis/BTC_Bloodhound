@@ -470,6 +470,7 @@ async function backfillHacker(
 
   const hackers = options?.hackers ?? (await getHackerAddressSet(store));
   await store.setExpandStatus(address, "backfilling");
+  const pendingFields = (idx: number) => writePendingPayload(pending, idx, config);
 
   const budget = createChainCallBudget(config.maxChainCallsPerJob);
   const limited = config.maxChainCallsPerJob > 0;
@@ -499,7 +500,7 @@ async function backfillHacker(
           {
             address,
             chainCursor,
-            ...writePendingPayload(pending, processedIndex),
+            ...pendingFields(processedIndex),
             pagesExhausted,
             newestTxid,
             newestBlockHeight,
@@ -533,6 +534,7 @@ async function backfillHacker(
     const entry = pending[processedIndex]!;
     const traceActiveOnEntry = traceEdgesPending === true && traceTxid === entry.txid;
     if (
+      !config.traceFlaggedHackerReceives &&
       !traceActiveOnEntry &&
       entry.isSpend === false &&
       skippedReceives < config.backfillSkipReceivesPerJob
@@ -549,7 +551,7 @@ async function backfillHacker(
           clearTraceFields({
             address,
             chainCursor,
-            ...writePendingPayload(pending, processedIndex),
+            ...pendingFields(processedIndex),
             pagesExhausted,
             newestTxid,
             newestBlockHeight,
@@ -580,7 +582,7 @@ async function backfillHacker(
       const pendingPayload: BackfillPayload = {
         address,
         chainCursor,
-        ...writePendingPayload(pending, processedIndex),
+        ...pendingFields(processedIndex),
         pagesExhausted,
         newestTxid,
         newestBlockHeight,
@@ -613,7 +615,7 @@ async function backfillHacker(
   const currentPayload: BackfillPayload = clearTraceFields({
     address,
     chainCursor,
-    ...writePendingPayload(pending, processedIndex),
+    ...pendingFields(processedIndex),
     pagesExhausted,
     newestTxid,
     newestBlockHeight,
@@ -793,6 +795,7 @@ async function pollHacker(
   const budget = createChainCallBudget(config.maxChainCallsPerJob);
   const limited = config.maxChainCallsPerJob > 0;
   const needsProcess = processedIndex < pending.length;
+  const pendingFields = (idx: number) => writePendingPayload(pending, idx, config);
 
   if (!pollFetched && !needsProcess && budget.canCall()) {
     const sync = await store.getSyncState(address);
@@ -810,7 +813,7 @@ async function pollHacker(
     if (limited && budget.exhausted()) {
       await store.enqueueJob("poll_hacker_address", toPollJobPayload({
         address,
-        ...writePendingPayload(pending, processedIndex),
+        ...pendingFields(processedIndex),
         pollFetched,
         newestTxid,
         newestBlockHeight,
@@ -838,7 +841,7 @@ async function pollHacker(
           "poll_hacker_address",
           toPollJobPayload({
             address,
-            ...writePendingPayload(pending, processedIndex),
+            ...pendingFields(processedIndex),
             pollFetched: true,
             newestTxid,
             newestBlockHeight,
@@ -870,7 +873,7 @@ async function pollHacker(
       "poll_hacker_address",
       toPollJobPayload({
         address,
-        ...writePendingPayload(pending, processedIndex),
+        ...pendingFields(processedIndex),
         pollFetched: true,
         newestTxid,
         newestBlockHeight,
@@ -1062,6 +1065,7 @@ async function expandDownstream(
   const needsProcess = processedIndex < pending.length;
   const needsFetch =
     processedIndex >= pending.length && !pagesExhausted && pagesFetched < maxPages;
+  const pendingFields = (idx: number) => writePendingPayload(pending, idx, config);
 
   if ((!limited || !needsProcess) && needsFetch && budget.canCall() && (!jobSubreq || jobSubreq.canUse())) {
     const { txs } = await router.fetchAddressTxPage(address, chainCursor);
@@ -1195,7 +1199,7 @@ async function expandDownstream(
   const nextPayload: ExpandPayload = {
     address,
     chainCursor,
-    ...writePendingPayload(pending, processedIndex),
+    ...pendingFields(processedIndex),
     pagesExhausted,
     newestTxid,
     newestBlockHeight,

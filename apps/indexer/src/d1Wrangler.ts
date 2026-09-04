@@ -2,8 +2,13 @@ import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { JOB_PRIORITY, normalizeBitcoinAddress } from "@cointrace/core";
-import type { AddHackerResult, ClearQueueResult, PruneInvalidAddressesResult, RemoveHackerResult } from "@cointrace/core";
+import { hasResumableBackfillState, JOB_PRIORITY, normalizeBitcoinAddress } from "@cointrace/core";
+import type {
+  AddHackerResult,
+  PruneInvalidAddressesResult,
+  ReBackfillHackerResult,
+  RemoveHackerResult,
+} from "@cointrace/core";
 import type { AppConfig, ListQueueOptions, ListQueueResult } from "@cointrace/core";
 import { listQueue } from "@cointrace/core";
 import { asReadOnlyStore } from "./remoteReadStore.js";
@@ -227,18 +232,126 @@ WHERE NOT EXISTS (
   return { address, upserted: true, enqueuedBackfill };
 }
 
-export async function clearQueueRemote(client: D1WranglerClient): Promise<ClearQueueResult> {
-  const rows = client.query(
-    "SELECT status, COUNT(*) AS c FROM jobs WHERE status IN ('pending','running') GROUP BY status;",
-  );
-  let pending = 0;
-  let running = 0;
-  for (const r of rows) {
-    if (r.status === "pending") pending = Number(r.c ?? 0);
-    if (r.status === "running") running = Number(r.c ?? 0);
+function parseBackfillStateFromRow(row: Row | undefined): {
+  payload: Record<string, unknown> | null;
+  backfillComplete: boolean;
+} {
+  if (!row) return { payload: null, backfillComplete: false };
+  let payload: Record<string, unknown> | null = null;
+  const raw = row.backfill_state_json;
+  if (raw != null && typeof raw === "string" && raw !== "") {
+    try {
+      payload = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      payload = null;
+    }
   }
-  client.execute("DELETE FROM jobs WHERE status IN ('pending', 'running');");
-  return { deleted: pending + running, pending, running };
+  return { payload, backfillComplete: asBool(row.backfill_complete) };
+}
+
+function buildRemoteBackfillJobPayload(
+  address: string,
+  payload: Record<string, unknown> | null,
+): Record<string, unknown> {
+  if (payload) return { address, ...payload };
+  return { address };
+}
+
+export async function reBackfillHackerRemote(
+  client: D1WranglerClient,
+  opts: { address: string; fresh?: boolean },
+): Promise<ReBackfillHackerResult> {
+  const address = normalizeBitcoinAddress(opts.address);
+  if (!address) throw new Error(`Invalid Bitcoin address: ${opts.address}`);
+  const a = sqlString(address);
+  const ts = sqlString(nowIso());
+
+  const addrRows = client.query(`SELECT is_flagged_hacker FROM addresses WHERE address = ${a} LIMIT 1;`);
+  const existing = addrRows[0];
+  if (!existing || !asBool(existing.is_flagged_hacker)) {
+    return {
+      address,
+      enqueuedBackfill: false,
+      resumed: false,
+      stateReset: false,
+      message: "Address is not a flagged hacker (no-op)",
+    };
+  }
+
+  const syncRows = client.query(
+    `SELECT backfill_complete, backfill_state_json FROM sync_state WHERE address = ${a} LIMIT 1;`,
+  );
+  const saved = parseBackfillStateFromRow(syncRows[0]);
+
+  if (!opts.fresh && saved.backfillComplete) {
+    return {
+      address,
+      enqueuedBackfill: false,
+      resumed: false,
+      stateReset: false,
+      message: "Backfill already complete; use --fresh to restart",
+    };
+  }
+
+  const hadBackfillJob = hasActiveBackfillJob(client, a);
+  const statements: string[] = [];
+  let resumed = false;
+  let stateReset = false;
+  let payload: Record<string, unknown>;
+
+  if (opts.fresh) {
+    stateReset = true;
+    payload = { address };
+    statements.push(
+      `UPDATE addresses SET expand_status = 'pending', last_expanded_at = ${ts} WHERE address = ${a};`,
+      `INSERT INTO sync_state (address, backfill_complete, backfill_state_json)
+VALUES (${a}, 0, NULL)
+ON CONFLICT(address) DO UPDATE SET backfill_complete = 0, backfill_state_json = NULL;`,
+    );
+  } else if (hasResumableBackfillState(saved)) {
+    resumed = true;
+    payload = buildRemoteBackfillJobPayload(address, saved.payload);
+    statements.push(`UPDATE addresses SET expand_status = 'backfilling', last_expanded_at = ${ts} WHERE address = ${a};`);
+  } else {
+    stateReset = true;
+    payload = { address };
+    statements.push(
+      `UPDATE addresses SET expand_status = 'pending', last_expanded_at = ${ts} WHERE address = ${a};`,
+      `INSERT INTO sync_state (address, backfill_complete, backfill_state_json)
+VALUES (${a}, 0, NULL)
+ON CONFLICT(address) DO UPDATE SET backfill_complete = 0, backfill_state_json = NULL;`,
+    );
+  }
+
+  const payloadSql = sqlString(JSON.stringify(payload));
+  statements.push(
+    `INSERT INTO jobs (type, payload_json, status, priority, run_after, created_at)
+SELECT 'backfill_hacker_address', ${payloadSql}, 'pending', ${JOB_PRIORITY.BACKFILL_HACKER}, ${ts}, ${ts}
+WHERE NOT EXISTS (
+  SELECT 1 FROM jobs
+  WHERE type = 'backfill_hacker_address'
+    AND status IN ('pending', 'running')
+    AND json_extract(payload_json, '$.address') = ${a}
+);`,
+  );
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cointrace-ops-"));
+  try {
+    const filePath = path.join(tmpDir, "re-backfill-hacker.sql");
+    fs.writeFileSync(filePath, statements.join("\n") + "\n", "utf8");
+    client.executeFile(filePath);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+
+  const enqueuedBackfill = !hadBackfillJob && hasActiveBackfillJob(client, a);
+
+  return {
+    address,
+    enqueuedBackfill,
+    resumed,
+    stateReset,
+  };
 }
 
 export async function listQueueRemote(

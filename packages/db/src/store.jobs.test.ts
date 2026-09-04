@@ -292,6 +292,37 @@ describe("job timing", () => {
   });
 });
 
+describe("resetStuckExpandStatuses", () => {
+  const ADDR_A = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
+  const ADDR_B = "bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3";
+  const ADDR_C = "bc1qdown1aaaaaaaaaaaaaaaaaaaaaaaaaaa0001";
+
+  it("resets queued and expanding to pending; leaves expanded and backfilling", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.upsertAddress({ address: ADDR_A, role: "downstream", expandStatus: "queued" });
+    await store.upsertAddress({ address: ADDR_B, role: "downstream", expandStatus: "expanding" });
+    await store.upsertAddress({ address: ADDR_C, role: "downstream", expandStatus: "expanded" });
+    await store.upsertAddress({
+      address: "bc1qhackbackfillaaaaaaaaaaaaaaaaaaaa0001",
+      role: "hacker",
+      isFlaggedHacker: true,
+      expandStatus: "backfilling",
+    });
+
+    expect(await store.resetStuckExpandStatuses()).toBe(2);
+
+    expect((await store.getAddress(ADDR_A))?.expandStatus).toBe("pending");
+    expect((await store.getAddress(ADDR_B))?.expandStatus).toBe("pending");
+    expect((await store.getAddress(ADDR_C))?.expandStatus).toBe("expanded");
+    expect(
+      (await store.getAddress("bc1qhackbackfillaaaaaaaaaaaaaaaaaaaa0001"))?.expandStatus,
+    ).toBe("backfilling");
+  });
+});
+
 describe("hasPendingJob address match", () => {
   const ADDR_A = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
   const ADDR_B = "bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3";

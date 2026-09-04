@@ -69,6 +69,7 @@ function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     graphPageSizeMax: 1000,
     maxGraphVictims: 1000,
     maxGraphDownstream: 1000,
+    recentHackersLimit: 5,
     maxQueueDepth: 360,
     indexerJobDetails: false,
     indexerLogColor: false,
@@ -90,11 +91,19 @@ function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     jobReclaimDeferAfter: 3,
     jobReclaimDeferSec: 86400,
     backfillSkipReceivesPerJob: 25,
+    traceFlaggedHackerReceives: true,
     maxVoutCountSkipGetTx: 20,
     d1BatchSize: 8,
     syncAddressesPerJob: 5,
     ...overrides,
   };
+}
+
+function mockStore(overrides: Record<string, unknown> = {}): Store {
+  return {
+    flushRecentHackerActivity: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  } as unknown as Store;
 }
 
 function makeJob(type: Job["type"], payload: Record<string, unknown>): Job {
@@ -127,14 +136,14 @@ describe("single chain call per job", () => {
     });
     const upsertBackfillState = vi.fn();
     const enqueueJob = vi.fn();
-    const store = {
+    const store = mockStore({
       getBackfillState: vi.fn().mockResolvedValue(null),
       setExpandStatus: vi.fn(),
       getAddress: vi.fn().mockResolvedValue(null),
       upsertBackfillState,
       enqueueJob,
       getTransaction: vi.fn().mockResolvedValue(null),
-    } as unknown as Store;
+    });
     const withProvider = vi.fn(async (fn: (p: { getTx: () => Promise<{ vin: unknown[]; vout: unknown[] }> }) => unknown) =>
       fn({
         getTx: async () => ({
@@ -173,14 +182,14 @@ describe("single chain call per job", () => {
     const fetchAddressTxPage = vi.fn();
     const upsertBackfillState = vi.fn();
     const enqueueJob = vi.fn();
-    const store = {
+    const store = mockStore({
       getBackfillState: vi.fn().mockResolvedValue(null),
       setExpandStatus: vi.fn(),
       getAddress: vi.fn().mockResolvedValue(null),
       upsertBackfillState,
       enqueueJob,
       getTransaction: vi.fn().mockResolvedValue(null),
-    } as unknown as Store;
+    });
     const withProvider = vi.fn(async (fn: (p: { getTx: () => Promise<{ vin: unknown[]; vout: unknown[] }> }) => unknown) =>
       fn({
         getTx: async () => ({
@@ -219,7 +228,7 @@ describe("single chain call per job", () => {
     );
   });
 
-  it("backfill bulk-skips classified receives without trace calls", async () => {
+  it("backfill bulk-skips classified receives when traceFlaggedHackerReceives disabled", async () => {
     const fetchAddressTxPage = vi.fn();
     const upsertBackfillState = vi.fn();
     const enqueueJob = vi.fn();
@@ -229,20 +238,25 @@ describe("single chain call per job", () => {
       voutCount: 1,
       outputAddressCount: 1,
     }));
-    const store = {
+    const store = mockStore({
       getBackfillState: vi.fn().mockResolvedValue(null),
       setExpandStatus: vi.fn(),
       getAddress: vi.fn().mockResolvedValue(null),
       upsertBackfillState,
       enqueueJob,
       getTransaction: vi.fn(),
-    } as unknown as Store;
+    });
     const router = { fetchAddressTxPage } as unknown as ChainRouter;
 
     await processJob(
       store,
       router,
-      baseConfig({ backfillTxsPerJob: 1, maxChainCallsPerJob: 0 }),
+      baseConfig({
+        backfillTxsPerJob: 1,
+        maxChainCallsPerJob: 0,
+        traceFlaggedHackerReceives: false,
+        backfillSkipReceivesPerJob: 25,
+      }),
       makeJob("backfill_hacker_address", {
         address: ADDRESS,
         pendingTxs,
@@ -272,18 +286,66 @@ describe("single chain call per job", () => {
     );
   });
 
+  it("backfill traces hop-0 receive when traceFlaggedHackerReceives enabled", async () => {
+    const fetchAddressTxPage = vi.fn();
+    const upsertBackfillState = vi.fn();
+    const enqueueJob = vi.fn();
+    const pendingTxs = [
+      {
+        txid: "tx0",
+        isSpend: false,
+        voutCount: 1,
+        outputAddressCount: 1,
+        pageSnapshot: {
+          vin: [{ prevout: { scriptpubkey_address: "bc1qvictim", value: 1000 } }],
+          vout: [{ scriptpubkey_address: ADDRESS, value: 1000 }],
+        },
+      },
+    ];
+    const store = mockStore({
+      getBackfillState: vi.fn().mockResolvedValue(null),
+      setExpandStatus: vi.fn(),
+      getAddress: vi.fn().mockResolvedValue(null),
+      upsertBackfillState,
+      enqueueJob,
+      getTransaction: vi.fn().mockResolvedValue(null),
+    });
+    const router = { fetchAddressTxPage } as unknown as ChainRouter;
+
+    await processJob(
+      store,
+      router,
+      baseConfig({
+        backfillTxsPerJob: 1,
+        maxChainCallsPerJob: 0,
+        traceFlaggedHackerReceives: true,
+        backfillSkipReceivesPerJob: 0,
+      }),
+      makeJob("backfill_hacker_address", {
+        address: ADDRESS,
+        pendingTxs,
+        pendingTxids: pendingTxs.map((p) => p.txid),
+        processedIndex: 0,
+        pagesExhausted: true,
+      }),
+    );
+
+    expect(processTxForHackTraceMock).toHaveBeenCalledTimes(1);
+    expect(upsertBackfillState).toHaveBeenCalledWith(ADDRESS, null, true);
+  });
+
   it("backfill fetches and processes multiple txs when budget=0", async () => {
     const fetchAddressTxPage = vi.fn().mockResolvedValue({
       txs: [{ txid: "tx1", status: { block_height: 1 } }],
     });
-    const store = {
+    const store = mockStore({
       getBackfillState: vi.fn().mockResolvedValue(null),
       setExpandStatus: vi.fn(),
       getAddress: vi.fn().mockResolvedValue(null),
       upsertBackfillState: vi.fn(),
       enqueueJob: vi.fn(),
       getTransaction: vi.fn().mockResolvedValue(null),
-    } as unknown as Store;
+    });
     const withProvider = vi.fn(async (fn: (p: { getTx: () => Promise<{ vin: unknown[]; vout: unknown[] }> }) => unknown) =>
       fn({
         getTx: async () => ({
@@ -309,14 +371,15 @@ describe("single chain call per job", () => {
     const fetchAddressTxPage = vi.fn().mockResolvedValue({
       txs: [{ txid: "tx1", status: { block_height: 1 } }],
     });
-    const enqueueJob = vi.fn();
-    const store = {
+    const enqueueJob = vi.fn().mockResolvedValue(42);
+    const store = mockStore({
       getAddress: vi.fn().mockResolvedValue({ hopFromHacker: 1 }),
       setExpandStatus: vi.fn(),
       enqueueJob,
       getTransaction: vi.fn().mockResolvedValue(null),
       getEdgesFromAddress: vi.fn().mockResolvedValue([]),
-    } as unknown as Store;
+      isQueueSchedulingPaused: vi.fn().mockResolvedValue(false),
+    });
     const withProvider = vi.fn(async (fn: (p: { getTx: () => Promise<{ vin: unknown[]; vout: unknown[] }> }) => unknown) =>
       fn({
         getTx: async () => ({
@@ -357,13 +420,13 @@ describe("single chain call per job", () => {
     const enqueueJob = vi.fn();
     const upsertSyncState = vi.fn();
     const touchSyncPoll = vi.fn();
-    const store = {
+    const store = mockStore({
       getSyncState: vi.fn().mockResolvedValue({ lastSeenTxid: "tx-old" }),
       getTransaction: vi.fn().mockResolvedValue(null),
       enqueueJob,
       upsertSyncState,
       touchSyncPoll,
-    } as unknown as Store;
+    });
     const router = { withProvider } as unknown as ChainRouter;
     const config = baseConfig();
 

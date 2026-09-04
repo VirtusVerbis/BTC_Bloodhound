@@ -1,8 +1,10 @@
+import type { AppConfig } from "../config.js";
 import type { ChainTxSummary } from "../chain/types.js";
 import {
   classifyPageTxs,
   parsePendingTxs,
   pendingTxidsFromPending,
+  runtimeFromClassified,
   serializePendingTxs,
   type ClassifiedPendingTx,
   type PendingTxRuntime,
@@ -12,10 +14,6 @@ export interface PendingPayloadFields {
   pendingTxs?: ClassifiedPendingTx[];
   pendingTxids?: string[];
   processedIndex?: number;
-}
-
-export function runtimeFromClassified(pending: ClassifiedPendingTx[]): PendingTxRuntime[] {
-  return pending.map((entry) => ({ ...entry }));
 }
 
 export function pendingFromPageTxs(txs: ChainTxSummary[], address: string): PendingTxRuntime[] {
@@ -32,12 +30,19 @@ export function readPendingRuntime(raw: Record<string, unknown>): {
 }
 
 export function writePendingPayload(
-  pending: ClassifiedPendingTx[],
+  pending: PendingTxRuntime[],
   processedIndex: number,
+  config?: Pick<AppConfig, "traceFlaggedHackerReceives" | "maxVoutCountSkipGetTx">,
 ): PendingPayloadFields {
   const hasPending = processedIndex < pending.length;
+  const serializeOpts = config
+    ? {
+        traceHackerReceives: config.traceFlaggedHackerReceives,
+        maxVoutCountSkipGetTx: config.maxVoutCountSkipGetTx,
+      }
+    : undefined;
   return {
-    pendingTxs: hasPending ? serializePendingTxs(pending) : [],
+    pendingTxs: hasPending ? serializePendingTxs(pending, serializeOpts) : [],
     pendingTxids: hasPending ? pendingTxidsFromPending(pending) : [],
     processedIndex: hasPending ? processedIndex : 0,
   };

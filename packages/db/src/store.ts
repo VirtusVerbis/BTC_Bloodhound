@@ -2197,6 +2197,16 @@ export class Store {
       .run();
   }
 
+  /** Reset in-flight expand scheduling states so cron can re-enqueue after clear-queue. */
+  async resetStuckExpandStatuses(): Promise<number> {
+    const result = await this.db
+      .update(addresses)
+      .set({ expandStatus: "pending" })
+      .where(or(eq(addresses.expandStatus, "queued"), eq(addresses.expandStatus, "expanding")))
+      .run();
+    return changesCount(result as { changes?: number; meta?: { changes?: number } });
+  }
+
   async setExpandProfile(
     address: string,
     profile: string,

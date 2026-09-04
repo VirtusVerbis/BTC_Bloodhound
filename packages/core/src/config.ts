@@ -149,6 +149,8 @@ export interface AppConfig {
   jobReclaimDeferSec: number;
   /** Max classified receive txs skipped per backfill job tick (no D1 per tx). */
   backfillSkipReceivesPerJob: number;
+  /** Trace receive/deposit txs for flagged hackers at hop 0 (victim→hacker edges). */
+  traceFlaggedHackerReceives: boolean;
   /** Skip getTx when receive-only tx has more than this many outputs. */
   maxVoutCountSkipGetTx: number;
   /** Max D1 statements per batch() call. */
@@ -306,6 +308,7 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     jobReclaimDeferAfter: Number(env.JOB_RECLAIM_DEFER_AFTER ?? 3),
     jobReclaimDeferSec: Number(env.JOB_RECLAIM_DEFER_SEC ?? 86400),
     backfillSkipReceivesPerJob: Number(env.BACKFILL_SKIP_RECEIVES_PER_JOB ?? 25),
+    traceFlaggedHackerReceives: env.TRACE_FLAGGED_HACKER_RECEIVES !== "0",
     maxVoutCountSkipGetTx: Number(env.MAX_VOUT_COUNT_SKIP_GET_TX ?? 20),
     d1BatchSize: Number(env.D1_BATCH_SIZE ?? 8),
     syncAddressesPerJob: Number(env.SYNC_ADDRESSES_PER_JOB ?? 5),

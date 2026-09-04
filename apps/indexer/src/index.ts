@@ -3,9 +3,11 @@ import { mkdirSync } from "node:fs";
 import { openDatabase, runMigrations, Store } from "@cointrace/db";
 import {
   addHacker,
+  buildBackfillJobPayload,
   ChainRouter,
   clearQueue,
   defaultPriorityForJobType,
+  hasResumableBackfillState,
   JOB_PRIORITY,
   listQueue,
   loadConfig,
@@ -27,15 +29,16 @@ import {
 } from "@cointrace/core";
 import {
   addHackerRemote,
-  clearQueueRemote,
   D1WranglerClient,
   getCronStatusRemote,
   listQueueRemote,
   pauseCronRemote,
   pruneInvalidAddressesRemote,
+  reBackfillHackerRemote,
   removeHackerRemote,
   resumeCronRemote,
 } from "./d1Wrangler.js";
+import { openRemoteProductionStore } from "./remotePlatform.js";
 import { runRemoteSidecar } from "./runRemote.js";
 import { formatCronStatusSummary, readCronStatusFromStore } from "./sidecarLog.js";
 
@@ -169,7 +172,17 @@ async function main() {
     return;
   }
   if (cmd === "clear-queue") {
-    const result = remote ? await clearQueueRemote(remoteClient()) : await clearQueue(openLocalStore());
+    let result;
+    if (remote) {
+      const { store, dispose } = await openRemoteProductionStore(config);
+      try {
+        result = await clearQueue(store);
+      } finally {
+        await dispose();
+      }
+    } else {
+      result = await clearQueue(openLocalStore());
+    }
     console.log(
       JSON.stringify({ ok: true, ...result, target: remote ? "remote-d1" : "local-sqlite" }, null, 2),
     );
@@ -276,15 +289,26 @@ async function main() {
     return;
   }
   if (cmd === "re-backfill-hacker") {
-    const store = openLocalStore();
-    const router = openChainRouter(store);
     const address = normalizeBitcoinAddress(positionalArgs()[0] ?? "");
     if (!address) {
-      console.error("Usage: re-backfill-hacker <address> [--wait] [--fresh]");
+      console.error("Usage: re-backfill-hacker <address> [--wait] [--fresh] [--remote]");
       process.exit(1);
     }
     const wait = argv.includes("--wait");
     const fresh = argv.includes("--fresh");
+    if (remote && wait) {
+      console.error(
+        "re-backfill-hacker --wait is not supported with --remote. Use pause-cron --remote, run --remote, then resume-cron --remote.",
+      );
+      process.exit(1);
+    }
+    if (remote) {
+      const result = await reBackfillHackerRemote(remoteClient(), { address, fresh });
+      console.log(JSON.stringify({ ok: true, ...result, target: "remote-d1" }, null, 2));
+      return;
+    }
+    const store = openLocalStore();
+    const router = openChainRouter(store);
     if (wait) {
       const { reclaimed } = await store.resetRunningJobs();
       if (reclaimed > 0) {
@@ -292,8 +316,23 @@ async function main() {
       }
       await runReBackfillHackerWait(store, router, config, address, { fresh });
     } else {
-      await runReBackfillHacker(store, address);
-      await store.enqueueJob("backfill_hacker_address", { address }, JOB_PRIORITY.BACKFILL_HACKER);
+      const saved = await store.getBackfillState(address);
+      if (!fresh && saved?.backfillComplete) {
+        console.log(`Backfill already complete for ${address}; use --fresh to restart`);
+        return;
+      }
+      let payload: Record<string, unknown>;
+      if (fresh) {
+        await runReBackfillHacker(store, address);
+        payload = { address };
+      } else if (hasResumableBackfillState(saved)) {
+        payload = await buildBackfillJobPayload(store, address);
+        await store.setExpandStatus(address, "backfilling");
+      } else {
+        await runReBackfillHacker(store, address);
+        payload = { address };
+      }
+      await store.enqueueJob("backfill_hacker_address", payload, JOB_PRIORITY.BACKFILL_HACKER);
       console.log(`Re-backfill queued for ${address}`);
     }
     return;

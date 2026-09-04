@@ -3,13 +3,18 @@ import { loadConfig } from "../config.js";
 import {
   classifyPageTx,
   pageEntryToChainTxDetail,
+  parsePendingTxs,
+  serializePendingTxs,
   shouldSkipGetTx,
+  shouldTraceHackerReceive,
   txInvolvesSpendFromPage,
   isSpendFanout,
 } from "./txPage.js";
 
 const ADDRESS = "bc1qpeeladdrxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
 const OTHER = "bc1qotheraddrxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+const HACKER = "bc1qhackerxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+const VICTIM = "bc1qvictimxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
 
 describe("txPage", () => {
   const config = loadConfig({});
@@ -28,6 +33,58 @@ describe("txPage", () => {
     expect(classified.voutCount).toBe(37);
     expect(txInvolvesSpendFromPage(tx, ADDRESS)).toBe(false);
     expect(shouldSkipGetTx(classified, ADDRESS, config)).toBe(true);
+    expect(
+      shouldSkipGetTx(classified, HACKER, config, { hop: 0, traceHackerReceives: true }),
+    ).toBe(true);
+  });
+
+  it("allows skinny receive at hop 0 when traceHackerReceives enabled", () => {
+    const tx = {
+      txid: "deposit1",
+      vin: [{ prevout: { scriptpubkey_address: VICTIM, value: 50_000 } }],
+      vout: [{ scriptpubkey_address: HACKER, value: 50_000 }],
+    };
+    const classified = classifyPageTx(tx, HACKER);
+    expect(classified.isSpend).toBe(false);
+    expect(shouldTraceHackerReceive(classified, config, { hop: 0 })).toBe(true);
+    expect(
+      shouldSkipGetTx(classified, HACKER, config, { hop: 0, traceHackerReceives: true, pageEntry: tx }),
+    ).toBe(false);
+  });
+
+  it("skips receive at hop 1 even when traceHackerReceives enabled", () => {
+    const classified = {
+      txid: "deposit1",
+      isSpend: false,
+      voutCount: 1,
+      outputAddressCount: 1,
+    };
+    expect(shouldTraceHackerReceive(classified, config, { hop: 1 })).toBe(false);
+    expect(
+      shouldSkipGetTx(classified, ADDRESS, config, { hop: 1, traceHackerReceives: true }),
+    ).toBe(true);
+  });
+
+  it("skips sweep_relay receives", () => {
+    const classified = {
+      txid: "deposit1",
+      isSpend: false,
+      voutCount: 1,
+      outputAddressCount: 1,
+    };
+    expect(
+      shouldTraceHackerReceive(classified, config, {
+        hop: 0,
+        expandProfile: "sweep_relay",
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipGetTx(classified, ADDRESS, config, {
+        hop: 0,
+        expandProfile: "sweep_relay",
+        traceHackerReceives: true,
+      }),
+    ).toBe(true);
   });
 
   it("classifies skinny sweep tx", () => {
@@ -56,5 +113,22 @@ describe("txPage", () => {
     const classified = classifyPageTx(tx, ADDRESS);
     expect(isSpendFanout(classified, ADDRESS, config, tx)).toBe(true);
     expect(pageEntryToChainTxDetail(tx).vout.length).toBe(25);
+  });
+
+  it("serializes compact page snapshot for skinny receives", () => {
+    const tx = {
+      txid: "deposit1",
+      status: { block_height: 100 },
+      vin: [{ prevout: { scriptpubkey_address: VICTIM, value: 50_000 } }],
+      vout: [{ scriptpubkey_address: HACKER, value: 50_000 }],
+    };
+    const pending = [{ ...classifyPageTx(tx, HACKER), pageEntry: tx }];
+    const serialized = serializePendingTxs(pending, {
+      traceHackerReceives: true,
+      maxVoutCountSkipGetTx: 20,
+    });
+    expect(serialized[0]?.pageSnapshot?.vin).toHaveLength(1);
+    const roundTrip = parsePendingTxs({ pendingTxs: serialized });
+    expect(roundTrip[0]?.pageSnapshot?.vout[0]?.scriptpubkey_address).toBe(HACKER);
   });
 });

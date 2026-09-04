@@ -62,7 +62,7 @@ pnpm dev:web
 | `pnpm --filter @cointrace/indexer run` | Background indexer (cron + job queue); add `--job-details` for verbose cron/job tracing; add `--log-color` for ANSI-colored log labels |
 | `node apps/indexer/dist/index.js add-hacker <addr> [--label …] [--remote]` | Upsert flagged hacker (`source=ops`) + enqueue backfill |
 | `node apps/indexer/dist/index.js remove-hacker <addr> [--no-prune] [--remote]` | Soft-unflag; prune exclusive victims/downstream by default |
-| `node apps/indexer/dist/index.js clear-queue [--remote]` | Delete pending/running jobs only (queue depth → 0) |
+| `node apps/indexer/dist/index.js clear-queue [--remote]` | Delete pending/running jobs (queue depth → 0); reset stuck `expand_status` (`queued`/`expanding` → `pending`); clear scheduling latch and tick lease. JSON includes `expandStatusesReset`, `queueSchedulingUnpaused`, `tickLeaseCleared` |
 | `node apps/indexer/dist/index.js list-queue [--remote] [--status active\|pending\|running\|all] [--type <jobType>] [--limit N] [--summary] [--next-cron]` | Read-only queue audit (JSON by default; `--summary` prints ASCII type counts sorted by priority high→low) |
 | `node apps/indexer/dist/index.js prune-invalid-addresses [--remote] [--dry-run]` | Scan all address roles; remove rows that fail mainnet checksum validation |
 | `node apps/indexer/dist/index.js pause-cron [--remote]` | Set `cron_indexer_paused=1` so Worker cron skips indexer ticks (no redeploy) |
@@ -120,7 +120,7 @@ After building, preview then remove checksum-invalid rows (all roles — hackers
 npx pnpm@9.15.0 --filter @cointrace/core --filter @cointrace/indexer run build
 node apps/indexer/dist/index.js prune-invalid-addresses --remote --dry-run
 node apps/indexer/dist/index.js prune-invalid-addresses --remote
-node apps/indexer/dist/index.js clear-queue --remote   # optional: reset stale jobs
+node apps/indexer/dist/index.js clear-queue --remote   # optional: reset stale jobs + expand scheduling state
 node apps/indexer/dist/index.js list-queue --remote --type backfill_hacker_address
 ```
 
@@ -132,7 +132,7 @@ Deploy the Worker after merge so cron ingest uses the new validation gates.
 
 | Command | Description |
 |---------|-------------|
-| `node apps/indexer/dist/index.js re-backfill-hacker <addr> [--wait] [--fresh]` | One hacker: resume by default; `--wait` blocks until done; `--fresh` resets cursor |
+| `node apps/indexer/dist/index.js re-backfill-hacker <addr> [--wait] [--fresh] [--remote]` | One hacker: resume by default in queue mode; `--fresh` resets cursor; `--remote` enqueues on prod D1 (`--wait` is local-only — use sidecar on prod) |
 | `node apps/indexer/dist/index.js re-backfill-hackers [--wait] [--fresh]` | All hackers: skips complete unless `--fresh`; queue mode enqueues jobs without wiping resumable cursors |
 
 Queue mode requires the indexer (`run`) to process jobs. `--wait` runs synchronously per hacker (same resume/429 behavior as singular `--wait`).

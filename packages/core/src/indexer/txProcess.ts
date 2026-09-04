@@ -11,6 +11,7 @@ import {
   isSpendFanout,
   pageEntryToChainTxDetail,
   shouldSkipGetTx,
+  shouldTraceHackerReceive,
   uniqueOutputAddresses,
   type PendingTxRuntime,
 } from "./txPage.js";
@@ -56,6 +57,18 @@ function traceOptions(
   };
 }
 
+function skipGetTxOpts(
+  hop: number,
+  config: AppConfig,
+  opts?: { expandProfile?: string | null; skipIfIndexed?: boolean; cpuGuard?: CpuGuard },
+) {
+  return {
+    expandProfile: opts?.expandProfile,
+    hop,
+    traceHackerReceives: config.traceFlaggedHackerReceives,
+  };
+}
+
 export async function processClassifiedPendingTx(
   store: Store,
   router: ChainRouter,
@@ -76,14 +89,15 @@ export async function processClassifiedPendingTx(
     traceEdgeTotal: undefined,
     traceEdgesFlat: undefined,
   };
+  const skipOpts = {
+    ...skipGetTxOpts(hop, config, opts),
+    pageEntry: entry.pageEntry,
+  };
 
   if (
     !traceActive &&
     entry.isSpend === false &&
-    shouldSkipGetTx(entry, address, config, {
-      expandProfile: opts?.expandProfile,
-      pageEntry: entry.pageEntry,
-    })
+    shouldSkipGetTx(entry, address, config, skipOpts)
   ) {
     return { traceState: nextState, continued: false, chainCallsUsed: 0 };
   }
@@ -92,12 +106,7 @@ export async function processClassifiedPendingTx(
     return { traceState: nextState, continued: false, chainCallsUsed: 0 };
   }
 
-  if (
-    shouldSkipGetTx(entry, address, config, {
-      expandProfile: opts?.expandProfile,
-      pageEntry: entry.pageEntry,
-    })
-  ) {
+  if (shouldSkipGetTx(entry, address, config, skipOpts)) {
     return { traceState: nextState, continued: false, chainCallsUsed: 0 };
   }
 
@@ -129,7 +138,8 @@ export async function processClassifiedPendingTx(
     }
   }
 
-  if (!traceActive && !txInvolvesSpend(tx, address)) {
+  const isDepositTrace = shouldTraceHackerReceive(entry, config, skipOpts);
+  if (!traceActive && !isDepositTrace && !txInvolvesSpend(tx, address)) {
     return { traceState: nextState, continued: false, chainCallsUsed };
   }
 

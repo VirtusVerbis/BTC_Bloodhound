@@ -94,6 +94,7 @@ function minimalConfig(): AppConfig {
     jobReclaimDeferAfter: 3,
     jobReclaimDeferSec: 86400,
     backfillSkipReceivesPerJob: 25,
+    traceFlaggedHackerReceives: true,
     maxVoutCountSkipGetTx: 20,
     d1BatchSize: 8,
     syncAddressesPerJob: 5,

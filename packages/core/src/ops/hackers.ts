@@ -22,6 +22,17 @@ export interface ClearQueueResult {
   deleted: number;
   pending: number;
   running: number;
+  expandStatusesReset: number;
+  queueSchedulingUnpaused: boolean;
+  tickLeaseCleared: boolean;
+}
+
+export interface ReBackfillHackerResult {
+  address: string;
+  enqueuedBackfill: boolean;
+  resumed: boolean;
+  stateReset: boolean;
+  message?: string;
 }
 
 export async function addHacker(
@@ -132,5 +143,22 @@ export async function removeHacker(
 }
 
 export async function clearQueue(store: Store): Promise<ClearQueueResult> {
-  return store.deleteActiveJobs();
+  const wasSchedulingPaused = await store.isQueueSchedulingPaused();
+  const stateBefore = await store.getSchedulerState();
+  const hadTickLease =
+    stateBefore?.tickLeaseUntil != null &&
+    new Date(stateBefore.tickLeaseUntil).getTime() > Date.now();
+
+  const jobResult = await store.deleteActiveJobs();
+  const expandStatusesReset = await store.resetStuckExpandStatuses();
+  await store.maybeClearQueueSchedulingPause();
+  const queueSchedulingUnpaused = wasSchedulingPaused && !(await store.isQueueSchedulingPaused());
+  await store.clearTickLease();
+
+  return {
+    ...jobResult,
+    expandStatusesReset,
+    queueSchedulingUnpaused,
+    tickLeaseCleared: hadTickLease,
+  };
 }

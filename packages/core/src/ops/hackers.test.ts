@@ -49,10 +49,38 @@ describe("addHacker / clearQueue / removeHacker", () => {
     const first = await clearQueue(store);
     expect(first.deleted).toBe(2);
     expect(first.pending + first.running).toBe(2);
+    expect(first.expandStatusesReset).toBe(0);
+    expect(first.queueSchedulingUnpaused).toBe(false);
+    expect(first.tickLeaseCleared).toBe(false);
     expect((await store.getJob(doneId))?.status).toBe("done");
 
     const second = await clearQueue(store);
     expect(second.deleted).toBe(0);
+  });
+
+  it("clearQueue resets expand scheduling state and scheduler latches", async () => {
+    const store = await freshStore();
+
+    await store.upsertAddress({ address: D1, role: "downstream", expandStatus: "queued" });
+    await store.upsertAddress({ address: D2, role: "downstream", expandStatus: "expanding" });
+    await store.upsertAddress({ address: SHARED, role: "downstream", expandStatus: "expanded" });
+    await store.enqueueJob("expand_downstream", { address: D1, cron: true }, JOB_PRIORITY.CRON_EXPAND);
+
+    await store.setQueueSchedulingPaused(true);
+    await store.tryAcquireTickLease(60_000);
+
+    const result = await clearQueue(store);
+
+    expect(result.deleted).toBe(1);
+    expect(result.expandStatusesReset).toBe(2);
+    expect(result.queueSchedulingUnpaused).toBe(true);
+    expect(result.tickLeaseCleared).toBe(true);
+    expect((await store.getAddress(D1))?.expandStatus).toBe("pending");
+    expect((await store.getAddress(D2))?.expandStatus).toBe("pending");
+    expect((await store.getAddress(SHARED))?.expandStatus).toBe("expanded");
+    expect(await store.isQueueSchedulingPaused()).toBe(false);
+    const state = await store.getSchedulerState();
+    expect(state?.tickLeaseUntil).toBeNull();
   });
 
   it("remove soft-unflags and cancels jobs", async () => {
