@@ -449,3 +449,95 @@ describe("listActiveJobs", () => {
     expect(await store.countActiveJobsMatching({ statuses: ["pending"] })).toBe(1);
   });
 });
+
+const AGE_BOOST_OPTS = {
+  enabled: true,
+  intervalSec: 900,
+  maxBoost: 4,
+  eligibleTypes: [
+    "poll_hacker_address",
+    "poll_downstream_address",
+    "sync_coldcardwatch",
+    "sync_vercel_trackers",
+    "process_tx",
+    "refresh_live_balance",
+    "refresh_btc_usd_price",
+  ],
+} as const;
+
+describe("claimNextJob age boost and tie-breaking", () => {
+  it("claims by created_at when priority and run_after tie", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    const runAt = "2026-06-01T12:00:00.000Z";
+
+    const firstId = await store.enqueueJob("expand_downstream", { address: "bc1qa" }, 5, runAt);
+    const secondId = await store.enqueueJob("expand_downstream", { address: "bc1qb" }, 5, runAt);
+    sqlite
+      .prepare("UPDATE jobs SET created_at = ? WHERE id = ?")
+      .run("2026-06-01T11:00:00.000Z", firstId);
+    sqlite
+      .prepare("UPDATE jobs SET created_at = ? WHERE id = ?")
+      .run("2026-06-01T11:30:00.000Z", secondId);
+
+    const claimed = await store.claimNextJob();
+    expect(claimed?.id).toBe(firstId);
+  });
+
+  it("prefers aged maint job over higher base-priority ingest via age boost", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    const old = new Date(Date.now() - 3_700_000).toISOString();
+
+    await store.enqueueJob("expand_downstream", { address: "bc1qexpand" }, 5);
+    const syncId = await store.enqueueJob("sync_coldcardwatch", {}, 3);
+    sqlite.prepare("UPDATE jobs SET created_at = ?, run_after = ? WHERE id = ?").run(old, old, syncId);
+
+    const claimed = await store.claimNextJob(AGE_BOOST_OPTS);
+    expect(claimed?.id).toBe(syncId);
+  });
+
+  it("does not boost ingest types in claimNextJob ordering", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    const old = new Date(Date.now() - 3_700_000).toISOString();
+
+    const expandId = await store.enqueueJob("expand_downstream", { address: "bc1qexpand" }, 5);
+    const backfillId = await store.enqueueJob("backfill_hacker_address", { address: "bc1qback" }, 10);
+    sqlite.prepare("UPDATE jobs SET created_at = ?, run_after = ? WHERE id = ?").run(old, old, backfillId);
+
+    const claimed = await store.claimNextJob(AGE_BOOST_OPTS);
+    expect(claimed?.id).toBe(backfillId);
+  });
+});
+
+describe("claimOldestMaintCosmeticJob", () => {
+  it("claims oldest eligible maint job after min wait", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    const old = new Date(Date.now() - 3_700_000).toISOString();
+    const newer = new Date(Date.now() - 3_600_000).toISOString();
+
+    const olderId = await store.enqueueJob("sync_vercel_trackers", {}, 3);
+    const newerId = await store.enqueueJob("sync_coldcardwatch", {}, 3);
+    sqlite.prepare("UPDATE jobs SET created_at = ?, run_after = ? WHERE id = ?").run(old, old, olderId);
+    sqlite.prepare("UPDATE jobs SET created_at = ?, run_after = ? WHERE id = ?").run(newer, newer, newerId);
+
+    const claimed = await store.claimOldestMaintCosmeticJob(3600);
+    expect(claimed?.id).toBe(olderId);
+  });
+
+  it("skips jobs that have not waited long enough", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.enqueueJob("sync_coldcardwatch", {}, 3);
+    const claimed = await store.claimOldestMaintCosmeticJob(3600);
+    expect(claimed).toBeNull();
+  });
+});

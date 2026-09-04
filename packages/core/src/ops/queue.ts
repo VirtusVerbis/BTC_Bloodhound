@@ -3,6 +3,7 @@ import type { AppConfig, JobType } from "../config.js";
 import { JOB_PRIORITY } from "../config.js";
 import { jobClassForType, isIngestContinuation } from "../indexer/jobClass.js";
 import { isRebuildActive } from "../indexer/rebuildMode.js";
+import { jobEtaFields } from "../scheduler/eta.js";
 
 const ALL_JOB_TYPES = new Set<JobType>([
   "backfill_hacker_address",
@@ -85,6 +86,9 @@ export interface EnrichedQueueJob {
   attempts: number;
   lastError: string | null;
   details: Record<string, unknown>;
+  waitSec: number;
+  ageBoost: number;
+  effectivePriority: number;
 }
 
 export interface NextCronPreview {
@@ -167,7 +171,7 @@ export function summarizeJobPayload(type: string, payload: Record<string, unknow
   }
 }
 
-export function enrichQueueJob(job: Job, nowMs = Date.now()): EnrichedQueueJob {
+export function enrichQueueJob(job: Job, config?: AppConfig, nowMs = Date.now()): EnrichedQueueJob {
   let payload: Record<string, unknown> = {};
   try {
     payload = JSON.parse(job.payloadJson) as Record<string, unknown>;
@@ -175,6 +179,7 @@ export function enrichQueueJob(job: Job, nowMs = Date.now()): EnrichedQueueJob {
     payload = { raw: job.payloadJson };
   }
   const runAfterMs = new Date(job.runAfter).getTime();
+  const eta = jobEtaFields(job, config, nowMs);
   return {
     id: job.id,
     type: job.type,
@@ -189,6 +194,9 @@ export function enrichQueueJob(job: Job, nowMs = Date.now()): EnrichedQueueJob {
     attempts: job.attempts,
     lastError: job.lastError ?? null,
     details: summarizeJobPayload(job.type, payload),
+    waitSec: eta.waitSec,
+    ageBoost: eta.ageBoost,
+    effectivePriority: eta.effectivePriority,
   };
 }
 
@@ -358,7 +366,7 @@ export async function listQueue(store: Store, config: AppConfig, opts: ListQueue
     const totalMatching = await store.countActiveJobsMatching({ statuses, type });
     const jobRows = await store.listActiveJobs({ statuses, type, limit });
     truncated = totalMatching > jobRows.length;
-    jobs = jobRows.map((job) => enrichQueueJob(job));
+    jobs = jobRows.map((job) => enrichQueueJob(job, config));
   }
 
   const rebuildActive = await isRebuildActive(store, config);

@@ -25,7 +25,8 @@ import { normalizeBitcoinAddress } from "../util/address.js";
 import { formatErrorMessage } from "../util/error.js";
 import { logJobDefer, logJobDone, logJobFail, logJobStart } from "./jobLog.js";
 import type { IndexerLogColorMode } from "./logColor.js";
-import { isIngestJobType } from "./jobClass.js";
+import { isIngestJobType, MAINT_COSMETIC_JOB_TYPES } from "./jobClass.js";
+import { toClaimAgeBoost } from "./jobAge.js";
 import {
   jobClaimMeta,
   jobNeedsChainCallAtStart,
@@ -1417,6 +1418,18 @@ async function claimJobForSlot(
   if (slot === 0) {
     const schedState = await store.getSchedulerState();
     const maintCounter = schedState?.maintenanceCronCounter ?? 0;
+    const ageBoost = toClaimAgeBoost(config);
+    const maintSlice =
+      config.maintSliceEveryNCrons > 0 &&
+      config.maintSliceMinWaitSec > 0 &&
+      maintCounter % config.maintSliceEveryNCrons === 0;
+    if (maintSlice) {
+      const aged = await store.claimOldestMaintCosmeticJob(config.maintSliceMinWaitSec, {
+        excludeIds: [...ctx.claimedIds],
+        eligibleTypes: MAINT_COSMETIC_JOB_TYPES,
+      });
+      if (aged) return aged;
+    }
     const pollSlice =
       config.pollSliceEveryNCrons > 0 && maintCounter % config.pollSliceEveryNCrons === 0;
     if (!pollSlice) {
@@ -1426,7 +1439,7 @@ async function claimJobForSlot(
       });
       if (pick) return await store.claimIngestJobById(pick.id);
     }
-    return await store.claimNextJob();
+    return await store.claimNextJob(ageBoost);
   }
 
   if (ctx.chainSlotUsed || ctx.pacingBlocked) {
@@ -1444,7 +1457,7 @@ async function claimJobForSlot(
     preferProcessOnly: true,
   });
   if (pick) return await store.claimIngestJobById(pick.id);
-  return await store.claimNextJob();
+  return await store.claimNextJob(toClaimAgeBoost(config));
 }
 
 async function markChainSlotAfterJob(store: Store, config: AppConfig, job: Job): Promise<boolean> {

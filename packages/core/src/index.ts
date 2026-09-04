@@ -8,6 +8,7 @@ export * from "./graph/builder.js";
 export * from "./graph/graphPaged.js";
 export * from "./graph/graphTokens.js";
 export * from "./indexer/jobClass.js";
+export * from "./indexer/jobAge.js";
 export * from "./indexer/jobWeight.js";
 export * from "./indexer/jobLog.js";
 export * from "./indexer/logColor.js";

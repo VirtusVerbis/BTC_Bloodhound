@@ -31,6 +31,9 @@ export interface QueueJob {
   attempts: number;
   lastError: string | null;
   details: QueueJobDetails;
+  waitSec: number;
+  ageBoost: number;
+  effectivePriority: number;
 }
 
 export interface QueueSnapshot {

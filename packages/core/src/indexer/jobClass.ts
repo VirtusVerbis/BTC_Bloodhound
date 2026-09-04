@@ -23,6 +23,8 @@ const COSMETIC_TYPES = new Set<JobType>([
 
 export const INGEST_JOB_TYPES = [...INGEST_TYPES] as JobType[];
 
+export const MAINT_COSMETIC_JOB_TYPES = [...MAINT_TYPES, ...COSMETIC_TYPES] as JobType[];
+
 export function jobClassForType(type: string): JobClass {
   if (INGEST_TYPES.has(type as JobType)) return "ingest";
   if (COSMETIC_TYPES.has(type as JobType)) return "cosmetic";
@@ -31,6 +33,14 @@ export function jobClassForType(type: string): JobClass {
 
 export function isIngestJobType(type: string): boolean {
   return INGEST_TYPES.has(type as JobType);
+}
+
+export function isMaintCosmeticJobType(type: string): boolean {
+  return MAINT_TYPES.has(type as JobType) || COSMETIC_TYPES.has(type as JobType);
+}
+
+export function isAgeBoostEligible(type: string): boolean {
+  return isMaintCosmeticJobType(type);
 }
 
 /** True when a backfill/expand job payload has saved cursor or unfinished page work. */

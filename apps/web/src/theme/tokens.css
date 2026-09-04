@@ -859,10 +859,15 @@ button.primary {
 }
 
 .queue-job-elapsed,
-.queue-job-deferred {
+.queue-job-deferred,
+.queue-job-wait {
   margin-top: 0.35rem;
   font-size: 0.8rem;
   color: var(--color-text-muted);
+}
+
+.queue-job-priority--boosted {
+  color: var(--color-node-border);
 }
 
 .queue-more {

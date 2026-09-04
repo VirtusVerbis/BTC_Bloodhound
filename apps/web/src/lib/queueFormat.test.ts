@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   formatJobDetailLine,
+  formatJobPriorityBadge,
   formatJobTypeLabel,
+  formatJobWaitDuration,
   formatRunningElapsed,
   formatSnapshotAge,
   jobClassBorderClass,
@@ -23,6 +25,9 @@ function sampleJob(overrides: Partial<QueueJob> = {}): QueueJob {
     attempts: 0,
     lastError: null,
     details: {},
+    waitSec: 0,
+    ageBoost: 0,
+    effectivePriority: 5,
     ...overrides,
   };
 }
@@ -102,5 +107,76 @@ describe("formatRunningElapsed", () => {
   it("formats elapsed from startedAt", () => {
     const now = new Date("2026-01-01T00:01:30.000Z").getTime();
     expect(formatRunningElapsed("2026-01-01T00:00:00.000Z", now)).toBe("1m 30s");
+  });
+});
+
+describe("formatJobWaitDuration", () => {
+  const now = new Date("2026-01-01T01:05:12.000Z").getTime();
+
+  it("returns formatted wait for pending runnable jobs", () => {
+    expect(
+      formatJobWaitDuration(
+        sampleJob({
+          createdAt: "2026-01-01T00:00:00.000Z",
+          runAfter: "2026-01-01T00:00:00.000Z",
+          runAfterDue: true,
+        }),
+        now,
+      ),
+    ).toBe("1h 05m");
+  });
+
+  it("returns null for deferred jobs", () => {
+    expect(
+      formatJobWaitDuration(
+        sampleJob({
+          runAfter: "2026-01-02T00:00:00.000Z",
+          runAfterDue: false,
+        }),
+        now,
+      ),
+    ).toBeNull();
+  });
+
+  it("returns null for running jobs", () => {
+    expect(
+      formatJobWaitDuration(
+        sampleJob({
+          status: "running",
+          startedAt: "2026-01-01T01:00:00.000Z",
+        }),
+        now,
+      ),
+    ).toBeNull();
+  });
+
+  it("returns null when wait is under one second", () => {
+    expect(
+      formatJobWaitDuration(
+        sampleJob({
+          createdAt: "2026-01-01T01:05:11.500Z",
+          runAfter: "2026-01-01T01:05:11.500Z",
+        }),
+        now,
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("formatJobPriorityBadge", () => {
+  it("shows base priority when not boosted", () => {
+    const badge = formatJobPriorityBadge(sampleJob({ priority: 3, effectivePriority: 3, ageBoost: 0 }));
+    expect(badge.label).toBe("pri 3");
+    expect(badge.boosted).toBe(false);
+    expect(badge.title).toBeUndefined();
+  });
+
+  it("shows inline arrow and tooltip when boosted", () => {
+    const badge = formatJobPriorityBadge(
+      sampleJob({ priority: 3, effectivePriority: 7, ageBoost: 4 }),
+    );
+    expect(badge.label).toBe("pri 3 → 7");
+    expect(badge.boosted).toBe(true);
+    expect(badge.title).toBe("Base priority 3 · age boost +4 · effective 7");
   });
 });

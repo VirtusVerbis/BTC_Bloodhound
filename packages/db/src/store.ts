@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, notInArray, or, sql } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { SQLiteAsyncDialect } from "drizzle-orm/sqlite-core";
 import type { D1Binding } from "./d1.js";
@@ -34,6 +34,68 @@ const INGEST_JOB_TYPES = [
   "audit_hacker_backfill",
   "expand_downstream",
 ] as const;
+
+const MAINT_COSMETIC_JOB_TYPES = [
+  "poll_hacker_address",
+  "poll_downstream_address",
+  "sync_coldcardwatch",
+  "sync_vercel_trackers",
+  "process_tx",
+  "refresh_live_balance",
+  "refresh_btc_usd_price",
+] as const;
+
+export interface ClaimAgeBoost {
+  enabled: boolean;
+  intervalSec: number;
+  maxBoost: number;
+  eligibleTypes: readonly string[];
+}
+
+function jobRunnableAtExpr() {
+  return sql`CASE WHEN ${jobs.runAfter} > ${jobs.createdAt} THEN ${jobs.runAfter} ELSE ${jobs.createdAt} END`;
+}
+
+function jobWaitSecExpr(ts: string) {
+  return sql`(strftime('%s', ${ts}) - strftime('%s', ${jobRunnableAtExpr()}))`;
+}
+
+function jobAgeBoostExpr(ageBoost: ClaimAgeBoost, ts: string) {
+  if (!ageBoost.enabled || ageBoost.intervalSec <= 0 || ageBoost.eligibleTypes.length === 0) {
+    return sql`0`;
+  }
+  const eligible = sql.join(ageBoost.eligibleTypes.map((t) => sql`${t}`), sql`, `);
+  return sql`CASE WHEN ${jobs.type} IN (${eligible}) THEN
+    MIN(${ageBoost.maxBoost}, CAST(${jobWaitSecExpr(ts)} / ${ageBoost.intervalSec} AS INTEGER))
+    ELSE 0 END`;
+}
+
+function effectivePriorityExpr(ageBoost?: ClaimAgeBoost, ts?: string) {
+  if (ageBoost?.enabled && ageBoost.intervalSec > 0) {
+    return sql`${jobs.priority} + ${jobAgeBoostExpr(ageBoost, ts!)}`;
+  }
+  return sql`${jobs.priority}`;
+}
+
+function jobClaimOrderBy(ageBoost?: ClaimAgeBoost, ts?: string) {
+  return [desc(effectivePriorityExpr(ageBoost, ts)), asc(jobs.runAfter), asc(jobs.createdAt)];
+}
+
+function targetAgeBoost(
+  type: string,
+  runAfter: string,
+  createdAt: string,
+  ageBoost: ClaimAgeBoost,
+  ts: string,
+): number {
+  if (!ageBoost.enabled || ageBoost.intervalSec <= 0 || !ageBoost.eligibleTypes.includes(type)) {
+    return 0;
+  }
+  const tsMs = new Date(ts).getTime();
+  const runnableMs = Math.max(new Date(createdAt).getTime(), new Date(runAfter).getTime());
+  const waitSec = Math.max(0, Math.floor((tsMs - runnableMs) / 1000));
+  return Math.min(ageBoost.maxBoost, Math.floor(waitSec / ageBoost.intervalSec));
+}
 
 /** Cloudflare D1 allows max 100 bound params per query; reserve room for other binds. */
 const D1_IN_CLAUSE_CHUNK_SIZE = 80;
@@ -1237,17 +1299,54 @@ export class Store {
     return { allowed: false, retryAfterSec };
   }
 
-  async claimNextJob() {
+  async claimNextJob(ageBoost?: ClaimAgeBoost) {
     const ts = now();
     const job = await this.db
       .select()
       .from(jobs)
       .where(and(eq(jobs.status, "pending"), lte(jobs.runAfter, ts)))
-      .orderBy(desc(jobs.priority), asc(jobs.runAfter))
+      .orderBy(...jobClaimOrderBy(ageBoost, ts))
       .limit(1)
       .get();
     if (!job) return null;
     // Claim only if still pending (avoids double-claim under overlapping cron ticks).
+    const claimed = await this.db
+      .update(jobs)
+      .set({ status: "running", startedAt: ts, completedAt: null })
+      .where(and(eq(jobs.id, job.id), eq(jobs.status, "pending")))
+      .run();
+    if (changesCount(claimed as { changes?: number; meta?: { changes?: number } }) === 0) {
+      return null;
+    }
+    return { ...job, status: "running" as const, startedAt: ts, completedAt: null };
+  }
+
+  /** Force-claim oldest maint/cosmetic job that has waited at least minWaitSec. */
+  async claimOldestMaintCosmeticJob(
+    minWaitSec: number,
+    opts?: { excludeIds?: number[]; eligibleTypes?: readonly string[] },
+  ): Promise<Job | null> {
+    if (minWaitSec <= 0) return null;
+    const ts = now();
+    const types = opts?.eligibleTypes ?? MAINT_COSMETIC_JOB_TYPES;
+    const conditions = [
+      eq(jobs.status, "pending"),
+      lte(jobs.runAfter, ts),
+      inArray(jobs.type, [...types]),
+      gte(jobWaitSecExpr(ts), minWaitSec),
+    ];
+    const excludeIds = opts?.excludeIds ?? [];
+    if (excludeIds.length > 0) {
+      conditions.push(notInArray(jobs.id, excludeIds));
+    }
+    const job = await this.db
+      .select()
+      .from(jobs)
+      .where(and(...conditions))
+      .orderBy(asc(jobs.createdAt))
+      .limit(1)
+      .get();
+    if (!job) return null;
     const claimed = await this.db
       .update(jobs)
       .set({ status: "running", startedAt: ts, completedAt: null })
@@ -1272,7 +1371,7 @@ export class Store {
           inArray(jobs.type, [...INGEST_JOB_TYPES]),
         ),
       )
-      .orderBy(desc(jobs.priority), asc(jobs.runAfter))
+      .orderBy(desc(jobs.priority), asc(jobs.runAfter), asc(jobs.createdAt))
       .limit(limit)
       .all();
   }
@@ -1492,14 +1591,48 @@ export class Store {
     return await this.db.select().from(jobs).where(eq(jobs.id, id)).get();
   }
 
-  async countPendingJobsBefore(priority: number, runAfter: string) {
+  async countPendingJobsBefore(priority: number, runAfter: string, createdAt?: string) {
+    const ahead =
+      createdAt != null
+        ? or(
+            gt(jobs.priority, priority),
+            and(eq(jobs.priority, priority), lt(jobs.runAfter, runAfter)),
+            and(eq(jobs.priority, priority), eq(jobs.runAfter, runAfter), lt(jobs.createdAt, createdAt)),
+          )
+        : or(gt(jobs.priority, priority), and(eq(jobs.priority, priority), lte(jobs.runAfter, runAfter)));
+    const row = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(jobs)
+      .where(and(eq(jobs.status, "pending"), ahead))
+      .get();
+    return row?.count ?? 0;
+  }
+
+  async countPendingJobsBeforeEffective(
+    priority: number,
+    runAfter: string,
+    createdAt: string,
+    type: string,
+    ageBoost?: ClaimAgeBoost,
+  ) {
+    const ts = now();
+    const eff = effectivePriorityExpr(ageBoost, ts);
+    const boost =
+      ageBoost ??
+      ({ enabled: false, intervalSec: 1, maxBoost: 0, eligibleTypes: [] } satisfies ClaimAgeBoost);
+    const targetEff = priority + targetAgeBoost(type, runAfter, createdAt, boost, ts);
     const row = await this.db
       .select({ count: sql<number>`count(*)` })
       .from(jobs)
       .where(
         and(
           eq(jobs.status, "pending"),
-          or(gt(jobs.priority, priority), and(eq(jobs.priority, priority), lte(jobs.runAfter, runAfter))),
+          lte(jobs.runAfter, ts),
+          or(
+            sql`${eff} > ${targetEff}`,
+            and(sql`${eff} = ${targetEff}`, lt(jobs.runAfter, runAfter)),
+            and(sql`${eff} = ${targetEff}`, eq(jobs.runAfter, runAfter), lt(jobs.createdAt, createdAt)),
+          ),
         ),
       )
       .get();
@@ -1562,7 +1695,7 @@ export class Store {
       .select()
       .from(jobs)
       .where(and(...conditions))
-      .orderBy(desc(jobs.priority), asc(jobs.runAfter));
+      .orderBy(desc(jobs.priority), asc(jobs.runAfter), asc(jobs.createdAt));
     if (opts?.limit != null && opts?.offset != null) {
       return await base.limit(opts.limit).offset(opts.offset).all();
     }

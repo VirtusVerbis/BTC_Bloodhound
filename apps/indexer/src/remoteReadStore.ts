@@ -85,7 +85,7 @@ export class RemoteReadStore {
     const statuses = opts?.statuses ?? ["pending", "running"];
     let sql = `SELECT * FROM jobs WHERE status IN (${statusClause(statuses)})`;
     if (opts?.type) sql += ` AND type = ${sqlString(opts.type)}`;
-    sql += " ORDER BY priority DESC, run_after ASC";
+    sql += " ORDER BY priority DESC, run_after ASC, created_at ASC";
     if (opts?.limit != null) sql += ` LIMIT ${Math.max(0, Math.floor(opts.limit))}`;
     if (opts?.offset != null) sql += ` OFFSET ${Math.max(0, Math.floor(opts.offset))}`;
     sql += ";";

@@ -14,7 +14,6 @@ import {
   resolveHackersPollMs,
   type EnrichedQueueJob,
 } from "@cointrace/core";
-import type { Job } from "@cointrace/db";
 import {
   clampInt,
   clientIp,
@@ -470,10 +469,14 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
     });
   });
 
-  function sortQueueJobs(jobs: Job[]): Job[] {
+  function sortEnrichedQueueJobs(jobs: EnrichedQueueJob[]): EnrichedQueueJob[] {
     return [...jobs].sort((a, b) => {
-      if (b.priority !== a.priority) return b.priority - a.priority;
-      return a.runAfter.localeCompare(b.runAfter);
+      if (b.effectivePriority !== a.effectivePriority) {
+        return b.effectivePriority - a.effectivePriority;
+      }
+      const runAfterCmp = a.runAfter.localeCompare(b.runAfter);
+      if (runAfterCmp !== 0) return runAfterCmp;
+      return a.createdAt.localeCompare(b.createdAt);
     });
   }
 
@@ -481,15 +484,18 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
     const limit = clampInt(Number(c.req.query("limit") ?? 10), 1, 25);
     try {
       const base = await listQueue(store, config, { limit: 0 });
-      const runningRows = sortQueueJobs(
-        await store.listActiveJobs({ statuses: ["running"], limit }),
+      const runningRows = sortEnrichedQueueJobs(
+        (await store.listActiveJobs({ statuses: ["running"], limit })).map((job) =>
+          enrichQueueJob(job, config),
+        ),
       );
       const pendingLimit = Math.max(0, limit - runningRows.length);
-      const pendingRows = sortQueueJobs(
-        await store.listActiveJobs({ statuses: ["pending"], limit: pendingLimit }),
+      const pendingRows = sortEnrichedQueueJobs(
+        (await store.listActiveJobs({ statuses: ["pending"], limit: pendingLimit })).map((job) =>
+          enrichQueueJob(job, config),
+        ),
       );
-      const merged = [...runningRows, ...pendingRows];
-      const jobs: EnrichedQueueJob[] = merged.map((job) => enrichQueueJob(job));
+      const jobs = [...runningRows, ...pendingRows];
       const totalMatching = await store.countActiveJobsMatching({
         statuses: ["pending", "running"],
       });

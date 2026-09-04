@@ -4,6 +4,7 @@ import { JOB_PRIORITY } from "../config.js";
 import type { Job, Store } from "@cointrace/db";
 import type { ChainRouter } from "../chain/router.js";
 import { RateLimitHttpError } from "../chain/esplora.js";
+import { MAINT_COSMETIC_JOB_TYPES } from "./jobClass.js";
 import { processJobs } from "./processor.js";
 
 function baseConfig(): AppConfig {
@@ -64,6 +65,11 @@ function baseConfig(): AppConfig {
     maxPendingExpandPerAddress: 2,
     maxPendingExpandGlobal: 40,
     pollSliceEveryNCrons: 4,
+    ageBoostEnabled: true,
+    ageBoostIntervalSec: 900,
+    ageBoostMax: 4,
+    maintSliceEveryNCrons: 10,
+    maintSliceMinWaitSec: 3600,
     hackersPollMs: 3_600_000,
     hackersPollMsSidecar: 60_000,
     indexerLogColor: false,
@@ -108,6 +114,7 @@ function mockStore(overrides: Record<string, unknown> = {}): Store {
     listPendingIngestCandidates: vi.fn().mockResolvedValue([]),
     claimIngestJobById: vi.fn().mockResolvedValue(null),
     claimNextJob: vi.fn().mockResolvedValue(null),
+    claimOldestMaintCosmeticJob: vi.fn().mockResolvedValue(null),
     getSchedulerState: vi.fn().mockResolvedValue({ maintenanceCronCounter: 1 }),
     canUseSubrequests: vi.fn().mockReturnValue(true),
     maybeClearQueueSchedulingPause: vi.fn(),
@@ -329,5 +336,85 @@ describe("processJobs fair scheduling", () => {
     expect(n).toBe(1);
     expect(claimNextJob).toHaveBeenCalled();
     expect(completeJob).toHaveBeenCalledWith(pollJob.id);
+  });
+
+  it("calls claimOldestMaintCosmeticJob on maint slice tick before ingest pick", async () => {
+    const syncJob = makeJob({
+      id: 30,
+      type: "sync_coldcardwatch",
+      payloadJson: JSON.stringify({ collectors: [], victims: [], downstream: [] }),
+      priority: JOB_PRIORITY.SYNC_COLDCARDWATCH,
+      status: "pending",
+      startedAt: null,
+    });
+
+    const claimOldestMaintCosmeticJob = vi.fn().mockResolvedValue(syncJob);
+    const claimIngestJobById = vi.fn();
+    const completeJob = vi.fn();
+
+    const store = mockStore({
+      getSchedulerState: vi.fn().mockResolvedValue({ maintenanceCronCounter: 10 }),
+      listPendingIngestCandidates: vi.fn().mockResolvedValue([
+        makeJob({
+          id: 11,
+          type: "expand_downstream",
+          payloadJson: JSON.stringify({ address: "bc1qexpand" }),
+          priority: JOB_PRIORITY.CRON_EXPAND,
+        }),
+      ]),
+      claimOldestMaintCosmeticJob,
+      claimIngestJobById,
+      completeJob,
+      upsertAddress: vi.fn(),
+      insertAddressIfMissing: vi.fn(),
+      getAddress: vi.fn(),
+    });
+
+    const router = {} as unknown as ChainRouter;
+
+    await processJobs(store, router, baseConfig());
+
+    expect(claimOldestMaintCosmeticJob).toHaveBeenCalledWith(3600, {
+      excludeIds: [],
+      eligibleTypes: MAINT_COSMETIC_JOB_TYPES,
+    });
+    expect(claimIngestJobById).not.toHaveBeenCalled();
+    expect(completeJob).toHaveBeenCalledWith(syncJob.id);
+  });
+
+  it("passes age boost config to claimNextJob on poll slice tick", async () => {
+    const pollJob = makeJob({
+      id: 20,
+      type: "poll_hacker_address",
+      payloadJson: JSON.stringify({ address: "bc1qhack" }),
+      priority: JOB_PRIORITY.POLL_HACKER,
+    });
+
+    const claimNextJob = vi.fn().mockResolvedValue(pollJob);
+    const completeJob = vi.fn();
+
+    const store = mockStore({
+      getSchedulerState: vi.fn().mockResolvedValue({ maintenanceCronCounter: 4 }),
+      claimNextJob,
+      completeJob,
+      getSyncState: vi.fn().mockResolvedValue(null),
+      listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack" }]),
+      touchSyncPoll: vi.fn(),
+    });
+
+    const router = {
+      withProvider: vi.fn(async (fn: (p: { getAddressTxs: () => Promise<[]> }) => unknown) =>
+        fn({ getAddressTxs: async () => [] }),
+      ),
+    } as unknown as ChainRouter;
+
+    await processJobs(store, router, { ...baseConfig(), pollSliceEveryNCrons: 4 });
+
+    expect(claimNextJob).toHaveBeenCalledWith({
+      enabled: true,
+      intervalSec: 900,
+      maxBoost: 4,
+      eligibleTypes: MAINT_COSMETIC_JOB_TYPES,
+    });
   });
 });

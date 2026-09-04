@@ -170,6 +170,16 @@ export interface AppConfig {
   maxPendingExpandGlobal: number;
   /** Every N maintenance cron ticks, ingest slot 0 skips ingest pick (poll slice). */
   pollSliceEveryNCrons: number;
+  /** When true, maint/cosmetic jobs gain effective priority while waiting in queue. */
+  ageBoostEnabled: boolean;
+  /** Seconds of wait per +1 effective priority boost (maint/cosmetic only). */
+  ageBoostIntervalSec: number;
+  /** Max priority points added by age boost. */
+  ageBoostMax: number;
+  /** Every N maintenance cron ticks, slot 0 may force-claim oldest eligible maint/cosmetic job. */
+  maintSliceEveryNCrons: number;
+  /** Min wait (seconds) before a job is eligible for maint-slice force claim. */
+  maintSliceMinWaitSec: number;
 }
 
 let envFileLoaded = false;
@@ -323,6 +333,11 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     maxPendingExpandPerAddress: Math.max(1, Number(env.MAX_PENDING_EXPAND_PER_ADDRESS ?? 2)),
     maxPendingExpandGlobal: Math.max(1, Number(env.MAX_PENDING_EXPAND_GLOBAL ?? 40)),
     pollSliceEveryNCrons: Math.max(1, Number(env.POLL_SLICE_EVERY_N_CRONS ?? 4)),
+    ageBoostEnabled: env.AGE_BOOST_ENABLED !== "0",
+    ageBoostIntervalSec: Math.max(1, Number(env.AGE_BOOST_INTERVAL_SEC ?? 900)),
+    ageBoostMax: Math.max(0, Number(env.AGE_BOOST_MAX ?? 4)),
+    maintSliceEveryNCrons: Math.max(0, Number(env.MAINT_SLICE_EVERY_N_CRONS ?? 10)),
+    maintSliceMinWaitSec: Math.max(0, Number(env.MAINT_SLICE_MIN_WAIT_SEC ?? 3600)),
   };
 }
 

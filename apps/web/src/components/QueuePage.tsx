@@ -3,7 +3,9 @@ import type { MonitoringSyncStatus } from "./MonitoringIndicator";
 import type { QueueSnapshot } from "../lib/queueApi";
 import {
   formatJobDetailLine,
+  formatJobPriorityBadge,
   formatJobTypeLabel,
+  formatJobWaitDuration,
   formatRunningElapsed,
   formatSnapshotAge,
   jobClassBorderClass,
@@ -122,6 +124,8 @@ export function QueuePage({
             {snapshot.jobs.map((job, index) => {
               const isRunning = job.status === "running";
               const elapsed = isRunning ? formatRunningElapsed(job.startedAt, nowMs) : null;
+              const waitLabel = formatJobWaitDuration(job, nowMs);
+              const priorityBadge = formatJobPriorityBadge(job);
               return (
                 <li
                   key={job.id}
@@ -138,11 +142,20 @@ export function QueuePage({
                     {isRunning && <span className="queue-job-running-badge">RUNNING</span>}
                     <span className="queue-job-type">{formatJobTypeLabel(job.type)}</span>
                     <span className="queue-job-class">{job.jobClass}</span>
-                    <span className="queue-job-priority" title="Priority">
-                      pri {job.priority}
+                    <span
+                      className={[
+                        "queue-job-priority",
+                        priorityBadge.boosted ? "queue-job-priority--boosted" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                      title={priorityBadge.title}
+                    >
+                      {priorityBadge.label}
                     </span>
                   </div>
                   <div className="queue-job-detail">{formatJobDetailLine(job)}</div>
+                  {waitLabel && <div className="queue-job-wait">waiting {waitLabel}</div>}
                   {elapsed && <div className="queue-job-elapsed">running {elapsed}</div>}
                   {!job.runAfterDue && job.status === "pending" && (
                     <div className="queue-job-deferred">scheduled · not yet due</div>

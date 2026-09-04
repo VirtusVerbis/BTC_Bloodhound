@@ -1,6 +1,56 @@
 import { truncateAddress } from "./api";
 import type { QueueJob, QueueJobClass } from "./queueApi";
 
+export function jobRunnableAtMs(job: Pick<QueueJob, "createdAt" | "runAfter">): number {
+  const created = new Date(job.createdAt).getTime();
+  const runAfter = new Date(job.runAfter).getTime();
+  const createdMs = Number.isFinite(created) ? created : 0;
+  const runAfterMs = Number.isFinite(runAfter) ? runAfter : 0;
+  return Math.max(createdMs, runAfterMs);
+}
+
+/** Human-readable duration without trailing "ago" (e.g. "47m 12s", "1h 05m"). */
+export function formatDurationMs(elapsedMs: number): string {
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 1000) return "just now";
+  const totalSec = Math.floor(elapsedMs / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const minutes = Math.floor(totalSec / 60);
+  const seconds = totalSec % 60;
+  if (minutes < 60) return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+  const hours = Math.floor(minutes / 60);
+  const remMin = minutes % 60;
+  return `${hours}h ${String(remMin).padStart(2, "0")}m`;
+}
+
+export function formatJobWaitDuration(job: QueueJob, nowMs: number): string | null {
+  if (job.status !== "pending" || !job.runAfterDue) return null;
+  const runnableAt = jobRunnableAtMs(job);
+  if (runnableAt <= 0) return null;
+  const waitMs = nowMs - runnableAt;
+  if (waitMs < 1000) return null;
+  return formatDurationMs(waitMs);
+}
+
+export interface JobPriorityBadge {
+  label: string;
+  title?: string;
+  boosted: boolean;
+}
+
+export function formatJobPriorityBadge(job: QueueJob): JobPriorityBadge {
+  if (job.ageBoost > 0) {
+    return {
+      label: `pri ${job.priority} → ${job.effectivePriority}`,
+      title: `Base priority ${job.priority} · age boost +${job.ageBoost} · effective ${job.effectivePriority}`,
+      boosted: true,
+    };
+  }
+  return {
+    label: `pri ${job.priority}`,
+    boosted: false,
+  };
+}
+
 export function formatSnapshotAge(elapsedMs: number | null | undefined): string {
   if (elapsedMs == null || !Number.isFinite(elapsedMs) || elapsedMs < 0) return "—";
   if (elapsedMs < 1000) return "just now";

@@ -158,5 +158,7 @@ describe("enrichQueueJob", () => {
     });
     expect(job.runAfterDue).toBe(false);
     expect(job.jobClass).toBe("maint");
+    expect(job.waitSec).toBeGreaterThanOrEqual(0);
+    expect(job.effectivePriority).toBe(4);
   });
 });
