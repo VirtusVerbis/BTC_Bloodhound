@@ -14,6 +14,11 @@ export interface QueueJobDetails {
   pagesFetched?: number | null;
   traceEdgeIndex?: number | null;
   traceEdgesPending?: boolean;
+  chunkIndex?: number | null;
+  chunkTotal?: number | null;
+  chunkSize?: number | null;
+  source?: string | null;
+  finalize?: boolean;
   payload?: unknown;
 }
 

@@ -71,6 +71,17 @@ export function formatJobTypeLabel(type: string): string {
     .join(" ");
 }
 
+function formatSyncSourceLabel(source: string): string {
+  switch (source) {
+    case "coldcard_hack_tracker":
+      return "hack tracker";
+    case "coldcard_sweep_watch":
+      return "sweep watch";
+    default:
+      return source.replace(/_/g, " ");
+  }
+}
+
 export function formatJobDetailLine(job: QueueJob): string {
   const { details, type } = job;
   const parts: string[] = [];
@@ -94,6 +105,8 @@ export function formatJobDetailLine(job: QueueJob): string {
     } else {
       parts.push(`processed ${details.processedIndex}`);
     }
+  } else if (typeof details.chunkIndex === "number" && typeof details.chunkTotal === "number") {
+    parts.push(`progress ${details.chunkIndex}/${details.chunkTotal}`);
   }
   if (details.traceEdgesPending === true) parts.push("trace pending");
   if (typeof details.traceEdgeIndex === "number") {
@@ -106,6 +119,20 @@ export function formatJobDetailLine(job: QueueJob): string {
     if (type === "refresh_btc_usd_price") return "BTC/USD price";
     return "—";
   }
+
+  const syncParts: string[] = [];
+  if (type === "sync_coldcardwatch") syncParts.push("External sync");
+  if (type === "sync_vercel_trackers") syncParts.push("Tracker sync");
+  if (typeof details.source === "string" && details.source.length > 0) {
+    syncParts.push(formatSyncSourceLabel(details.source));
+  }
+
+  if (syncParts.length > 0) {
+    const tail = details.finalize === true ? [...parts, "finalize"] : parts;
+    return [...syncParts, ...tail].join(" · ");
+  }
+
+  if (details.finalize === true) parts.push("finalize");
 
   return parts.join(" · ");
 }

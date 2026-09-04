@@ -68,6 +68,8 @@ export interface ColdcardSweepWatchBatchPayload {
   vaults?: string[];
   finalize?: boolean;
   lastAddressCount?: number;
+  chunkIndex?: number;
+  chunkTotal?: number;
 }
 
 function chunkArray<T>(items: T[], size: number): T[][] {
@@ -100,12 +102,14 @@ export async function enqueueColdcardSweepWatchBatchJobs(
   const last = jobs[jobs.length - 1]!;
   last.finalize = true;
   last.lastAddressCount = data.collectors.length + data.vaults.length;
-  for (const payload of jobs) {
+  for (let i = 0; i < jobs.length; i++) {
     await store.enqueueJob(
       "sync_vercel_trackers",
       {
         source: "coldcard_sweep_watch",
-        ...payload,
+        ...jobs[i],
+        chunkIndex: i + 1,
+        chunkTotal: jobs.length,
       } as unknown as Record<string, unknown>,
       JOB_PRIORITY.SYNC_VERCEL_TRACKERS,
     );
@@ -134,6 +138,8 @@ export async function applyColdcardSweepWatchSyncBatch(
             vaults: remainingVaults,
             finalize: payload.finalize,
             lastAddressCount: payload.lastAddressCount,
+            chunkIndex: payload.chunkIndex,
+            chunkTotal: payload.chunkTotal,
           } as unknown as Record<string, unknown>,
           JOB_PRIORITY.SYNC_VERCEL_TRACKERS,
         );
@@ -172,6 +178,8 @@ export async function applyColdcardSweepWatchSyncBatch(
             vaults: rows.slice(i),
             finalize: payload.finalize,
             lastAddressCount: payload.lastAddressCount,
+            chunkIndex: payload.chunkIndex,
+            chunkTotal: payload.chunkTotal,
           } as unknown as Record<string, unknown>,
           JOB_PRIORITY.SYNC_VERCEL_TRACKERS,
         );

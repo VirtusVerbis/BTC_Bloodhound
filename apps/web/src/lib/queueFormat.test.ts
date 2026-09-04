@@ -92,6 +92,37 @@ describe("formatJobDetailLine", () => {
     expect(formatJobDetailLine(sampleJob({ type: "sync_coldcardwatch", details: {} }))).toBe(
       "External sync",
     );
+    expect(formatJobDetailLine(sampleJob({ type: "sync_vercel_trackers", details: {} }))).toBe(
+      "Tracker sync",
+    );
+  });
+
+  it("formats sync chunk progress with source label", () => {
+    const line = formatJobDetailLine(
+      sampleJob({
+        type: "sync_vercel_trackers",
+        details: {
+          source: "coldcard_hack_tracker",
+          chunkIndex: 3,
+          chunkTotal: 10,
+        },
+      }),
+    );
+    expect(line).toBe("Tracker sync · hack tracker · progress 3/10");
+  });
+
+  it("formats external sync chunk with finalize", () => {
+    const line = formatJobDetailLine(
+      sampleJob({
+        type: "sync_coldcardwatch",
+        details: {
+          chunkIndex: 2,
+          chunkTotal: 7,
+          finalize: true,
+        },
+      }),
+    );
+    expect(line).toBe("External sync · progress 2/7 · finalize");
   });
 });
 

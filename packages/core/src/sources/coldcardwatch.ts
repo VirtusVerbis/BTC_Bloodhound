@@ -82,6 +82,8 @@ export interface ColdcardWatchBatchPayload {
   downstream?: string[];
   finalize?: boolean;
   lastAddressCount?: number;
+  chunkIndex?: number;
+  chunkTotal?: number;
 }
 
 function chunkArray<T>(items: T[], size: number): T[][] {
@@ -117,10 +119,10 @@ export async function enqueueColdcardWatchBatchJobs(
   const last = jobs[jobs.length - 1]!;
   last.finalize = true;
   last.lastAddressCount = data.collectors.length + data.victims.length;
-  for (const payload of jobs) {
+  for (let i = 0; i < jobs.length; i++) {
     await store.enqueueJob(
       "sync_coldcardwatch",
-      payload as unknown as Record<string, unknown>,
+      { ...jobs[i], chunkIndex: i + 1, chunkTotal: jobs.length } as unknown as Record<string, unknown>,
       JOB_PRIORITY.SYNC_COLDCARDWATCH,
     );
   }
@@ -143,6 +145,8 @@ export async function applyColdcardWatchSyncBatch(
           downstream: payload.downstream,
           finalize: payload.finalize,
           lastAddressCount: payload.lastAddressCount,
+          chunkIndex: payload.chunkIndex,
+          chunkTotal: payload.chunkTotal,
         } as unknown as Record<string, unknown>,
         JOB_PRIORITY.SYNC_COLDCARDWATCH,
       );
@@ -196,6 +200,8 @@ export async function applyColdcardWatchSyncBatch(
           downstream: payload.downstream,
           finalize: payload.finalize,
           lastAddressCount: payload.lastAddressCount,
+          chunkIndex: payload.chunkIndex,
+          chunkTotal: payload.chunkTotal,
         } as unknown as Record<string, unknown>,
         JOB_PRIORITY.SYNC_COLDCARDWATCH,
       );
@@ -220,6 +226,8 @@ export async function applyColdcardWatchSyncBatch(
           downstream: downstream.slice(i),
           finalize: payload.finalize,
           lastAddressCount: payload.lastAddressCount,
+          chunkIndex: payload.chunkIndex,
+          chunkTotal: payload.chunkTotal,
         } as unknown as Record<string, unknown>,
         JOB_PRIORITY.SYNC_COLDCARDWATCH,
       );

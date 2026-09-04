@@ -117,6 +117,37 @@ function statusesForFilter(status: QueueStatusFilter): string[] {
   }
 }
 
+function syncBatchItemCount(payload: Record<string, unknown>): number {
+  let count = 0;
+  for (const key of ["addresses", "collectors", "victims", "vaults", "downstream"]) {
+    const arr = payload[key];
+    if (Array.isArray(arr)) count += arr.length;
+  }
+  return count;
+}
+
+function isSyncBatchPayload(payload: Record<string, unknown>): boolean {
+  if (typeof payload.chunkIndex === "number" || typeof payload.chunkTotal === "number") return true;
+  return syncBatchItemCount(payload) > 0 || payload.finalize === true || payload.contentHash != null;
+}
+
+function summarizeSyncBatchPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  if (!isSyncBatchPayload(payload)) return {};
+  const chunkSize = syncBatchItemCount(payload);
+  const hasBatchArrays = chunkSize > 0;
+  const chunkIndex = typeof payload.chunkIndex === "number" ? payload.chunkIndex : null;
+  const chunkTotal = typeof payload.chunkTotal === "number" ? payload.chunkTotal : null;
+  const continuation = hasBatchArrays && chunkIndex == null;
+  return {
+    source: typeof payload.source === "string" ? payload.source : null,
+    chunkIndex,
+    chunkTotal,
+    chunkSize: chunkSize > 0 ? chunkSize : null,
+    finalize: payload.finalize === true ? true : undefined,
+    continuation: continuation ? true : undefined,
+  };
+}
+
 export function summarizeJobPayload(type: string, payload: Record<string, unknown>): Record<string, unknown> {
   switch (type) {
     case "backfill_hacker_address": {
@@ -164,6 +195,7 @@ export function summarizeJobPayload(type: string, payload: Record<string, unknow
       return { txid: payload.txid };
     case "sync_coldcardwatch":
     case "sync_vercel_trackers":
+      return summarizeSyncBatchPayload(payload);
     case "refresh_btc_usd_price":
       return {};
     default:

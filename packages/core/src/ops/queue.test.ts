@@ -43,6 +43,37 @@ describe("summarizeJobPayload", () => {
     expect(details.address).toBe("bc1qdown");
     expect(details.cron).toBe(true);
   });
+
+  it("surfaces sync batch chunk progress", () => {
+    const details = summarizeJobPayload("sync_vercel_trackers", {
+      source: "coldcard_hack_tracker",
+      contentHash: "abc",
+      addresses: ["bc1qa", "bc1qb"],
+      chunkIndex: 3,
+      chunkTotal: 10,
+      finalize: false,
+    });
+    expect(details.source).toBe("coldcard_hack_tracker");
+    expect(details.chunkIndex).toBe(3);
+    expect(details.chunkTotal).toBe(10);
+    expect(details.chunkSize).toBe(2);
+    expect(details.finalize).toBeUndefined();
+  });
+
+  it("returns empty details for root sync cron jobs", () => {
+    expect(summarizeJobPayload("sync_vercel_trackers", {})).toEqual({});
+    expect(summarizeJobPayload("sync_coldcardwatch", {})).toEqual({});
+  });
+
+  it("marks legacy sync batch without chunk metadata as continuation", () => {
+    const details = summarizeJobPayload("sync_coldcardwatch", {
+      contentHash: "abc",
+      collectors: ["bc1qa"],
+    });
+    expect(details.continuation).toBe(true);
+    expect(details.chunkIndex).toBeNull();
+    expect(details.chunkSize).toBe(1);
+  });
 });
 
 describe("listQueue", () => {

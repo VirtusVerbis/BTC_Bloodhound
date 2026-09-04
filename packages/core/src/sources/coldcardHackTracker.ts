@@ -47,6 +47,8 @@ export interface ColdcardHackTrackerBatchPayload {
   addresses?: string[];
   finalize?: boolean;
   lastAddressCount?: number;
+  chunkIndex?: number;
+  chunkTotal?: number;
 }
 
 function chunkArray<T>(items: T[], size: number): T[][] {
@@ -80,6 +82,8 @@ export async function enqueueColdcardHackTrackerBatchJobs(
         addresses: chunks[i],
         finalize,
         lastAddressCount: data.addresses.length,
+        chunkIndex: i + 1,
+        chunkTotal: chunks.length,
       },
       JOB_PRIORITY.SYNC_VERCEL_TRACKERS,
     );
@@ -105,6 +109,8 @@ export async function applyColdcardHackTrackerSyncBatch(
             addresses: remaining,
             finalize: payload.finalize,
             lastAddressCount: payload.lastAddressCount,
+            chunkIndex: payload.chunkIndex,
+            chunkTotal: payload.chunkTotal,
           },
           JOB_PRIORITY.SYNC_VERCEL_TRACKERS,
         );
