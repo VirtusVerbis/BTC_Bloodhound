@@ -89,6 +89,10 @@ export const hackCoverageLinks: ExternalLink[] = [
     label: "Praveen Perera — Inside Wave 1: tracing the attacker’s steps through the Coldcard drain",
     url: "https://praveenperera.com/blog/coldcard-mk3-weak-rng-wave1/",
   },
+  {
+    label: "James O'Beirne — CKTRIPWIRE honeypot scoreboard",
+    url: "https://cktripwire.com/",
+  },
 ];
 
 export const dataSourceLinks: ExternalLink[] = [
