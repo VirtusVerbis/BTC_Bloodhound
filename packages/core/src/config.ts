@@ -25,6 +25,7 @@ export type JobType =
   | "expand_downstream"
   | "refresh_live_balance"
   | "refresh_btc_usd_price"
+  | "backfill_op_return"
   | "sync_coldcardwatch"
   | "sync_vercel_trackers";
 
@@ -180,6 +181,10 @@ export interface AppConfig {
   maintSliceEveryNCrons: number;
   /** Min wait (seconds) before a job is eligible for maint-slice force claim. */
   maintSliceMinWaitSec: number;
+  /** Max historical OP_RETURN captures per backfill_op_return job. */
+  opReturnBackfillPerJob: number;
+  /** Enqueue backfill_op_return every N maintenance cron ticks when backlog exists. */
+  opReturnBackfillEveryNCrons: number;
 }
 
 let envFileLoaded = false;
@@ -338,6 +343,8 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     ageBoostMax: Math.max(0, Number(env.AGE_BOOST_MAX ?? 4)),
     maintSliceEveryNCrons: Math.max(0, Number(env.MAINT_SLICE_EVERY_N_CRONS ?? 10)),
     maintSliceMinWaitSec: Math.max(0, Number(env.MAINT_SLICE_MIN_WAIT_SEC ?? 3600)),
+    opReturnBackfillPerJob: Math.max(1, Number(env.OP_RETURN_BACKFILL_PER_JOB ?? 3)),
+    opReturnBackfillEveryNCrons: Math.max(1, Number(env.OP_RETURN_BACKFILL_EVERY_N_CRONS ?? 10)),
   };
 }
 

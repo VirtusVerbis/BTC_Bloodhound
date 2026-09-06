@@ -28,6 +28,8 @@ export interface ApiGraphNode {
     txid: string;
     topOutputs?: Array<{ address: string; sats: number }>;
   };
+  opReturn?: string;
+  opReturnLabel?: string;
 }
 
 export interface ApiGraphEdge {

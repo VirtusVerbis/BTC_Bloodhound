@@ -43,6 +43,7 @@ const MAINT_COSMETIC_JOB_TYPES = [
   "process_tx",
   "refresh_live_balance",
   "refresh_btc_usd_price",
+  "backfill_op_return",
 ] as const;
 
 export interface ClaimAgeBoost {
@@ -100,6 +101,11 @@ function targetAgeBoost(
 /** Cloudflare D1 allows max 100 bound params per query; reserve room for other binds. */
 const D1_IN_CLAUSE_CHUNK_SIZE = 80;
 const ADDRESS_DETAIL_TX_LIMIT = 50;
+const OP_RETURN_GRAPH_LABEL_MAX_CHARS = 48;
+
+function opReturnTruncatedFlag(text: string): boolean {
+  return text.length > OP_RETURN_GRAPH_LABEL_MAX_CHARS;
+}
 
 export interface OutEdgeKeysetCursor {
   amountSats: number;
@@ -747,8 +753,21 @@ export class Store {
     await this.db.update(addresses).set({ totalReceivedSats: 0 }).where(eq(addresses.isFlaggedHacker, true)).run();
   }
 
-  async upsertTransaction(data: { txid: string; blockHeight?: number | null; blockTime?: string | null; feeSats?: number | null }) {
+  async upsertTransaction(data: {
+    txid: string;
+    blockHeight?: number | null;
+    blockTime?: string | null;
+    feeSats?: number | null;
+    opReturnDisplay?: string | null;
+  }) {
     const existing = await this.db.select().from(transactions).where(eq(transactions.txid, data.txid)).get();
+    let opReturnDisplay = existing?.opReturnDisplay ?? null;
+    if (data.opReturnDisplay !== undefined) {
+      const hasReadable = Boolean(existing?.opReturnDisplay && existing.opReturnDisplay !== "");
+      if (!hasReadable) {
+        opReturnDisplay = data.opReturnDisplay;
+      }
+    }
     if (existing) {
       await this.db
         .update(transactions)
@@ -756,12 +775,65 @@ export class Store {
           blockHeight: data.blockHeight ?? existing.blockHeight,
           blockTime: data.blockTime ?? existing.blockTime,
           feeSats: data.feeSats ?? existing.feeSats,
+          opReturnDisplay,
         })
         .where(eq(transactions.txid, data.txid))
         .run();
     } else {
-      await this.db.insert(transactions).values(data).run();
+      await this.db
+        .insert(transactions)
+        .values({
+          txid: data.txid,
+          blockHeight: data.blockHeight ?? null,
+          blockTime: data.blockTime ?? null,
+          feeSats: data.feeSats ?? null,
+          opReturnDisplay: data.opReturnDisplay ?? null,
+        })
+        .run();
     }
+  }
+
+  async listTxidsMissingOpReturn(limit: number): Promise<string[]> {
+    const rows = await this.db
+      .select({ txid: transactions.txid })
+      .from(transactions)
+      .where(isNull(transactions.opReturnDisplay))
+      .orderBy(asc(transactions.blockHeight), asc(transactions.txid))
+      .limit(limit)
+      .all();
+    return rows.map((r) => r.txid);
+  }
+
+  async countTransactionsMissingOpReturn(): Promise<number> {
+    const row = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(transactions)
+      .where(isNull(transactions.opReturnDisplay))
+      .get();
+    return Number(row?.count ?? 0);
+  }
+
+  async getOpReturnDisplayByTxids(txids: string[]): Promise<Map<string, string>> {
+    const unique = [...new Set(txids)];
+    const out = new Map<string, string>();
+    if (unique.length === 0) return out;
+
+    for (const chunk of chunkArray(unique, D1_IN_CLAUSE_CHUNK_SIZE)) {
+      const rows = await this.db
+        .select({
+          txid: transactions.txid,
+          opReturnDisplay: transactions.opReturnDisplay,
+        })
+        .from(transactions)
+        .where(inArray(transactions.txid, chunk))
+        .all();
+      for (const row of rows) {
+        if (row.opReturnDisplay && row.opReturnDisplay !== "") {
+          out.set(row.txid, row.opReturnDisplay);
+        }
+      }
+    }
+    return out;
   }
 
   async getEdgesForHacker(hacker: string) {
@@ -1035,7 +1107,11 @@ export class Store {
       .get();
 
     if (!row) {
-      return { hackOccurredAt: null as string | null, hackBlockHeight: null as number | null };
+      return {
+        hackOccurredAt: null as string | null,
+        hackBlockHeight: null as number | null,
+        hackTxid: null as string | null,
+      };
     }
 
     const hackBlockHeight = row.txBlockHeight ?? null;
@@ -1044,7 +1120,7 @@ export class Store {
       hackOccurredAt = await this.getBlockTimeByHeight(hackBlockHeight);
     }
 
-    return { hackOccurredAt, hackBlockHeight };
+    return { hackOccurredAt, hackBlockHeight, hackTxid: row.txid };
   }
 
   async getAddressDetail(address: string) {
@@ -1071,7 +1147,17 @@ export class Store {
       };
     });
 
-    const { hackOccurredAt, hackBlockHeight } = await this.resolveHackTimingForAddress(address);
+    const { hackOccurredAt, hackBlockHeight, hackTxid } = await this.resolveHackTimingForAddress(address);
+    let opReturn: string | null = null;
+    let opReturnTruncated = false;
+    if (hackTxid) {
+      const displays = await this.getOpReturnDisplayByTxids([hackTxid]);
+      const raw = displays.get(hackTxid) ?? null;
+      if (raw) {
+        opReturn = raw;
+        opReturnTruncated = opReturnTruncatedFlag(raw);
+      }
+    }
     return {
       address: addr,
       totalSent,
@@ -1080,6 +1166,9 @@ export class Store {
       relatedTxsTotal,
       hackOccurredAt,
       hackBlockHeight,
+      hackTxid,
+      opReturn,
+      opReturnTruncated,
     };
   }
 

@@ -8,6 +8,9 @@ export interface ChainTxVin {
 export interface ChainTxVout {
   scriptpubkey_address?: string;
   value?: number;
+  scriptpubkey_type?: string;
+  scriptpubkey_asm?: string;
+  scriptpubkey?: string;
 }
 
 export interface ChainTxSummary {

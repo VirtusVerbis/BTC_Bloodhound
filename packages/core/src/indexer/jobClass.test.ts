@@ -16,6 +16,7 @@ describe("jobClassForType", () => {
   it("classifies cosmetic jobs", () => {
     expect(jobClassForType("refresh_live_balance")).toBe("cosmetic");
     expect(jobClassForType("refresh_btc_usd_price")).toBe("cosmetic");
+    expect(jobClassForType("backfill_op_return")).toBe("cosmetic");
   });
 });
 

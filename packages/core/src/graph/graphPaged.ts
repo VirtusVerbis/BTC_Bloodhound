@@ -1,6 +1,7 @@
 import type { Store } from "@cointrace/db";
 import { bundleParallelEdges, mapDbEdgeToGraph } from "./graphEdges.js";
 import type { GraphEdge, GraphNode, GraphResult } from "./builder.js";
+import { enrichNodesWithOpReturn } from "./graphOpReturn.js";
 import {
   decodeL1Cursor,
   decodeL2Cursor,
@@ -287,6 +288,8 @@ export async function buildGraphL1Page(
     l2Token = encodeL2Token(payload);
   }
 
+  await enrichNodesWithOpReturn(store, nodes);
+
   return {
     nodes,
     edges,
@@ -403,6 +406,8 @@ export async function buildGraphL2Page(
 
   const done = nextCursor === null && parentIndex >= expandableParents.length;
   const loadedL2 = (options.loadedL2 ?? 0) + addedThisPage;
+
+  await enrichNodesWithOpReturn(store, nodes);
 
   return {
     nodes,

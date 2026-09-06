@@ -187,7 +187,7 @@ export function HackGraph({
   const victimSortRef = useRef<VictimSortOption>("btc-desc");
   const [fitViewTrigger, setFitViewTrigger] = useState(0);
   const [victimSort, setVictimSort] = useState<VictimSortOption>("btc-desc");
-  const [showEdgeLabels, setShowEdgeLabels] = useState(false);
+  const [showLabels, setShowLabels] = useState(false);
   const [nodesInteractive, setNodesInteractive] = useState(false);
   const [graphError, setGraphError] = useState<string | null>(null);
   const [graphLoading, setGraphLoading] = useState(false);
@@ -282,6 +282,9 @@ export function HackGraph({
           expandProfile: n.expandProfile,
           relayMeta: n.relayMeta,
           fanoutMeta: n.fanoutMeta,
+          opReturn: n.opReturn,
+          opReturnLabel: n.opReturnLabel,
+          showOpReturnLabel: showLabels,
           onExpandVictims:
             n.type === "victimCluster"
               ? () => window.dispatchEvent(new CustomEvent("cointrace-expand-victims"))
@@ -291,7 +294,7 @@ export function HackGraph({
       }));
 
       const validApiEdges = filterEdgesToNodes(graph.nodes, graph.edges);
-      const rfEdges = mapApiEdges(validApiEdges, showEdgeLabels);
+      const rfEdges = mapApiEdges(validApiEdges, showLabels);
 
       graphDataRef.current = { rfNodes, rfEdges, mode, apiEdges: validApiEdges };
       applyLayout(rfNodes, rfEdges, mode, victimSortRef.current);
@@ -301,7 +304,7 @@ export function HackGraph({
         setFitViewTrigger((t) => t + 1);
       }
     },
-    [victimSearch, onHackerChange, showEdgeLabels, applyLayout],
+    [victimSearch, onHackerChange, showLabels, applyLayout],
   );
 
   const loadGraph = useCallback(
@@ -425,10 +428,20 @@ export function HackGraph({
   useEffect(() => {
     const cached = graphDataRef.current;
     if (!cached?.apiEdges) return;
-    const rfEdges = mapApiEdges(cached.apiEdges, showEdgeLabels);
+    const rfEdges = mapApiEdges(cached.apiEdges, showLabels);
     graphDataRef.current = { ...cached, rfEdges };
     setEdges(rfEdges);
-  }, [showEdgeLabels, setEdges]);
+  }, [showLabels, setEdges]);
+
+  useEffect(() => {
+    if (!graphDataRef.current) return;
+    setNodes((current) =>
+      current.map((n) => ({
+        ...n,
+        data: { ...(n.data as GraphNodeData), showOpReturnLabel: showLabels },
+      })),
+    );
+  }, [showLabels, setNodes]);
 
   useEffect(() => {
     if (!expandVictims || victimSearch || !graphDataRef.current) return;
@@ -531,10 +544,10 @@ export function HackGraph({
                 <label className="graph-panel-switch">
                   <input
                     type="checkbox"
-                    checked={showEdgeLabels}
-                    onChange={(e) => setShowEdgeLabels(e.target.checked)}
+                    checked={showLabels}
+                    onChange={(e) => setShowLabels(e.target.checked)}
                   />
-                  Show line labels
+                  Show labels
                 </label>
               </div>
               <label>

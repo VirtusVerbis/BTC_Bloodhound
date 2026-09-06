@@ -131,4 +131,35 @@ describe("txPage", () => {
     const roundTrip = parsePendingTxs({ pendingTxs: serialized });
     expect(roundTrip[0]?.pageSnapshot?.vout[0]?.scriptpubkey_address).toBe(HACKER);
   });
+
+  it("retains OP_RETURN asm fields in page snapshot round-trip", () => {
+    const tx = {
+      txid: "opret1",
+      status: { block_height: 101 },
+      vin: [{ prevout: { scriptpubkey_address: VICTIM, value: 50_000 } }],
+      vout: [
+        { scriptpubkey_address: HACKER, value: 49_000 },
+        {
+          scriptpubkey_type: "op_return",
+          scriptpubkey_asm: "OP_RETURN 48656c6c6f",
+          scriptpubkey: "6a0548656c6c6f",
+          value: 0,
+        },
+      ],
+    };
+    const pending = [{ ...classifyPageTx(tx, HACKER), pageEntry: tx }];
+    const serialized = serializePendingTxs(pending, {
+      traceHackerReceives: true,
+      maxVoutCountSkipGetTx: 20,
+    });
+    const snap = serialized[0]?.pageSnapshot;
+    expect(snap?.vout[1]?.scriptpubkey_asm).toBe("OP_RETURN 48656c6c6f");
+    expect(snap?.vout[1]?.scriptpubkey_type).toBe("op_return");
+    const roundTrip = parsePendingTxs({ pendingTxs: serialized });
+    const restored = pageEntryToChainTxDetail({
+      txid: "opret1",
+      ...roundTrip[0]!.pageSnapshot!,
+    });
+    expect(restored.vout[1]?.scriptpubkey_asm).toBe("OP_RETURN 48656c6c6f");
+  });
 });

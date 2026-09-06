@@ -29,6 +29,14 @@ describe("addHacker / clearQueue / removeHacker", () => {
     expect(await store.hasPendingJob("backfill_hacker_address", H1)).toBe(true);
   });
 
+  it("uses custom source when provided", async () => {
+    const store = await freshStore();
+    await addHacker(store, { address: H2, label: "manual add", source: "admin" });
+    const addr = await store.getAddress(H2);
+    expect(addr?.source).toBe("admin");
+    expect(addr?.label).toBe("manual add");
+  });
+
   it("does not enqueue duplicate active backfill", async () => {
     const store = await freshStore();
     await addHacker(store, { address: H1 });

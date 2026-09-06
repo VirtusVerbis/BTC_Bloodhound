@@ -20,6 +20,9 @@ export interface AddressDetail {
   relatedTxsTotal: number;
   hackOccurredAt: string | null;
   hackBlockHeight: number | null;
+  hackTxid?: string | null;
+  opReturn?: string | null;
+  opReturnTruncated?: boolean;
   relatedTxs: Array<{
     txid: string;
     blockTime: string | null;
@@ -86,6 +89,9 @@ export function AddressDetailDrawer({
               Block height:{" "}
               {detail.hackBlockHeight != null ? detail.hackBlockHeight.toLocaleString() : "unknown"}
             </p>
+            {detail.opReturn ? (
+              <p className="address-op-return">OP_RETURN: {detail.opReturn}</p>
+            ) : null}
             <table>
               <thead>
                 <tr>

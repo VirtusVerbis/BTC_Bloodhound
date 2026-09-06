@@ -37,19 +37,21 @@ export interface ReBackfillHackerResult {
 
 export async function addHacker(
   store: Store,
-  opts: { address: string; label?: string | null },
+  opts: { address: string; label?: string | null; source?: string },
 ): Promise<AddHackerResult> {
   const address = normalizeBitcoinAddress(opts.address);
   if (!address) {
     throw new Error(`Invalid Bitcoin address: ${opts.address}`);
   }
 
+  const source = opts.source?.trim() || "ops";
+
   await store.upsertAddress({
     address,
     role: "hacker",
     isFlaggedHacker: true,
     hopFromHacker: 0,
-    source: "ops",
+    source,
     label: opts.label ?? undefined,
   });
 

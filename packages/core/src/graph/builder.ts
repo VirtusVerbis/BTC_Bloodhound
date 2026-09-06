@@ -4,12 +4,15 @@ import { blockTimeIso } from "../chain/esplora.js";
 import type { ChainRouter } from "../chain/router.js";
 import type { ChainTxDetail } from "../chain/types.js";
 import type { CpuGuard } from "../indexer/cpuGuard.js";
+import { captureOpReturnForTx, type CaptureOpReturnOpts } from "../indexer/opReturnCapture.js";
 import { bundleParallelEdges, mapDbEdgeToGraph, type EdgeKind } from "./graphEdges.js";
+import { enrichNodesWithOpReturn } from "./graphOpReturn.js";
 
 export interface HackTraceOptions {
   tx?: ChainTxDetail;
   spendingAddress?: string;
   spendingHop?: number;
+  captureOpReturn?: CaptureOpReturnOpts;
 }
 
 export type { EdgeKind } from "./graphEdges.js";
@@ -47,6 +50,8 @@ export interface GraphNode {
   expandProfile?: "sweep_relay" | "spend_fanout" | null;
   relayMeta?: RelayMeta;
   fanoutMeta?: FanoutMeta;
+  opReturn?: string;
+  opReturnLabel?: string;
 }
 
 export interface GraphEdge {
@@ -270,6 +275,8 @@ export async function buildGraph(
     }
   }
 
+  await enrichNodesWithOpReturn(store, nodes);
+
   return {
     nodes,
     edges,
@@ -370,6 +377,8 @@ export async function buildVictimGraph(
       time: h.edges.find((e) => e.blockTime)?.blockTime ?? null,
     });
   }
+
+  await enrichNodesWithOpReturn(store, nodes);
 
   return {
     nodes,
@@ -733,6 +742,7 @@ export async function processTxForHackTrace(
   traceEdgeTotal: number;
   traceEdgesFlat?: HackTraceEdgeDraft[];
   cpuGuardTripped?: boolean;
+  captureChainCalls?: number;
 }> {
   const tx = options.tx ?? (await router.withProvider((p) => p.getTx(txid)));
   const blockTime = blockTimeIso(tx);
@@ -785,6 +795,14 @@ export async function processTxForHackTrace(
     },
   );
 
+  const captureResult = await captureOpReturnForTx(store, router, txid, {
+    tx,
+    allowGetTx: options.captureOpReturn?.allowGetTx,
+    budget: options.captureOpReturn?.budget,
+    jobSubreq: options.captureOpReturn?.jobSubreq,
+    cpuGuard: options.captureOpReturn?.cpuGuard ?? cpuGuard,
+  });
+
   const flatForCache =
     "flat" in applyInput ? applyInput.flat : flattenHackTraceEdges(applyInput);
 
@@ -795,6 +813,7 @@ export async function processTxForHackTrace(
     traceEdgeTotal: result.traceEdgeTotal || traceEdgeTotal,
     traceEdgesFlat: result.complete ? undefined : flatForCache,
     cpuGuardTripped: result.cpuGuardTripped,
+    captureChainCalls: captureResult.chainCallsUsed,
   };
 }
 

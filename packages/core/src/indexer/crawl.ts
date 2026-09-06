@@ -186,6 +186,9 @@ export async function scheduleDownstreamCrawl(
   const isMaintTick =
     config.hackerMaintenanceEveryNCrons > 0 &&
     tick % config.hackerMaintenanceEveryNCrons === 0;
+  const isOpReturnMaintTick =
+    config.opReturnBackfillEveryNCrons > 0 &&
+    tick % config.opReturnBackfillEveryNCrons === 0;
   if (isMaintTick && !scheduleBudgetLow(budget, reserve, 8)) {
     const hackers = await store.listHackers();
     if (hackers.length > 0) {
@@ -200,6 +203,25 @@ export async function scheduleDownstreamCrawl(
 
   if (throttled) {
     return { ...emptyStats, skipNonCritical: false, maintTick: isMaintTick, throttled };
+  }
+
+  if (
+    isOpReturnMaintTick &&
+    !skipNonCritical &&
+    !enqueueCache.queueSchedulingPaused &&
+    enqueueCache.queueDepth < config.maxQueueDepth &&
+    !scheduleBudgetLow(budget, reserve)
+  ) {
+    const missingOpReturn = await store.countTransactionsMissingOpReturn();
+    if (missingOpReturn > 0) {
+      await store.enqueueJobIfAbsent(
+        "backfill_op_return",
+        {},
+        JOB_PRIORITY.REFRESH_BALANCE,
+        undefined,
+        { dedupeTypes: ["backfill_op_return"] },
+      );
+    }
   }
 
   const hackers = await store.listHackers();

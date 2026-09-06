@@ -1,5 +1,7 @@
 import path from "node:path";
 import { mkdirSync } from "node:fs";
+import readline from "node:readline/promises";
+import { stdin as input, stdout as output } from "node:process";
 import { openDatabase, runMigrations, Store } from "@cointrace/db";
 import {
   addHacker,
@@ -41,6 +43,11 @@ import {
 import { openRemoteProductionStore } from "./remotePlatform.js";
 import { runRemoteSidecar } from "./runRemote.js";
 import { formatCronStatusSummary, readCronStatusFromStore } from "./sidecarLog.js";
+import {
+  confirmUnknownHackerSource,
+  isKnownHackerSource,
+  resolveHackerSourceFlag,
+} from "./hackerSourcePrompt.js";
 
 const argv = process.argv.slice(2);
 const cmd = argv[0] ?? "run";
@@ -136,13 +143,29 @@ async function main() {
   if (cmd === "add-hacker") {
     const address = positionalArgs()[0] ?? "";
     const label = flagValue("--label");
+    const yes = argv.includes("--yes");
+    const source = resolveHackerSourceFlag(flagValue("--source"));
     if (!normalizeBitcoinAddress(address)) {
-      console.error("Usage: add-hacker <address> [--label ...] [--remote]");
+      console.error("Usage: add-hacker <address> [--label ...] [--source ...] [--yes] [--remote]");
       process.exit(1);
     }
+    if (!isKnownHackerSource(source) && !yes) {
+      const rl = readline.createInterface({ input, output });
+      try {
+        const confirmed = await confirmUnknownHackerSource({
+          source,
+          ask: (question) => rl.question(question),
+          isTty: Boolean(input.isTTY && output.isTTY),
+          logWarn: (message) => console.error(message),
+        });
+        if (!confirmed) process.exit(1);
+      } finally {
+        rl.close();
+      }
+    }
     const result = remote
-      ? await addHackerRemote(remoteClient(), { address, label })
-      : await addHacker(openLocalStore(), { address, label });
+      ? await addHackerRemote(remoteClient(), { address, label, source })
+      : await addHacker(openLocalStore(), { address, label, source });
     console.log(
       JSON.stringify(
         {

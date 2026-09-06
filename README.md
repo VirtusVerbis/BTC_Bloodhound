@@ -60,7 +60,7 @@ pnpm dev:web
 | `pnpm --filter @cointrace/indexer seed` | Load `config/watchlist.seed.json` |
 | `pnpm --filter @cointrace/indexer load-local` | Merge `config/watchlist.local.json` |
 | `pnpm --filter @cointrace/indexer run` | Background indexer (cron + job queue); add `--job-details` for verbose cron/job tracing; add `--log-color` for ANSI-colored log labels |
-| `node apps/indexer/dist/index.js add-hacker <addr> [--label …] [--remote]` | Upsert flagged hacker (`source=ops`) + enqueue backfill |
+| `node apps/indexer/dist/index.js add-hacker <addr> [--label …] [--source …] [--yes] [--remote]` | Upsert flagged hacker (default `source=ops`) + enqueue backfill. Known `--source` values: `ops`, `admin`, `coldcardwatch`, `coldcard_sweep_watch`, `coldcard_hack_tracker`, `public_seed`, `local_config` (dropdown category). Unknown sources prompt for confirmation; pass `--yes` to skip (non-interactive). |
 | `node apps/indexer/dist/index.js remove-hacker <addr> [--no-prune] [--remote]` | Soft-unflag; prune exclusive victims/downstream by default |
 | `node apps/indexer/dist/index.js clear-queue [--remote]` | Delete pending/running jobs (queue depth → 0); reset stuck `expand_status` (`queued`/`expanding` → `pending`); clear scheduling latch and tick lease. JSON includes `expandStatusesReset`, `queueSchedulingUnpaused`, `tickLeaseCleared` |
 | `node apps/indexer/dist/index.js list-queue [--remote] [--status active\|pending\|running\|all] [--type <jobType>] [--limit N] [--summary] [--next-cron]` | Read-only queue audit (JSON by default; `--summary` prints ASCII type counts sorted by priority high→low) |

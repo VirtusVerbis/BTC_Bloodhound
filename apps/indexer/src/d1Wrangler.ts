@@ -183,13 +183,14 @@ function hasActiveBackfillJob(client: D1WranglerClient, addressSql: string): boo
 
 export async function addHackerRemote(
   client: D1WranglerClient,
-  opts: { address: string; label?: string | null },
+  opts: { address: string; label?: string | null; source?: string },
 ): Promise<AddHackerResult> {
   const address = normalizeBitcoinAddress(opts.address);
   if (!address) throw new Error(`Invalid Bitcoin address: ${opts.address}`);
   const a = sqlString(address);
   const ts = sqlString(nowIso());
   const labelSql = opts.label != null && opts.label !== "" ? sqlString(opts.label) : "NULL";
+  const sourceSql = sqlString(opts.source?.trim() || "ops");
   const payload = sqlString(JSON.stringify({ address }));
 
   const hadBackfillJob = hasActiveBackfillJob(client, a);
@@ -199,13 +200,13 @@ export async function addHackerRemote(
   address, role, label, source, is_flagged_hacker, created_at, first_seen_at, last_seen_at,
   hop_from_hacker, expand_status, total_received_sats
 ) VALUES (
-  ${a}, 'hacker', ${labelSql}, 'ops', 1, ${ts}, ${ts}, ${ts}, 0, 'pending', 0
+  ${a}, 'hacker', ${labelSql}, ${sourceSql}, 1, ${ts}, ${ts}, ${ts}, 0, 'pending', 0
 )
 ON CONFLICT(address) DO UPDATE SET
   role = 'hacker',
   is_flagged_hacker = 1,
   hop_from_hacker = 0,
-  source = 'ops',
+  source = ${sourceSql},
   label = COALESCE(${labelSql}, addresses.label),
   last_seen_at = ${ts};`,
     `INSERT INTO jobs (type, payload_json, status, priority, run_after, created_at)

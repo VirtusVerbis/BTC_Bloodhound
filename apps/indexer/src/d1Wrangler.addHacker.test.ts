@@ -27,6 +27,7 @@ describe("addHackerRemote", () => {
     const result = await addHackerRemote(client, {
       address: VALID_ADDRESS,
       label: "has spaces",
+      source: "admin",
     });
 
     expect(execute).not.toHaveBeenCalled();
@@ -35,6 +36,7 @@ describe("addHackerRemote", () => {
     expect(writtenSql).toContain("INSERT INTO jobs");
     expect(writtenSql).toContain("'has spaces'");
     expect(writtenSql).toContain(`'${VALID_ADDRESS}'`);
+    expect(writtenSql).toContain("'admin'");
     expect(result).toEqual({
       address: VALID_ADDRESS,
       upserted: true,

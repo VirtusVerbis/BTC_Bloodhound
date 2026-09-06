@@ -44,6 +44,7 @@ export const transactions = sqliteTable("transactions", {
   blockHeight: integer("block_height"),
   blockTime: text("block_time"),
   feeSats: integer("fee_sats"),
+  opReturnDisplay: text("op_return_display"),
 });
 
 export const syncState = sqliteTable("sync_state", {

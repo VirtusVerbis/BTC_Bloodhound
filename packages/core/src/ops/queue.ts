@@ -14,6 +14,7 @@ const ALL_JOB_TYPES = new Set<JobType>([
   "expand_downstream",
   "refresh_live_balance",
   "refresh_btc_usd_price",
+  "backfill_op_return",
   "sync_coldcardwatch",
   "sync_vercel_trackers",
 ]);
@@ -33,6 +34,7 @@ const DEFAULT_PRIORITY_BY_JOB_TYPE: Record<JobType, number> = {
   sync_vercel_trackers: JOB_PRIORITY.SYNC_VERCEL_TRACKERS,
   refresh_live_balance: JOB_PRIORITY.REFRESH_BALANCE,
   refresh_btc_usd_price: JOB_PRIORITY.REFRESH_BTC_USD,
+  backfill_op_return: JOB_PRIORITY.REFRESH_BALANCE,
 };
 
 export function defaultPriorityForJobType(type: string): number {
@@ -197,6 +199,8 @@ export function summarizeJobPayload(type: string, payload: Record<string, unknow
     case "sync_vercel_trackers":
       return summarizeSyncBatchPayload(payload);
     case "refresh_btc_usd_price":
+      return {};
+    case "backfill_op_return":
       return {};
     default:
       return { payload };

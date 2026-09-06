@@ -5,10 +5,12 @@ import { txInvolvesSpend } from "../chain/esplora.js";
 import { processTxForHackTrace } from "../graph/builder.js";
 import type { HackTraceEdgeDraft, HackTraceOptions } from "../graph/builder.js";
 import { applySpendFanoutSummary, spendFanoutTxFromPage } from "./spendFanout.js";
+import { captureOpReturnForTx, type CaptureOpReturnOpts } from "./opReturnCapture.js";
 import type { CpuGuard } from "./cpuGuard.js";
 import {
   hasPageVinVout,
   isSpendFanout,
+  pageEntryHasOpReturnAsm,
   pageEntryToChainTxDetail,
   shouldSkipGetTx,
   shouldTraceHackerReceive,
@@ -78,7 +80,7 @@ export async function processClassifiedPendingTx(
   entry: PendingTxRuntime,
   hackers: Set<string>,
   state: TraceProcessState,
-  opts?: { expandProfile?: string | null; skipIfIndexed?: boolean; cpuGuard?: CpuGuard },
+  opts?: { expandProfile?: string | null; skipIfIndexed?: boolean; cpuGuard?: CpuGuard; captureOpReturn?: CaptureOpReturnOpts },
 ): Promise<ProcessClassifiedTxResult> {
   const txid = entry.txid;
   const traceActive = state.traceEdgesPending && state.traceTxid === txid;
@@ -102,8 +104,22 @@ export async function processClassifiedPendingTx(
     return { traceState: nextState, continued: false, chainCallsUsed: 0 };
   }
 
-  if (!traceActive && opts?.skipIfIndexed !== false && (await store.getTransaction(txid))) {
-    return { traceState: nextState, continued: false, chainCallsUsed: 0 };
+  if (!traceActive && opts?.skipIfIndexed !== false) {
+    const indexed = await store.getTransaction(txid);
+    if (indexed) {
+      if (
+        entry.pageEntry &&
+        pageEntryHasOpReturnAsm(entry.pageEntry) &&
+        indexed.opReturnDisplay == null
+      ) {
+        await captureOpReturnForTx(store, router, txid, {
+          tx: pageEntryToChainTxDetail(entry.pageEntry),
+          allowGetTx: false,
+          ...opts?.captureOpReturn,
+        });
+      }
+      return { traceState: nextState, continued: false, chainCallsUsed: 0 };
+    }
   }
 
   if (shouldSkipGetTx(entry, address, config, skipOpts)) {
@@ -114,6 +130,13 @@ export async function processClassifiedPendingTx(
     const pageTx = spendFanoutTxFromPage(entry);
     if (pageTx) {
       await applySpendFanoutSummary(store, pageTx, address, hop, config);
+      await captureOpReturnForTx(store, router, txid, {
+        tx: pageTx,
+        allowGetTx: opts?.captureOpReturn?.allowGetTx ?? false,
+        budget: opts?.captureOpReturn?.budget,
+        jobSubreq: opts?.captureOpReturn?.jobSubreq,
+        cpuGuard: opts?.cpuGuard,
+      });
       return { traceState: nextState, continued: false, chainCallsUsed: 0 };
     }
   }
@@ -156,6 +179,12 @@ export async function processClassifiedPendingTx(
         tx,
         spendingAddress: address,
         spendingHop: hop,
+        captureOpReturn: {
+          allowGetTx: opts?.captureOpReturn?.allowGetTx,
+          budget: opts?.captureOpReturn?.budget,
+          jobSubreq: opts?.captureOpReturn?.jobSubreq,
+          cpuGuard: opts?.cpuGuard,
+        },
       },
       { cpuGuard: opts?.cpuGuard },
     ),
@@ -179,7 +208,7 @@ export async function processClassifiedPendingTx(
   return {
     traceState: nextState,
     continued: false,
-    chainCallsUsed,
+    chainCallsUsed: chainCallsUsed + (traceResult.captureChainCalls ?? 0),
     cpuGuardTripped: traceResult.cpuGuardTripped,
   };
 }

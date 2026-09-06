@@ -48,6 +48,7 @@ import {
 } from "./pendingPayload.js";
 import { detectSweepRelay } from "./sweepRelay.js";
 import { processClassifiedPendingTx, type TraceProcessState } from "./txProcess.js";
+import { captureOpReturnForTx } from "./opReturnCapture.js";
 import type { PendingTxRuntime } from "./txPage.js";
 
 /** Thrown when continuation enqueue is blocked by expand caps or queue scheduling latch. */
@@ -169,6 +170,7 @@ async function processAddressTxs(
   >,
   expandProfile?: string | null,
   cpuGuard?: CpuGuard,
+  budget?: ReturnType<typeof createChainCallBudget>,
 ): Promise<Pick<
   BackfillPayload,
   "traceTxid" | "traceEdgeIndex" | "traceEdgesPending" | "traceEdgeTotal" | "traceEdgesFlat"
@@ -193,7 +195,11 @@ async function processAddressTxs(
       entry,
       hackers,
       traceState,
-      { expandProfile, cpuGuard },
+      {
+        expandProfile,
+        cpuGuard,
+        ...(budget ? captureOpReturnJobOpts(budget, undefined, cpuGuard) : {}),
+      },
     );
     calls += result.chainCallsUsed;
     if (result.continued) {
@@ -574,7 +580,7 @@ async function backfillHacker(
           entry,
           hackers,
           { traceTxid, traceEdgeIndex, traceEdgesPending, traceEdgeTotal, traceEdgesFlat },
-          { expandProfile, cpuGuard },
+          { expandProfile, cpuGuard, ...captureOpReturnJobOpts(budget, jobSubreq, cpuGuard) },
         ),
     );
     if (result.chainCallsUsed > 0) budget.consume();
@@ -783,7 +789,7 @@ async function pollHacker(
   router: ChainRouter,
   config: AppConfig,
   rawPayload: Record<string, unknown>,
-  options?: { hackers?: Set<string>; cpuGuard?: CpuGuard },
+  options?: { hackers?: Set<string>; cpuGuard?: CpuGuard; jobSubreq?: JobSubrequestBudget },
 ): Promise<void> {
   const payload = parsePollPayload(rawPayload);
   const address = payload.address;
@@ -825,6 +831,7 @@ async function pollHacker(
 
   const hackers = options?.hackers ?? (await getHackerAddressSet(store));
   const cpuGuard = options?.cpuGuard;
+  const jobSubreq = options?.jobSubreq;
   const processLimit = limited
     ? budget.processBatchLimit(1)
     : pending.length - processedIndex;
@@ -859,7 +866,7 @@ async function pollHacker(
           entry,
           hackers,
           {},
-          { skipIfIndexed: false, cpuGuard },
+          { skipIfIndexed: false, cpuGuard, ...captureOpReturnJobOpts(budget, jobSubreq, cpuGuard) },
         ),
     );
     if (result.chainCallsUsed > 0) budget.consume();
@@ -899,7 +906,7 @@ async function pollDownstream(
   router: ChainRouter,
   config: AppConfig,
   rawPayload: Record<string, unknown>,
-  options?: { hackers?: Set<string>; cpuGuard?: CpuGuard },
+  options?: { hackers?: Set<string>; cpuGuard?: CpuGuard; jobSubreq?: JobSubrequestBudget },
 ): Promise<void> {
   const payload = parsePollPayload(rawPayload);
   const address = payload.address;
@@ -943,6 +950,7 @@ async function pollDownstream(
 
   const hackers = options?.hackers ?? (await getHackerAddressSet(store));
   const cpuGuard = options?.cpuGuard;
+  const jobSubreq = options?.jobSubreq;
   const processLimit = limited
     ? budget.processBatchLimit(1)
     : pending.length - processedIndex;
@@ -985,6 +993,8 @@ async function pollDownstream(
           maxCalls,
           undefined,
           expandProfile,
+          cpuGuard,
+          budget,
         ),
     );
     if (limited) budget.consume();
@@ -1158,7 +1168,7 @@ async function expandDownstream(
           entry,
           hackers,
           { traceTxid, traceEdgeIndex, traceEdgesPending, traceEdgeTotal, traceEdgesFlat },
-          { expandProfile, cpuGuard },
+          { expandProfile, cpuGuard, ...captureOpReturnJobOpts(budget, jobSubreq, cpuGuard) },
         ),
     );
     if (result.chainCallsUsed > 0) budget.consume();
@@ -1305,6 +1315,58 @@ async function syncVercelTrackers(
   if (!sweepUnchanged) await enqueueColdcardSweepWatchBatchJobs(store, sweepData, config.syncAddressesPerJob);
 }
 
+function captureOpReturnJobOpts(
+  budget: ReturnType<typeof createChainCallBudget>,
+  jobSubreq?: JobSubrequestBudget,
+  cpuGuard?: CpuGuard,
+) {
+  return {
+    captureOpReturn: {
+      allowGetTx: true,
+      budget,
+      jobSubreq,
+      cpuGuard,
+    },
+  };
+}
+
+async function backfillOpReturn(
+  store: Store,
+  router: ChainRouter,
+  config: AppConfig,
+  opts?: { jobSubreq?: JobSubrequestBudget; cpuGuard?: CpuGuard },
+): Promise<JobRunStats | undefined> {
+  const budget = createChainCallBudget(config.maxChainCallsPerJob);
+  const jobSubreq = opts?.jobSubreq;
+  const cpuGuard = opts?.cpuGuard;
+  const txids = await store.listTxidsMissingOpReturn(config.opReturnBackfillPerJob);
+  let processed = 0;
+
+  for (const txid of txids) {
+    if (!budget.canCall() || jobSubreq?.exhausted() || cpuGuard?.exceeded()) break;
+    await captureOpReturnForTx(store, router, txid, {
+      allowGetTx: true,
+      budget,
+      jobSubreq,
+      cpuGuard,
+    });
+    processed++;
+  }
+
+  const remaining = await store.countTransactionsMissingOpReturn();
+  if (remaining > 0 && !jobSubreq?.exhausted() && !cpuGuard?.exceeded()) {
+    await store.enqueueJobIfAbsent(
+      "backfill_op_return",
+      {},
+      JOB_PRIORITY.REFRESH_BALANCE,
+      undefined,
+      { dedupeTypes: ["backfill_op_return"] },
+    );
+  }
+
+  return processed > 0 ? { continued: remaining > 0 } : undefined;
+}
+
 export async function processJob(
   store: Store,
   router: ChainRouter,
@@ -1340,6 +1402,9 @@ export async function processJob(
         await store.setBtcUsdPrice(usd, at);
         break;
       }
+      case "backfill_op_return":
+        result = await backfillOpReturn(store, router, config, jobOpts);
+        break;
       case "sync_coldcardwatch":
         await syncColdcardwatch(store, config, payload);
         break;

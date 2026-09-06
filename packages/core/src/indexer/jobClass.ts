@@ -19,6 +19,7 @@ const MAINT_TYPES = new Set<JobType>([
 const COSMETIC_TYPES = new Set<JobType>([
   "refresh_live_balance",
   "refresh_btc_usd_price",
+  "backfill_op_return",
 ]);
 
 export const INGEST_JOB_TYPES = [...INGEST_TYPES] as JobType[];

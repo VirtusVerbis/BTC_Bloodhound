@@ -26,6 +26,7 @@ export function jobNeedsChainCallAtStart(
   if (type === "poll_hacker_address" || type === "poll_downstream_address") return true;
   if (type === "audit_hacker_backfill") return true;
   if (type === "refresh_live_balance" || type === "refresh_btc_usd_price") return true;
+  if (type === "backfill_op_return") return true;
 
   if (!isIngestJobType(type)) {
     if (type === "sync_coldcardwatch" || type === "sync_vercel_trackers") return false;

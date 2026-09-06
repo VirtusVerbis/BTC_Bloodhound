@@ -5,7 +5,13 @@ export interface CompactPageSnapshot {
   status?: ChainTxSummary["status"];
   fee?: number;
   vin: Array<{ prevout?: { scriptpubkey_address?: string; value?: number } }>;
-  vout: Array<{ scriptpubkey_address?: string; value?: number }>;
+  vout: Array<{
+    scriptpubkey_address?: string;
+    value?: number;
+    scriptpubkey_type?: string;
+    scriptpubkey_asm?: string;
+    scriptpubkey?: string;
+  }>;
 }
 
 export interface ClassifiedPendingTx {
@@ -85,6 +91,9 @@ function compactPageSnapshot(entry: ChainTxSummary): CompactPageSnapshot {
     vout: (entry.vout ?? []).map((o) => ({
       scriptpubkey_address: o.scriptpubkey_address,
       value: o.value,
+      scriptpubkey_type: o.scriptpubkey_type,
+      scriptpubkey_asm: o.scriptpubkey_asm,
+      scriptpubkey: o.scriptpubkey,
     })),
   };
 }
@@ -188,6 +197,15 @@ export function pageEntryToChainTxDetail(entry: ChainTxSummary): ChainTxDetail {
 
 export function hasPageVinVout(entry: ChainTxSummary): boolean {
   return Boolean(entry.vin?.length && entry.vout?.length);
+}
+
+export function pageEntryHasOpReturnAsm(entry: ChainTxSummary): boolean {
+  return (entry.vout ?? []).some(
+    (v) =>
+      v.scriptpubkey_type === "op_return" ||
+      v.scriptpubkey_type === "nulldata" ||
+      Boolean(v.scriptpubkey_asm?.toUpperCase().includes("OP_RETURN")),
+  );
 }
 
 export function shouldTraceHackerReceive(

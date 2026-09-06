@@ -451,6 +451,14 @@ button.primary {
   border-radius: 8px;
 }
 
+.node-op-return-label,
+.address-op-return {
+  margin-top: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  word-break: break-word;
+}
+
 .node-card.queued {
   border: 2px dashed var(--color-queued-border);
   border-radius: 8px;

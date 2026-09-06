@@ -29,10 +29,28 @@ export type GraphNodeData = {
     txid: string;
     topOutputs?: Array<{ address: string; sats: number }>;
   };
+  opReturn?: string;
+  opReturnLabel?: string;
+  showOpReturnLabel?: boolean;
   onExpandVictims?: () => void;
 };
 
 const handleStyle = { background: "#f7931a", width: 6, height: 6, border: "none" };
+
+function OpReturnBlock({ data }: { data: GraphNodeData }) {
+  if (!data.opReturn) return null;
+  return (
+    <>
+      {data.showOpReturnLabel && data.opReturnLabel ? (
+        <div className="node-op-return-label" title={data.opReturn}>{data.opReturnLabel}</div>
+      ) : null}
+    </>
+  );
+}
+
+function nodeTitle(data: GraphNodeData): string | undefined {
+  return data.opReturn || undefined;
+}
 
 function balanceAge(at: string | null | undefined) {
   if (!at) return "";
@@ -49,7 +67,7 @@ function UsdUnderBtc({ sats }: { sats: number }) {
 export function HackerNode({ data }: NodeProps) {
   const d = data as GraphNodeData;
   return (
-    <div className="node-card hacker">
+    <div className="node-card hacker" title={nodeTitle(d)}>
       <Handle type="target" position={Position.Left} style={handleStyle} />
       <Handle type="source" position={Position.Right} style={handleStyle} />
       <div className="node-badge">HACKER</div>
@@ -68,6 +86,7 @@ export function HackerNode({ data }: NodeProps) {
         </div>
       )}
       {d.address && <ExplorerActions address={d.address} />}
+      <OpReturnBlock data={d} />
     </div>
   );
 }
@@ -75,7 +94,7 @@ export function HackerNode({ data }: NodeProps) {
 export function DownstreamNode({ data }: NodeProps) {
   const d = data as GraphNodeData;
   return (
-    <div className="node-card default">
+    <div className="node-card default" title={nodeTitle(d)}>
       <Handle type="target" position={Position.Left} style={handleStyle} />
       <Handle type="source" position={Position.Right} style={handleStyle} />
       {d.expandProfile === "sweep_relay" && <div className="node-badge">SWEEP RELAY</div>}
@@ -100,6 +119,7 @@ export function DownstreamNode({ data }: NodeProps) {
       )}
       {d.hopFromHacker != null && <div>hop {d.hopFromHacker}</div>}
       {d.address && <ExplorerActions address={d.address} />}
+      <OpReturnBlock data={d} />
     </div>
   );
 }
@@ -126,7 +146,7 @@ export function VictimClusterNode({ data }: NodeProps) {
 export function VictimNode({ data }: NodeProps) {
   const d = data as GraphNodeData;
   return (
-    <div className="node-card default">
+    <div className="node-card default" title={nodeTitle(d)}>
       <Handle type="source" position={Position.Right} style={handleStyle} />
       <div>Victim</div>
       {d.address && <AddressLine address={d.address} />}
@@ -137,6 +157,7 @@ export function VictimNode({ data }: NodeProps) {
         </div>
       )}
       {d.address && <ExplorerActions address={d.address} />}
+      <OpReturnBlock data={d} />
     </div>
   );
 }

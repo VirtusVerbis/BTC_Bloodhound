@@ -114,7 +114,8 @@ export function runMigrations(sqlite: Database.Database): void {
       txid TEXT PRIMARY KEY,
       block_height INTEGER,
       block_time TEXT,
-      fee_sats INTEGER
+      fee_sats INTEGER,
+      op_return_display TEXT
     );
 
     CREATE TABLE IF NOT EXISTS sync_state (
@@ -313,6 +314,11 @@ export function runMigrations(sqlite: Database.Database): void {
   }
   if (!edgeCols.some((c) => c.name === "fanout_meta_json")) {
     sqlite.exec(`ALTER TABLE edges ADD COLUMN fanout_meta_json TEXT`);
+  }
+
+  const txCols = sqlite.prepare("PRAGMA table_info(transactions)").all() as Array<{ name: string }>;
+  if (!txCols.some((c) => c.name === "op_return_display")) {
+    sqlite.exec(`ALTER TABLE transactions ADD COLUMN op_return_display TEXT`);
   }
 
   sqlite.exec(`

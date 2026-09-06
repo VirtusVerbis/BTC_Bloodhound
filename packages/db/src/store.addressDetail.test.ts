@@ -155,4 +155,36 @@ describe("getAddressDetail", () => {
     expect(detail!.hackOccurredAt).toBe("2018-01-01T00:00:00.000Z");
     expect(detail!.hackBlockHeight).toBe(50);
   });
+
+  it("returns OP_RETURN from canonical hack tx", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const victim = "bc1qvictim_op";
+    const hacker = "bc1qhacker_op";
+
+    await store.upsertAddress({ address: victim, role: "victim" });
+    await store.upsertAddress({ address: hacker, role: "hacker", isFlaggedHacker: true });
+
+    await store.upsertTransaction({
+      txid: "tx_op",
+      blockHeight: 100,
+      blockTime: "2020-01-02T00:00:00.000Z",
+      opReturnDisplay: "ransom note",
+    });
+
+    await store.upsertEdge({
+      fromAddress: victim,
+      toAddress: hacker,
+      txid: "tx_op",
+      amountSats: 1_000_000,
+      blockTime: "2020-01-02T00:00:00.000Z",
+      direction: "in_to_hacker",
+    });
+
+    const detail = await store.getAddressDetail(victim);
+    expect(detail!.opReturn).toBe("ransom note");
+    expect(detail!.hackTxid).toBe("tx_op");
+  });
 });
