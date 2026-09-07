@@ -71,6 +71,25 @@ function skipGetTxOpts(
   };
 }
 
+async function patchOpReturnFromPageIfNeeded(
+  store: Store,
+  router: ChainRouter,
+  txid: string,
+  entry: PendingTxRuntime,
+  opts?: { captureOpReturn?: CaptureOpReturnOpts },
+): Promise<void> {
+  if (!entry.pageEntry || !pageEntryHasOpReturnAsm(entry.pageEntry)) return;
+
+  const indexed = await store.getTransaction(txid);
+  if (indexed?.opReturnDisplay != null) return;
+
+  await captureOpReturnForTx(store, router, txid, {
+    tx: pageEntryToChainTxDetail(entry.pageEntry),
+    allowGetTx: false,
+    ...opts?.captureOpReturn,
+  });
+}
+
 export async function processClassifiedPendingTx(
   store: Store,
   router: ChainRouter,
@@ -96,12 +115,11 @@ export async function processClassifiedPendingTx(
     pageEntry: entry.pageEntry,
   };
 
-  if (
-    !traceActive &&
-    entry.isSpend === false &&
-    shouldSkipGetTx(entry, address, config, skipOpts)
-  ) {
-    return { traceState: nextState, continued: false, chainCallsUsed: 0 };
+  if (!traceActive && entry.isSpend === false) {
+    await patchOpReturnFromPageIfNeeded(store, router, txid, entry, opts);
+    if (shouldSkipGetTx(entry, address, config, skipOpts)) {
+      return { traceState: nextState, continued: false, chainCallsUsed: 0 };
+    }
   }
 
   if (!traceActive && opts?.skipIfIndexed !== false) {

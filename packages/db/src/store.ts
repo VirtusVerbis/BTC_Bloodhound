@@ -101,10 +101,40 @@ function targetAgeBoost(
 /** Cloudflare D1 allows max 100 bound params per query; reserve room for other binds. */
 const D1_IN_CLAUSE_CHUNK_SIZE = 80;
 const ADDRESS_DETAIL_TX_LIMIT = 50;
+const OP_RETURN_SPEND_TX_LIMIT = 200;
 const OP_RETURN_GRAPH_LABEL_MAX_CHARS = 48;
+const OP_RETURN_DISPLAY_DELIMITER = " · ";
 
 function opReturnTruncatedFlag(text: string): boolean {
   return text.length > OP_RETURN_GRAPH_LABEL_MAX_CHARS;
+}
+
+type OpReturnSegment = { text: string; txid: string; kind: "own" | "incoming" };
+
+function combineOpReturnSegments(segments: OpReturnSegment[]): {
+  opReturn: string;
+  opReturnTruncated: boolean;
+  opReturnTxid: string | null;
+} {
+  const opReturn = segments.map((s) => s.text).join(OP_RETURN_DISPLAY_DELIMITER);
+  const ownSegment = segments.find((s) => s.kind === "own");
+  const opReturnTxid = ownSegment?.txid ?? segments[0]?.txid ?? null;
+  return {
+    opReturn,
+    opReturnTruncated: opReturnTruncatedFlag(opReturn),
+    opReturnTxid,
+  };
+}
+
+function dedupeOpReturnSegments(segments: OpReturnSegment[]): OpReturnSegment[] {
+  const seen = new Set<string>();
+  const out: OpReturnSegment[] = [];
+  for (const segment of segments) {
+    if (seen.has(segment.text)) continue;
+    seen.add(segment.text);
+    out.push(segment);
+  }
+  return out;
 }
 
 export interface OutEdgeKeysetCursor {
@@ -1008,6 +1038,74 @@ export class Store {
       .all();
   }
 
+  /** Distinct victim addresses with in_to_hacker edges into this hacker (for graph filtering). */
+  async getVictimAddressSetForHacker(hacker: string): Promise<Set<string>> {
+    const rows = await this.db
+      .selectDistinct({ address: edges.fromAddress })
+      .from(edges)
+      .where(and(eq(edges.toAddress, hacker), eq(edges.direction, "in_to_hacker")))
+      .all();
+    return new Set(rows.map((row) => row.address));
+  }
+
+  /** True when address has any in_to_hacker edge (sent funds into a hacker). */
+  async isKnownVictimAddress(address: string): Promise<boolean> {
+    const row = await this.db
+      .select({ fromAddress: edges.fromAddress })
+      .from(edges)
+      .where(and(eq(edges.fromAddress, address), eq(edges.direction, "in_to_hacker")))
+      .limit(1)
+      .get();
+    return row != null;
+  }
+
+  /** True when address has in_to_hacker into any of the given flagged hackers. */
+  async isVictimOfHackers(victimAddress: string, hackers: Set<string>): Promise<boolean> {
+    if (hackers.size === 0) return false;
+    const hackerList = [...hackers];
+    for (const chunk of chunkArray(hackerList, D1_IN_CLAUSE_CHUNK_SIZE)) {
+      const row = await this.db
+        .select({ fromAddress: edges.fromAddress })
+        .from(edges)
+        .where(
+          and(
+            eq(edges.fromAddress, victimAddress),
+            eq(edges.direction, "in_to_hacker"),
+            inArray(edges.toAddress, chunk),
+          ),
+        )
+        .limit(1)
+        .get();
+      if (row) return true;
+    }
+    return false;
+  }
+
+  /** Subset of addresses that are victims of any flagged hacker in the set. */
+  async filterVictimsAmong(addresses: string[], hackers: Set<string>): Promise<Set<string>> {
+    const unique = [...new Set(addresses)];
+    if (unique.length === 0 || hackers.size === 0) return new Set();
+    const hackerList = [...hackers];
+    const victims = new Set<string>();
+    for (const addrChunk of chunkArray(unique, D1_IN_CLAUSE_CHUNK_SIZE)) {
+      for (const hackerChunk of chunkArray(hackerList, D1_IN_CLAUSE_CHUNK_SIZE)) {
+        const rows = await this.db
+          .selectDistinct({ fromAddress: edges.fromAddress })
+          .from(edges)
+          .where(
+            and(
+              inArray(edges.fromAddress, addrChunk),
+              eq(edges.direction, "in_to_hacker"),
+              inArray(edges.toAddress, hackerChunk),
+            ),
+          )
+          .all();
+        for (const row of rows) victims.add(row.fromAddress);
+      }
+    }
+    return victims;
+  }
+
   /** All inbound edges from a specific victim to a hacker (no amount floor or limit). */
   async listEdgesFromVictimToHacker(victim: string, hacker: string) {
     return await this.db
@@ -1123,6 +1221,182 @@ export class Store {
     return { hackOccurredAt, hackBlockHeight, hackTxid: row.txid };
   }
 
+  /** Spend-side txids for one or more addresses, latest first, deduped, capped. */
+  async listSpendTxidsOrderedForAddresses(
+    spenderAddresses: string[],
+    limit = OP_RETURN_SPEND_TX_LIMIT,
+  ): Promise<string[]> {
+    const unique = [...new Set(spenderAddresses)];
+    if (unique.length === 0) return [];
+
+    const rows: Array<{
+      txid: string;
+      txBlockHeight: number | null;
+      txBlockTime: string | null;
+      edgeBlockTime: string | null;
+    }> = [];
+
+    for (const chunk of chunkArray(unique, D1_IN_CLAUSE_CHUNK_SIZE)) {
+      const part = await this.db
+        .select({
+          txid: edges.txid,
+          txBlockHeight: transactions.blockHeight,
+          txBlockTime: transactions.blockTime,
+          edgeBlockTime: edges.blockTime,
+        })
+        .from(edges)
+        .leftJoin(transactions, eq(edges.txid, transactions.txid))
+        .where(inArray(edges.fromAddress, chunk))
+        .orderBy(
+          desc(sql`coalesce(${transactions.blockHeight}, 0)`),
+          desc(sql`coalesce(${transactions.blockTime}, ${edges.blockTime}, '')`),
+        )
+        .all();
+      rows.push(...part);
+    }
+
+    rows.sort((a, b) => {
+      const heightA = a.txBlockHeight ?? 0;
+      const heightB = b.txBlockHeight ?? 0;
+      if (heightB !== heightA) return heightB - heightA;
+      const timeA = a.txBlockTime ?? a.edgeBlockTime ?? "";
+      const timeB = b.txBlockTime ?? b.edgeBlockTime ?? "";
+      return timeB.localeCompare(timeA);
+    });
+
+    const seen = new Set<string>();
+    const txids: string[] = [];
+    for (const row of rows) {
+      if (seen.has(row.txid)) continue;
+      seen.add(row.txid);
+      txids.push(row.txid);
+      if (txids.length >= limit) break;
+    }
+    return txids;
+  }
+
+  /** Incoming funding txids (out_from_hacker edges to this address), latest first, deduped. */
+  async listIncomingOutFromHackerTxids(
+    address: string,
+    limit = OP_RETURN_SPEND_TX_LIMIT,
+  ): Promise<string[]> {
+    const rows = await this.db
+      .select({
+        txid: edges.txid,
+        txBlockHeight: transactions.blockHeight,
+        txBlockTime: transactions.blockTime,
+        edgeBlockTime: edges.blockTime,
+      })
+      .from(edges)
+      .leftJoin(transactions, eq(edges.txid, transactions.txid))
+      .where(
+        and(
+          eq(edges.toAddress, address),
+          eq(edges.direction, "out_from_hacker"),
+          or(isNull(edges.edgeKind), ne(edges.edgeKind, "victim_dust")),
+        ),
+      )
+      .orderBy(
+        desc(sql`coalesce(${transactions.blockHeight}, 0)`),
+        desc(sql`coalesce(${transactions.blockTime}, ${edges.blockTime}, '')`),
+      )
+      .all();
+
+    const seen = new Set<string>();
+    const txids: string[] = [];
+    for (const row of rows) {
+      if (seen.has(row.txid)) continue;
+      seen.add(row.txid);
+      txids.push(row.txid);
+      if (txids.length >= limit) break;
+    }
+    return txids;
+  }
+
+  async resolveOpReturnFromSpenders(
+    spenderAddresses: string[],
+  ): Promise<{ opReturn: string | null; opReturnTxid: string | null }> {
+    const txids = await this.listSpendTxidsOrderedForAddresses(spenderAddresses);
+    if (txids.length === 0) {
+      return { opReturn: null, opReturnTxid: null };
+    }
+    const displays = await this.getOpReturnDisplayByTxids(txids);
+    for (const txid of txids) {
+      const text = displays.get(txid);
+      if (text) {
+        return { opReturn: text, opReturnTxid: txid };
+      }
+    }
+    return { opReturn: null, opReturnTxid: null };
+  }
+
+  async resolveOpReturnSegments(address: string): Promise<OpReturnSegment[]> {
+    const segments: OpReturnSegment[] = [];
+
+    const own = await this.resolveOpReturnFromSpenders([address]);
+    if (own.opReturn && own.opReturnTxid) {
+      segments.push({ text: own.opReturn, txid: own.opReturnTxid, kind: "own" });
+    }
+
+    const addr = await this.getAddress(address);
+    if (addr?.role === "downstream" && !(await this.isKnownVictimAddress(address))) {
+      const incomingTxids = await this.listIncomingOutFromHackerTxids(address);
+      if (incomingTxids.length > 0) {
+        const displays = await this.getOpReturnDisplayByTxids(incomingTxids);
+        for (const txid of incomingTxids) {
+          const text = displays.get(txid);
+          if (text) {
+            segments.push({ text, txid, kind: "incoming" });
+            break;
+          }
+        }
+      }
+    }
+
+    return dedupeOpReturnSegments(segments);
+  }
+
+  async resolveOpReturnForAddress(address: string): Promise<{
+    opReturn: string | null;
+    opReturnTruncated: boolean;
+    opReturnTxid: string | null;
+  }> {
+    const segments = await this.resolveOpReturnSegments(address);
+    if (segments.length > 0) {
+      const combined = combineOpReturnSegments(segments);
+      return {
+        opReturn: combined.opReturn,
+        opReturnTruncated: combined.opReturnTruncated,
+        opReturnTxid: combined.opReturnTxid,
+      };
+    }
+
+    const addr = await this.getAddress(address);
+    if (!addr?.isFlaggedHacker) {
+      return { opReturn: null, opReturnTruncated: false, opReturnTxid: null };
+    }
+
+    const downstreamRows = await this.db
+      .selectDistinct({ toAddress: edges.toAddress })
+      .from(edges)
+      .where(and(eq(edges.fromAddress, address), eq(edges.direction, "out_from_hacker")))
+      .all();
+
+    for (const row of downstreamRows) {
+      const downstreamSegments = await this.resolveOpReturnSegments(row.toAddress);
+      if (downstreamSegments.length > 0) {
+        const combined = combineOpReturnSegments(downstreamSegments);
+        return {
+          opReturn: combined.opReturn,
+          opReturnTruncated: combined.opReturnTruncated,
+          opReturnTxid: combined.opReturnTxid,
+        };
+      }
+    }
+
+    return { opReturn: null, opReturnTruncated: false, opReturnTxid: null };
+  }
+
   async getAddressDetail(address: string) {
     const addr = await this.getAddress(address);
     if (!addr) return null;
@@ -1148,16 +1422,7 @@ export class Store {
     });
 
     const { hackOccurredAt, hackBlockHeight, hackTxid } = await this.resolveHackTimingForAddress(address);
-    let opReturn: string | null = null;
-    let opReturnTruncated = false;
-    if (hackTxid) {
-      const displays = await this.getOpReturnDisplayByTxids([hackTxid]);
-      const raw = displays.get(hackTxid) ?? null;
-      if (raw) {
-        opReturn = raw;
-        opReturnTruncated = opReturnTruncatedFlag(raw);
-      }
-    }
+    const { opReturn, opReturnTruncated, opReturnTxid } = await this.resolveOpReturnForAddress(address);
     return {
       address: addr,
       totalSent,
@@ -1169,6 +1434,7 @@ export class Store {
       hackTxid,
       opReturn,
       opReturnTruncated,
+      opReturnTxid,
     };
   }
 
@@ -1338,6 +1604,46 @@ export class Store {
       )
       .get();
     return !!pending;
+  }
+
+  /** Raise priority (and optionally stamp ops opsPriority) on pending expand_downstream for one address. */
+  async bumpPendingExpandDownstream(
+    address: string,
+    priority: number,
+    opts?: { stampOps?: boolean },
+  ): Promise<{ updated: number; jobIds: number[] }> {
+    const stampOps = opts?.stampOps !== false;
+    const rows = await this.db
+      .select({ id: jobs.id, payloadJson: jobs.payloadJson })
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.type, "expand_downstream"),
+          eq(jobs.status, "pending"),
+          jobPayloadAddressEq(address),
+        ),
+      )
+      .all();
+
+    const jobIds: number[] = [];
+    for (const row of rows) {
+      let payloadJson = row.payloadJson;
+      if (stampOps) {
+        const payload = JSON.parse(row.payloadJson) as Record<string, unknown>;
+        payload.ops = true;
+        payload.opsPriority = priority;
+        payloadJson = JSON.stringify(payload);
+      }
+      const result = await this.db
+        .update(jobs)
+        .set({ priority, payloadJson })
+        .where(and(eq(jobs.id, row.id), eq(jobs.status, "pending")))
+        .run();
+      if (changesCount(result as { changes?: number; meta?: { changes?: number } }) > 0) {
+        jobIds.push(row.id);
+      }
+    }
+    return { updated: jobIds.length, jobIds };
   }
 
   /**
@@ -2948,6 +3254,52 @@ export class Store {
   async deleteAddress(address: string): Promise<void> {
     await this.db.delete(syncState).where(eq(syncState.address, address)).run();
     await this.db.delete(addresses).where(eq(addresses.address, address)).run();
+  }
+
+  /** Downstream-role addresses that also have in_to_hacker edges (victim pollution). */
+  async listVictimRolePollution(opts?: { address?: string }): Promise<string[]> {
+    const conditions = [eq(addresses.role, "downstream")];
+    if (opts?.address) {
+      conditions.push(eq(addresses.address, opts.address));
+    }
+    const downstreamRows = await this.db
+      .select({ address: addresses.address })
+      .from(addresses)
+      .where(and(...conditions))
+      .all();
+    if (downstreamRows.length === 0) return [];
+
+    const polluted: string[] = [];
+    const addrList = downstreamRows.map((row) => row.address);
+    for (const chunk of chunkArray(addrList, D1_IN_CLAUSE_CHUNK_SIZE)) {
+      const rows = await this.db
+        .selectDistinct({ fromAddress: edges.fromAddress })
+        .from(edges)
+        .where(and(inArray(edges.fromAddress, chunk), eq(edges.direction, "in_to_hacker")))
+        .all();
+      for (const row of rows) polluted.push(row.fromAddress);
+    }
+    return polluted;
+  }
+
+  async repairVictimRolePollution(opts?: {
+    address?: string;
+    dryRun?: boolean;
+  }): Promise<{ dryRun: boolean; scanned: number; repaired: string[]; jobsCancelled: number }> {
+    const dryRun = opts?.dryRun === true;
+    const polluted = await this.listVictimRolePollution({ address: opts?.address });
+    if (dryRun) {
+      return { dryRun: true, scanned: polluted.length, repaired: [], jobsCancelled: 0 };
+    }
+
+    const repaired: string[] = [];
+    let jobsCancelled = 0;
+    for (const address of polluted) {
+      await this.upsertAddress({ address, role: "victim", hopFromHacker: null });
+      jobsCancelled += await this.deleteActiveJobsForAddress(address);
+      repaired.push(address);
+    }
+    return { dryRun: false, scanned: polluted.length, repaired, jobsCancelled };
   }
 
   async deleteActiveJobsForAddress(address: string): Promise<number> {

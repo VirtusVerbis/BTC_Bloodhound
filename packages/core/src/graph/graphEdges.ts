@@ -1,6 +1,6 @@
 import type { Edge } from "@cointrace/db";
 
-export type EdgeKind = "default" | "peel_relay" | "spend_fanout";
+export type EdgeKind = "default" | "peel_relay" | "spend_fanout" | "victim_dust";
 
 export interface MappedGraphEdge {
   id: string;

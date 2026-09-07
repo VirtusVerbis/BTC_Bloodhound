@@ -7,6 +7,7 @@ import type { CpuGuard } from "../indexer/cpuGuard.js";
 import { captureOpReturnForTx, type CaptureOpReturnOpts } from "../indexer/opReturnCapture.js";
 import { bundleParallelEdges, mapDbEdgeToGraph, type EdgeKind } from "./graphEdges.js";
 import { enrichNodesWithOpReturn } from "./graphOpReturn.js";
+import { filterDownstreamEdgesExcludingVictims } from "./graphVictims.js";
 
 export interface HackTraceOptions {
   tx?: ChainTxDetail;
@@ -223,6 +224,7 @@ export async function buildGraph(
   const addressLookupBudget = () => MAX_GRAPH_ADDRESS_LOOKUPS - level1Ids.length - level2Ids.length;
 
   if (depth > 1) {
+    const victimSet = await store.getVictimAddressSetForHacker(hacker);
     const expandableParents = level1Ids.filter((id) => {
       const row = level1AddrMap.get(id);
       return (row?.hopFromHacker ?? 1) < depth;
@@ -230,10 +232,13 @@ export async function buildGraph(
     const edgesByParent = await store.getEdgesFromAddressesMap(expandableParents);
     for (const parentId of expandableParents) {
       if (addressLookupBudget() <= 0) break;
-      const childEdges = (edgesByParent.get(parentId) ?? [])
-        .filter((ce) => ce.direction === "out_from_hacker" && ce.amountSats >= minEdgeSats)
-        .sort((a, b) => b.amountSats - a.amountSats)
-        .slice(0, maxOutputs);
+      const childEdges = filterDownstreamEdgesExcludingVictims(
+        (edgesByParent.get(parentId) ?? [])
+          .filter((ce) => ce.direction === "out_from_hacker" && ce.amountSats >= minEdgeSats)
+          .sort((a, b) => b.amountSats - a.amountSats)
+          .slice(0, maxOutputs),
+        victimSet,
+      );
       const childGraphEdges = childEdges.map((ce) => mapDbEdgeToGraph(parentId, ce.toAddress, ce));
       const bundledChild = bundleParallelEdges(childGraphEdges, graphBundleMinEdges);
       childBundleByParent.set(parentId, bundledChild);
@@ -550,6 +555,7 @@ export interface HackTraceApplyChunkOptions {
   startEdgeIndex?: number;
   maxEdges?: number;
   cpuGuard?: CpuGuard;
+  flaggedHackers?: Set<string>;
 }
 
 export interface HackTraceApplyChunkResult {
@@ -616,6 +622,13 @@ export async function applyHackTraceEdgesChunk(
 
   const endIndex = Math.min(totalEdges, startEdgeIndex + maxEdges);
   const slice = flat.slice(startEdgeIndex, endIndex);
+  const outTargets = slice
+    .filter((edge) => edge.direction === "out_from_hacker")
+    .map((edge) => edge.toAddress);
+  const victimTargets =
+    opts?.flaggedHackers && opts.flaggedHackers.size > 0
+      ? await store.filterVictimsAmong(outTargets, opts.flaggedHackers)
+      : new Set<string>();
   const downstreamRows: Array<{
     address: string;
     role: string;
@@ -631,10 +644,13 @@ export async function applyHackTraceEdgesChunk(
     blockTime: string | null;
     hopFromHacker: number;
     direction: string;
+    edgeKind?: string | null;
   }> = [];
 
   for (const edge of slice) {
-    if (edge.direction === "out_from_hacker") {
+    const isVictimDust =
+      edge.direction === "out_from_hacker" && victimTargets.has(edge.toAddress);
+    if (edge.direction === "out_from_hacker" && !isVictimDust) {
       downstreamRows.push({
         address: edge.toAddress,
         role: "downstream",
@@ -651,6 +667,7 @@ export async function applyHackTraceEdgesChunk(
       blockTime: meta.blockTime,
       hopFromHacker: edge.hopFromHacker,
       direction: edge.direction,
+      edgeKind: isVictimDust ? "victim_dust" : null,
     });
   }
 
@@ -792,6 +809,7 @@ export async function processTxForHackTrace(
       startEdgeIndex: traceEdgeIndex,
       maxEdges: maxEdgesPerJob,
       cpuGuard,
+      flaggedHackers: hackerAddresses,
     },
   );
 

@@ -23,6 +23,7 @@ export interface AddressDetail {
   hackTxid?: string | null;
   opReturn?: string | null;
   opReturnTruncated?: boolean;
+  opReturnTxid?: string | null;
   relatedTxs: Array<{
     txid: string;
     blockTime: string | null;
@@ -90,7 +91,19 @@ export function AddressDetailDrawer({
               {detail.hackBlockHeight != null ? detail.hackBlockHeight.toLocaleString() : "unknown"}
             </p>
             {detail.opReturn ? (
-              <p className="address-op-return">OP_RETURN: {detail.opReturn}</p>
+              <p className="address-op-return">
+                OP_RETURN: {detail.opReturn}
+                {detail.opReturnTxid ? (
+                  <>
+                    {" "}
+                    (
+                    <a href={txUrl(detail.opReturnTxid)} target="_blank" rel="noreferrer">
+                      {detail.opReturnTxid.slice(0, 8)}…
+                    </a>
+                    )
+                  </>
+                ) : null}
+              </p>
             ) : null}
             <table>
               <thead>

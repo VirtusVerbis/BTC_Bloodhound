@@ -21,6 +21,7 @@ import {
   fetchColdcardSweepWatch,
 } from "../sources/coldcardSweepWatch.js";
 import { fetchMempoolBtcUsd } from "../price/mempoolPrices.js";
+import { expandOpsFields, resolveExpandJobPriority } from "./expandPriority.js";
 import { normalizeBitcoinAddress } from "../util/address.js";
 import { formatErrorMessage } from "../util/error.js";
 import { logJobDefer, logJobDone, logJobFail, logJobStart } from "./jobLog.js";
@@ -63,7 +64,7 @@ export class EnqueueBlockedError extends Error {
 }
 
 async function enqueueExpandContinuation(store: Store, payload: Record<string, unknown>): Promise<void> {
-  const id = await store.enqueueJob("expand_downstream", payload, JOB_PRIORITY.CRON_EXPAND);
+  const id = await store.enqueueJob("expand_downstream", payload, resolveExpandJobPriority(payload));
   if (id == null) {
     const paused = await store.isQueueSchedulingPaused();
     throw new EnqueueBlockedError(paused ? "queue_paused" : "expand_cap");
@@ -1028,6 +1029,8 @@ async function pollDownstream(
 
 interface ExpandPayload extends PendingPayloadFields {
   address: string;
+  ops?: true;
+  opsPriority?: number;
   chainCursor?: string;
   pagesExhausted?: boolean;
   newestTxid?: string;
@@ -1067,6 +1070,7 @@ async function expandDownstream(
   const addr = await store.getAddress(address);
   const hop = addr?.hopFromHacker ?? 0;
   const expandProfile = addr?.expandProfile ?? null;
+  const opsFields = expandOpsFields(rawPayload);
   const hackers = options?.hackers ?? (await getHackerAddressSet(store));
   await store.setExpandStatus(address, "expanding");
 
@@ -1112,6 +1116,7 @@ async function expandDownstream(
       if (needsMoreAfterFetch) {
         const nextPayload: ExpandPayload = {
           address,
+          ...opsFields,
           chainCursor,
           ...writePendingPayload(pending, processedIndex),
           pagesExhausted,
@@ -1146,6 +1151,7 @@ async function expandDownstream(
       () =>
         enqueueExpandContinuation(store, {
           address,
+          ...opsFields,
           chainCursor,
           ...writePendingPayload(pending, processedIndex),
           pagesExhausted,
@@ -1176,6 +1182,7 @@ async function expandDownstream(
     if (result.continued) {
       await enqueueExpandContinuation(store, {
         address,
+        ...opsFields,
         chainCursor,
         ...writePendingPayload(pending, processedIndex),
         pagesExhausted,
@@ -1209,6 +1216,7 @@ async function expandDownstream(
 
   const nextPayload: ExpandPayload = {
     address,
+    ...opsFields,
     chainCursor,
     ...pendingFields(processedIndex),
     pagesExhausted,

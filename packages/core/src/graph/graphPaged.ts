@@ -2,6 +2,7 @@ import type { Store } from "@cointrace/db";
 import { bundleParallelEdges, mapDbEdgeToGraph } from "./graphEdges.js";
 import type { GraphEdge, GraphNode, GraphResult } from "./builder.js";
 import { enrichNodesWithOpReturn } from "./graphOpReturn.js";
+import { filterDownstreamEdgesExcludingVictims } from "./graphVictims.js";
 import {
   decodeL1Cursor,
   decodeL2Cursor,
@@ -326,6 +327,7 @@ export async function buildGraphL2Page(
   if (options.cursor && !l2Cursor) throw new Error("invalid cursor");
 
   const parentAddrMap = await store.getAddressesMap(token.parents);
+  const victimSet = await store.getVictimAddressSetForHacker(token.hacker);
   const expandableParents = token.parents.filter((id: string) => {
     const row = parentAddrMap.get(id);
     return (row?.hopFromHacker ?? 1) < token.maxGraphDepth;
@@ -342,11 +344,15 @@ export async function buildGraphL2Page(
   while (parentIndex < expandableParents.length && addedThisPage < options.limit) {
     const parentId = expandableParents[parentIndex]!;
     const remaining = options.limit - addedThisPage;
-    const childEdges = await store.getOutEdgesFromAddress(parentId, {
-      minEdgeSats: token.minEdgeSats,
-      limit: Math.min(token.maxPerParent, remaining),
-      after: edgeAfter,
-    });
+    const childEdges = filterDownstreamEdgesExcludingVictims(
+      await store.getOutEdgesFromAddress(parentId, {
+        minEdgeSats: token.minEdgeSats,
+        limit: Math.min(token.maxPerParent, remaining),
+        after: edgeAfter,
+      }),
+      victimSet,
+    );
+    // Filtered edges still consume DB limit slots; cursor may skip victim-dust rows.
 
     if (childEdges.length === 0) {
       parentIndex++;

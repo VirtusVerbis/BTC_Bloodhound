@@ -71,3 +71,37 @@ export async function pruneInvalidAddresses(
     edgesRemoved,
   };
 }
+
+export interface RepairVictimRolesResult {
+  dryRun: boolean;
+  scanned: number;
+  polluted: string[];
+  repaired: string[];
+  jobsCancelled: number;
+}
+
+export async function repairVictimRoles(
+  store: Store,
+  opts: { address?: string; dryRun?: boolean } = {},
+): Promise<RepairVictimRolesResult> {
+  const dryRun = opts.dryRun === true;
+  const polluted = await store.listVictimRolePollution({ address: opts.address });
+  if (dryRun) {
+    return {
+      dryRun: true,
+      scanned: polluted.length,
+      polluted,
+      repaired: [],
+      jobsCancelled: 0,
+    };
+  }
+
+  const result = await store.repairVictimRolePollution({ address: opts.address, dryRun: false });
+  return {
+    dryRun: false,
+    scanned: result.scanned,
+    polluted,
+    repaired: result.repaired,
+    jobsCancelled: result.jobsCancelled,
+  };
+}

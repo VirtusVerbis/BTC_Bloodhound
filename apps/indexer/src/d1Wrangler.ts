@@ -8,6 +8,7 @@ import type {
   PruneInvalidAddressesResult,
   ReBackfillHackerResult,
   RemoveHackerResult,
+  RepairVictimRolesResult,
 } from "@cointrace/core";
 import type { AppConfig, ListQueueOptions, ListQueueResult } from "@cointrace/core";
 import { listQueue } from "@cointrace/core";
@@ -22,6 +23,11 @@ export interface D1WranglerClientOptions {
 /** Escape a validated string for SQL string literals. */
 export function sqlString(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
+}
+
+/** Match jobs whose JSON payload address field equals the given address. */
+function jobPayloadAddressEqSql(address: string): string {
+  return `json_extract(payload_json, '$.address') = ${sqlString(address)}`;
 }
 
 type Row = Record<string, unknown>;
@@ -402,11 +408,9 @@ export async function removeHackerRemote(
 
   statements.push(`UPDATE addresses SET is_flagged_hacker = 0, last_seen_at = ${sqlString(nowIso())} WHERE address = ${a};`);
 
-  const jobRows = client.query(`
-SELECT id FROM jobs
-WHERE status IN ('pending', 'running')
-  AND payload_json LIKE ${sqlString(`%"address":"${address}"%`)};
-`);
+  const jobRows = client.query(
+    `SELECT id FROM jobs WHERE status IN ('pending', 'running') AND ${jobPayloadAddressEqSql(address)};`,
+  );
   const jobsCancelled = jobRows.length;
   for (const j of jobRows) {
     statements.push(`DELETE FROM jobs WHERE id = ${Number(j.id)};`);
@@ -580,11 +584,9 @@ export async function pruneInvalidAddressesRemote(
   for (const row of invalidRows) {
     if (row.isFlaggedHacker) hackersUnflagged++;
     const a = sqlString(row.address);
-    const jobRows = client.query(`
-SELECT id FROM jobs
-WHERE status IN ('pending', 'running')
-  AND payload_json LIKE ${sqlString(`%"address":"${row.address}"%`)};
-`);
+    const jobRows = client.query(
+      `SELECT id FROM jobs WHERE status IN ('pending', 'running') AND ${jobPayloadAddressEqSql(row.address)};`,
+    );
     jobsCancelled += jobRows.length;
     for (const j of jobRows) {
       statements.push(`DELETE FROM jobs WHERE id = ${Number(j.id)};`);
@@ -622,6 +624,64 @@ WHERE status IN ('pending', 'running')
     rowsDeleted: invalidRows.length,
     jobsCancelled,
     edgesRemoved,
+  };
+}
+
+export async function repairVictimRolesRemote(
+  client: D1WranglerClient,
+  opts: { address?: string; dryRun?: boolean } = {},
+): Promise<RepairVictimRolesResult> {
+  const dryRun = opts.dryRun === true;
+  const addressFilter = opts.address ? ` AND address = ${sqlString(opts.address)}` : "";
+  const pollutedRows = client.query(
+    `SELECT address FROM addresses WHERE role = 'downstream'${addressFilter} AND address IN (SELECT DISTINCT from_address FROM edges WHERE direction = 'in_to_hacker');`,
+  );
+  const polluted = pollutedRows.map((row) => String(row.address));
+
+  if (dryRun) {
+    return {
+      dryRun: true,
+      scanned: polluted.length,
+      polluted,
+      repaired: [],
+      jobsCancelled: 0,
+    };
+  }
+
+  const statements: string[] = ["PRAGMA foreign_keys = OFF;"];
+  let jobsCancelled = 0;
+  for (const address of polluted) {
+    const a = sqlString(address);
+    statements.push(
+      `UPDATE addresses SET role = 'victim', hop_from_hacker = NULL, last_seen_at = datetime('now') WHERE address = ${a};`,
+    );
+    const jobRows = client.query(
+      `SELECT id FROM jobs WHERE status IN ('pending', 'running') AND ${jobPayloadAddressEqSql(address)};`,
+    );
+    jobsCancelled += jobRows.length;
+    for (const j of jobRows) {
+      statements.push(`DELETE FROM jobs WHERE id = ${Number(j.id)};`);
+    }
+  }
+  statements.push("PRAGMA foreign_keys = ON;");
+
+  if (statements.length > 2) {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cointrace-ops-"));
+    try {
+      const filePath = path.join(tmpDir, "repair-victim-roles.sql");
+      fs.writeFileSync(filePath, statements.join("\n") + "\n", "utf8");
+      client.executeFile(filePath);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }
+
+  return {
+    dryRun: false,
+    scanned: polluted.length,
+    polluted,
+    repaired: polluted,
+    jobsCancelled,
   };
 }
 

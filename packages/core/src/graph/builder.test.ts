@@ -388,6 +388,59 @@ describe("victim search graph filters", () => {
     expect(graph.edges.some((e) => e.source === "down2" && e.target === "child2")).toBe(true);
   });
 
+  it("buildGraph depth=2 excludes downstream edges back to known victims (no loopback)", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    const victim = "bc1qvictim_loop";
+    const downstream = "bc1qdownstream_loop";
+
+    await store.upsertAddressesBatch([
+      { address: "hack1", role: "hacker", source: "admin", isFlaggedHacker: true, hopFromHacker: 0 },
+      { address: victim, role: "victim", source: "derived" },
+      { address: downstream, role: "downstream", source: "derived", hopFromHacker: 1 },
+    ]);
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: victim,
+        toAddress: "hack1",
+        txid: "tx_theft",
+        amountSats: 4_000_000_000_000,
+        direction: "in_to_hacker",
+        blockTime: "2026-09-06T14:28:56.000Z",
+      },
+      {
+        fromAddress: "hack1",
+        toAddress: downstream,
+        txid: "tx_sweep",
+        amountSats: 399_599_999_857,
+        direction: "out_from_hacker",
+        blockTime: "2026-09-06T14:28:56.000Z",
+      },
+      {
+        fromAddress: downstream,
+        toAddress: victim,
+        txid: "tx_message",
+        amountSats: 1_000,
+        direction: "out_from_hacker",
+        edgeKind: "victim_dust",
+        blockTime: "2026-09-06T16:00:00.000Z",
+      },
+    ]);
+
+    const graph = await buildGraph(store, "hack1", {
+      depth: 2,
+      expandVictims: true,
+      minEdgeSats: 100,
+    });
+
+    expect(graph.nodes.filter((n) => n.id === victim)).toHaveLength(1);
+    expect(graph.nodes.find((n) => n.id === victim)?.type).toBe("victim");
+    expect(graph.edges.some((e) => e.source === downstream && e.target === victim)).toBe(false);
+    expect(graph.edges.some((e) => e.source === victim && e.target === "hack1")).toBe(true);
+    expect(graph.edges.some((e) => e.source === "hack1" && e.target === downstream)).toBe(true);
+  });
+
   it("buildGraph caps level-2 address lookups under heavy fan-out", async () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);

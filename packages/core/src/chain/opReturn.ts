@@ -3,6 +3,8 @@ import type { ChainTxDetail, ChainTxSummary, ChainTxVout } from "./types.js";
 export const OP_RETURN_PAYLOAD_MAX_BYTES = 80;
 export const OP_RETURN_STORE_MAX_BYTES = 512;
 export const OP_RETURN_GRAPH_LABEL_MAX_CHARS = 48;
+/** Join multiple OP_RETURN segments on one node (own-spend · incoming). */
+export const OP_RETURN_DISPLAY_DELIMITER = " · ";
 
 const PRINTABLE_UNICODE =
   /^[\t\n\r\x20-\x7E\u00A0-\uD7FF\uE000-\uFFFD]*$/;

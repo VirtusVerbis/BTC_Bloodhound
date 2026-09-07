@@ -108,6 +108,57 @@ describe("processClassifiedPendingTx", () => {
     expect(result.chainCallsUsed).toBe(0);
   });
 
+  it("patch-if-null captures OP_RETURN from hop-1 receive page without tracing", async () => {
+    const config = loadConfig({ TRACE_FLAGGED_HACKER_RECEIVES: "1" });
+    const store = {
+      getTransaction: getTransactionMock.mockResolvedValue({
+        txid: "recv_op",
+        opReturnDisplay: null,
+      }),
+    } as unknown as Store;
+    const router = {} as ChainRouter;
+    const pageEntry = {
+      txid: "recv_op",
+      vin: [{ prevout: { scriptpubkey_address: victim, value: 50_000 } }],
+      vout: [
+        { scriptpubkey_address: address, value: 49_000 },
+        {
+          scriptpubkey_type: "op_return",
+          scriptpubkey_asm: "OP_RETURN 48656c6c6f",
+          value: 0,
+        },
+      ],
+    };
+    const receiveWithOpReturn: PendingTxRuntime = {
+      txid: "recv_op",
+      isSpend: false,
+      voutCount: 2,
+      outputAddressCount: 1,
+      pageEntry,
+    };
+
+    const result = await processClassifiedPendingTx(
+      store,
+      router,
+      config,
+      address,
+      1,
+      receiveWithOpReturn,
+      hackers,
+      {},
+    );
+
+    expect(captureOpReturnForTxMock).toHaveBeenCalledWith(
+      store,
+      router,
+      "recv_op",
+      expect.objectContaining({ allowGetTx: false }),
+    );
+    expect(processTxForHackTraceMock).not.toHaveBeenCalled();
+    expect(result.chainCallsUsed).toBe(0);
+    expect(result.continued).toBe(false);
+  });
+
   it("patch-if-null captures OP_RETURN from page without getTx", async () => {
     const config = loadConfig({ TRACE_FLAGGED_HACKER_RECEIVES: "0" });
     const store = {

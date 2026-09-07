@@ -7,7 +7,9 @@ import {
   addHacker,
   buildBackfillJobPayload,
   ChainRouter,
+  bumpExpandDownstream,
   clearQueue,
+  enqueueExpandDownstream,
   defaultPriorityForJobType,
   hasResumableBackfillState,
   JOB_PRIORITY,
@@ -16,6 +18,7 @@ import {
   normalizeBitcoinAddress,
   pruneInvalidAddresses,
   removeHacker,
+  repairVictimRoles,
   runIndexerTick,
   runLoadLocalWatchlist,
   runReBackfillHacker,
@@ -38,6 +41,7 @@ import {
   pruneInvalidAddressesRemote,
   reBackfillHackerRemote,
   removeHackerRemote,
+  repairVictimRolesRemote,
   resumeCronRemote,
 } from "./d1Wrangler.js";
 import { openRemoteProductionStore } from "./remotePlatform.js";
@@ -211,6 +215,62 @@ async function main() {
     );
     return;
   }
+  if (cmd === "enqueue-expand") {
+    const address = positionalArgs()[0] ?? "";
+    const priorityRaw = flagValue("--priority");
+    const priority = priorityRaw != null ? Number(priorityRaw) : undefined;
+    if (!normalizeBitcoinAddress(address)) {
+      console.error("Usage: enqueue-expand <address> [--priority N] [--remote]");
+      process.exit(1);
+    }
+    if (priorityRaw != null && (!Number.isFinite(priority) || priority! < 1)) {
+      console.error("Invalid --priority (must be a positive number)");
+      process.exit(1);
+    }
+    let result;
+    if (remote) {
+      const { store, dispose } = await openRemoteProductionStore(config);
+      try {
+        result = await enqueueExpandDownstream(store, { address, priority });
+      } finally {
+        await dispose();
+      }
+    } else {
+      result = await enqueueExpandDownstream(openLocalStore(), { address, priority });
+    }
+    console.log(
+      JSON.stringify({ ok: true, ...result, target: remote ? "remote-d1" : "local-sqlite" }, null, 2),
+    );
+    return;
+  }
+  if (cmd === "bump-expand") {
+    const address = positionalArgs()[0] ?? "";
+    const priorityRaw = flagValue("--priority");
+    const priority = priorityRaw != null ? Number(priorityRaw) : undefined;
+    if (!normalizeBitcoinAddress(address)) {
+      console.error("Usage: bump-expand <address> [--priority N] [--remote]");
+      process.exit(1);
+    }
+    if (priorityRaw != null && (!Number.isFinite(priority) || priority! < 1)) {
+      console.error("Invalid --priority (must be a positive number)");
+      process.exit(1);
+    }
+    let result;
+    if (remote) {
+      const { store, dispose } = await openRemoteProductionStore(config);
+      try {
+        result = await bumpExpandDownstream(store, { address, priority });
+      } finally {
+        await dispose();
+      }
+    } else {
+      result = await bumpExpandDownstream(openLocalStore(), { address, priority });
+    }
+    console.log(
+      JSON.stringify({ ok: true, ...result, target: remote ? "remote-d1" : "local-sqlite" }, null, 2),
+    );
+    return;
+  }
   if (cmd === "list-queue") {
     const statusRaw = flagValue("--status") ?? "active";
     const validStatuses: QueueStatusFilter[] = ["active", "pending", "running", "all"];
@@ -256,6 +316,17 @@ async function main() {
     const result = remote
       ? await pruneInvalidAddressesRemote(remoteClient(), { dryRun })
       : await pruneInvalidAddresses(openLocalStore(), { dryRun });
+    console.log(
+      JSON.stringify({ ok: true, ...result, target: remote ? "remote-d1" : "local-sqlite" }, null, 2),
+    );
+    return;
+  }
+  if (cmd === "repair-victim-roles") {
+    const dryRun = argv.includes("--dry-run");
+    const address = flagValue("--address");
+    const result = remote
+      ? await repairVictimRolesRemote(remoteClient(), { address, dryRun })
+      : await repairVictimRoles(openLocalStore(), { address, dryRun });
     console.log(
       JSON.stringify({ ok: true, ...result, target: remote ? "remote-d1" : "local-sqlite" }, null, 2),
     );

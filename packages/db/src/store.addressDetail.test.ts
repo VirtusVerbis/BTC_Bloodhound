@@ -185,6 +185,318 @@ describe("getAddressDetail", () => {
 
     const detail = await store.getAddressDetail(victim);
     expect(detail!.opReturn).toBe("ransom note");
+    expect(detail!.opReturnTxid).toBe("tx_op");
     expect(detail!.hackTxid).toBe("tx_op");
+  });
+
+  it("returns OP_RETURN from latest spend tx on downstream, not earliest incoming edge", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const hacker = "bc1qhacker_sweep";
+    const downstream = "bc1qdownstream_msg";
+
+    await store.upsertAddress({ address: hacker, role: "hacker", isFlaggedHacker: true });
+    await store.upsertAddress({ address: downstream, role: "downstream", hopFromHacker: 1 });
+
+    await store.upsertTransaction({
+      txid: "tx_sweep_in",
+      blockHeight: 965783,
+      blockTime: "2026-09-06T14:28:56.000Z",
+    });
+    await store.upsertTransaction({
+      txid: "tx_message",
+      blockHeight: 965818,
+      blockTime: "2026-09-06T16:00:00.000Z",
+      opReturnDisplay: "we are whitehats. contact us on chain",
+    });
+
+    await store.upsertEdge({
+      fromAddress: hacker,
+      toAddress: downstream,
+      txid: "tx_sweep_in",
+      amountSats: 399_599_999_857,
+      blockTime: "2026-09-06T14:28:56.000Z",
+      direction: "out_from_hacker",
+    });
+    await store.upsertEdge({
+      fromAddress: downstream,
+      toAddress: "bc1qvictim_dust",
+      txid: "tx_message",
+      amountSats: 1_000,
+      blockTime: "2026-09-06T16:00:00.000Z",
+      direction: "out_from_hacker",
+    });
+
+    const detail = await store.getAddressDetail(downstream);
+    expect(detail!.opReturn).toBe("we are whitehats. contact us on chain");
+    expect(detail!.opReturnTxid).toBe("tx_message");
+    expect(detail!.hackTxid).toBe("tx_sweep_in");
+  });
+
+  it("returns OP_RETURN from incoming funding tx when downstream has not spent", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const hacker = "bc1qhacker_incoming_op";
+    const downstream = "bc1qdownstream_incoming_op";
+
+    await store.upsertAddress({ address: hacker, role: "hacker", isFlaggedHacker: true });
+    await store.upsertAddress({ address: downstream, role: "downstream", hopFromHacker: 1 });
+
+    await store.upsertTransaction({
+      txid: "tx_sweep_op",
+      blockHeight: 965783,
+      blockTime: "2026-09-06T14:28:56.000Z",
+      opReturnDisplay: "funds moved with note",
+    });
+
+    await store.upsertEdge({
+      fromAddress: hacker,
+      toAddress: downstream,
+      txid: "tx_sweep_op",
+      amountSats: 399_599_999_857,
+      blockTime: "2026-09-06T14:28:56.000Z",
+      direction: "out_from_hacker",
+    });
+
+    const detail = await store.getAddressDetail(downstream);
+    expect(detail!.opReturn).toBe("funds moved with note");
+    expect(detail!.opReturnTxid).toBe("tx_sweep_op");
+    expect(detail!.hackTxid).toBe("tx_sweep_op");
+  });
+
+  it("joins own-spend and incoming OP_RETURN with delimiter when both exist", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const hacker = "bc1qhacker_combined_op";
+    const downstream = "bc1qdownstream_combined_op";
+
+    await store.upsertAddress({ address: hacker, role: "hacker", isFlaggedHacker: true });
+    await store.upsertAddress({ address: downstream, role: "downstream", hopFromHacker: 1 });
+
+    await store.upsertTransaction({
+      txid: "tx_sweep_combined",
+      blockHeight: 965783,
+      blockTime: "2026-09-06T14:28:56.000Z",
+      opReturnDisplay: "incoming note",
+    });
+    await store.upsertTransaction({
+      txid: "tx_message_combined",
+      blockHeight: 965818,
+      blockTime: "2026-09-06T16:00:00.000Z",
+      opReturnDisplay: "own message",
+    });
+
+    await store.upsertEdge({
+      fromAddress: hacker,
+      toAddress: downstream,
+      txid: "tx_sweep_combined",
+      amountSats: 399_599_999_857,
+      blockTime: "2026-09-06T14:28:56.000Z",
+      direction: "out_from_hacker",
+    });
+    await store.upsertEdge({
+      fromAddress: downstream,
+      toAddress: "bc1qvictim_dust",
+      txid: "tx_message_combined",
+      amountSats: 1_000,
+      blockTime: "2026-09-06T16:00:00.000Z",
+      direction: "out_from_hacker",
+    });
+
+    const detail = await store.getAddressDetail(downstream);
+    expect(detail!.opReturn).toBe("own message · incoming note");
+    expect(detail!.opReturnTxid).toBe("tx_message_combined");
+  });
+
+  it("does not show OP_RETURN on victim when only a message tx recipient", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const victim = "bc1qvictim_dust_only";
+    const downstream = "bc1qdownstream_sender";
+
+    await store.upsertAddress({ address: victim, role: "victim" });
+    await store.upsertAddress({ address: downstream, role: "downstream", hopFromHacker: 1 });
+
+    await store.upsertTransaction({
+      txid: "tx_message",
+      blockHeight: 965818,
+      blockTime: "2026-09-06T16:00:00.000Z",
+      opReturnDisplay: "we are whitehats. contact us on chain",
+    });
+
+    await store.upsertEdge({
+      fromAddress: downstream,
+      toAddress: victim,
+      txid: "tx_message",
+      amountSats: 1_000,
+      blockTime: "2026-09-06T16:00:00.000Z",
+      direction: "out_from_hacker",
+    });
+
+    const detail = await store.getAddressDetail(victim);
+    expect(detail!.opReturn).toBeNull();
+    expect(detail!.opReturnTxid).toBeNull();
+  });
+
+  it("does not show OP_RETURN on polluted downstream victim (role downstream + in_to_hacker)", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const hacker = "bc1qhacker_polluted";
+    const victim = "bc1qvictim_polluted";
+    const downstream = "bc1qdownstream_sender";
+
+    await store.upsertAddress({ address: hacker, role: "hacker", isFlaggedHacker: true });
+    await store.upsertAddress({
+      address: victim,
+      role: "downstream",
+      hopFromHacker: 2,
+    });
+    await store.upsertAddress({ address: downstream, role: "downstream", hopFromHacker: 1 });
+
+    await store.upsertTransaction({
+      txid: "tx_hack",
+      blockHeight: 965700,
+      blockTime: "2026-09-06T12:00:00.000Z",
+    });
+    await store.upsertTransaction({
+      txid: "tx_message",
+      blockHeight: 965818,
+      blockTime: "2026-09-06T16:00:00.000Z",
+      opReturnDisplay: "we are whitehats. contact us on chain",
+    });
+
+    await store.upsertEdge({
+      fromAddress: victim,
+      toAddress: hacker,
+      txid: "tx_hack",
+      amountSats: 1_000_000_000,
+      blockTime: "2026-09-06T12:00:00.000Z",
+      direction: "in_to_hacker",
+    });
+    await store.upsertEdge({
+      fromAddress: downstream,
+      toAddress: victim,
+      txid: "tx_message",
+      amountSats: 1_000,
+      blockTime: "2026-09-06T16:00:00.000Z",
+      direction: "out_from_hacker",
+      edgeKind: "victim_dust",
+    });
+
+    const detail = await store.getAddressDetail(victim);
+    expect(detail!.opReturn).toBeNull();
+    expect(detail!.opReturnTxid).toBeNull();
+
+    const incoming = await store.listIncomingOutFromHackerTxids(victim);
+    expect(incoming).not.toContain("tx_message");
+  });
+
+  it("rolls up downstream spend OP_RETURN to flagged hacker root", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const hacker = "bc1qhacker_rollup";
+    const downstream = "bc1qdownstream_rollup";
+
+    await store.upsertAddress({ address: hacker, role: "hacker", isFlaggedHacker: true });
+    await store.upsertAddress({ address: downstream, role: "downstream", hopFromHacker: 1 });
+
+    await store.upsertTransaction({
+      txid: "tx_sweep",
+      blockHeight: 965783,
+      blockTime: "2026-09-06T14:28:56.000Z",
+    });
+    await store.upsertTransaction({
+      txid: "tx_message",
+      blockHeight: 965818,
+      blockTime: "2026-09-06T16:00:00.000Z",
+      opReturnDisplay: "we are whitehats. contact us on chain",
+    });
+
+    await store.upsertEdge({
+      fromAddress: hacker,
+      toAddress: downstream,
+      txid: "tx_sweep",
+      amountSats: 399_599_999_857,
+      blockTime: "2026-09-06T14:28:56.000Z",
+      direction: "out_from_hacker",
+    });
+    await store.upsertEdge({
+      fromAddress: downstream,
+      toAddress: "bc1qvictim_dust",
+      txid: "tx_message",
+      amountSats: 1_000,
+      blockTime: "2026-09-06T16:00:00.000Z",
+      direction: "out_from_hacker",
+    });
+
+    const detail = await store.getAddressDetail(hacker);
+    expect(detail!.opReturn).toBe("we are whitehats. contact us on chain");
+    expect(detail!.opReturnTxid).toBe("tx_message");
+  });
+
+  it("prefers hacker own spend OP_RETURN over downstream rollup", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const hacker = "bc1qhacker_own";
+    const downstream = "bc1qdownstream_late";
+
+    await store.upsertAddress({ address: hacker, role: "hacker", isFlaggedHacker: true });
+    await store.upsertAddress({ address: downstream, role: "downstream", hopFromHacker: 1 });
+
+    await store.upsertTransaction({
+      txid: "tx_hacker_msg",
+      blockHeight: 200,
+      blockTime: "2020-02-02T00:00:00.000Z",
+      opReturnDisplay: "hacker note",
+    });
+    await store.upsertTransaction({
+      txid: "tx_down_msg",
+      blockHeight: 300,
+      blockTime: "2020-03-02T00:00:00.000Z",
+      opReturnDisplay: "downstream note",
+    });
+
+    await store.upsertEdge({
+      fromAddress: hacker,
+      toAddress: downstream,
+      txid: "tx_sweep",
+      amountSats: 1_000_000,
+      blockTime: "2020-01-02T00:00:00.000Z",
+      direction: "out_from_hacker",
+    });
+    await store.upsertEdge({
+      fromAddress: hacker,
+      toAddress: "bc1qother",
+      txid: "tx_hacker_msg",
+      amountSats: 500,
+      blockTime: "2020-02-02T00:00:00.000Z",
+      direction: "out_from_hacker",
+    });
+    await store.upsertEdge({
+      fromAddress: downstream,
+      toAddress: "bc1qvictim",
+      txid: "tx_down_msg",
+      amountSats: 500,
+      blockTime: "2020-03-02T00:00:00.000Z",
+      direction: "out_from_hacker",
+    });
+
+    const detail = await store.getAddressDetail(hacker);
+    expect(detail!.opReturn).toBe("hacker note");
+    expect(detail!.opReturnTxid).toBe("tx_hacker_msg");
   });
 });
