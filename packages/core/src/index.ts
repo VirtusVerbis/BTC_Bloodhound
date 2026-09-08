@@ -17,6 +17,8 @@ export * from "./indexer/crawl.js";
 export * from "./indexer/rebuildMode.js";
 export * from "./indexer/tick.js";
 export * from "./indexer/cpuGuard.js";
+export * from "./indexer/maintenance.js";
+export * from "./indexer/maintenanceCli.js";
 export * from "./subrequest/instrumentedFetch.js";
 export * from "./indexer/tickStats.js";
 export * from "./scheduler/eta.js";

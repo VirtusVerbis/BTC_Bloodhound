@@ -179,4 +179,45 @@ describe("maintenance batch orchestrators", () => {
     expect(status.ticksUntilPrune).toBe(5 * 1440 - 100);
     expect(status.nextPruneAt).toBeTruthy();
   });
+
+  it("estimateMaintenanceWork counts rows per maintenance phase", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const backfillJob = await store.enqueueJob("process_tx", { txid: "bf" }, 1);
+    await store.completeJob(backfillJob);
+    sqlite.prepare("UPDATE jobs SET completed_at = NULL WHERE id = ?").run(backfillJob);
+
+    const oldJob = await store.enqueueJob("process_tx", { txid: "old" }, 1);
+    await store.completeJob(oldJob);
+    sqlite
+      .prepare("UPDATE jobs SET completed_at = ? WHERE id = ?")
+      .run("2020-01-01T00:00:00.000Z", oldJob);
+
+    const stale = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+    const fresh = new Date().toISOString();
+    sqlite.prepare("INSERT INTO rate_limits (key, window_start, count) VALUES (?, ?, 1)").run(
+      "stale-ip",
+      stale,
+    );
+    sqlite.prepare("INSERT INTO rate_limits (key, window_start, count) VALUES (?, ?, 1)").run(
+      "fresh-ip",
+      fresh,
+    );
+
+    await store.upsertAddress({ address: "bc1qlive", role: "hacker" });
+    sqlite.prepare("INSERT INTO sync_state (address) VALUES (?)").run("bc1qorphan");
+    sqlite.prepare("INSERT INTO sync_state (address) VALUES (?)").run("bc1qlive");
+
+    const estimate = await store.estimateMaintenanceWork({
+      jobDoneRetentionDays: 5,
+      rateLimitPruneInactiveDays: 7,
+    });
+    expect(estimate.backfill).toBe(1);
+    expect(estimate.pruneJobs).toBe(1);
+    expect(estimate.rateLimits).toBe(1);
+    expect(estimate.syncOrphans).toBe(1);
+    expect(estimate.total).toBe(4);
+  });
 });

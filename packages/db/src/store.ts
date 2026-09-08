@@ -364,6 +364,14 @@ export interface MaintenanceBatchRunResult {
   complete: boolean;
 }
 
+export interface MaintenanceWorkEstimate {
+  backfill: number;
+  pruneJobs: number;
+  rateLimits: number;
+  syncOrphans: number;
+  total: number;
+}
+
 export type MaintenanceStatusValue = "idle" | "running" | "scheduled" | "disabled";
 
 export interface MaintenanceStatus {
@@ -2862,6 +2870,61 @@ export class Store {
       .where(and(eq(jobs.status, "done"), isNull(jobs.completedAt)))
       .get();
     return row?.count ?? 0;
+  }
+
+  async countPruneableDoneJobs(retentionDays: number): Promise<number> {
+    const cutoff = retentionCutoffIso(retentionDays);
+    const row = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.status, "done"),
+          isNotNull(jobs.completedAt),
+          lt(jobs.completedAt, cutoff),
+        ),
+      )
+      .get();
+    return row?.count ?? 0;
+  }
+
+  async countStaleRateLimits(inactiveSec: number): Promise<number> {
+    const row = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(rateLimits)
+      .where(sql`(unixepoch('now') - unixepoch(${rateLimits.windowStart})) > ${inactiveSec}`)
+      .get();
+    return row?.count ?? 0;
+  }
+
+  async countOrphanSyncStateRows(): Promise<number> {
+    const row = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(syncState)
+      .leftJoin(addresses, eq(syncState.address, addresses.address))
+      .where(isNull(addresses.address))
+      .get();
+    return row?.count ?? 0;
+  }
+
+  async estimateMaintenanceWork(config: {
+    jobDoneRetentionDays: number;
+    rateLimitPruneInactiveDays: number;
+  }): Promise<MaintenanceWorkEstimate> {
+    const inactiveSec = config.rateLimitPruneInactiveDays * 24 * 60 * 60;
+    const [backfill, pruneJobs, rateLimitsCount, syncOrphans] = await Promise.all([
+      this.countDoneJobsWithNullCompletedAt(),
+      this.countPruneableDoneJobs(config.jobDoneRetentionDays),
+      this.countStaleRateLimits(inactiveSec),
+      this.countOrphanSyncStateRows(),
+    ]);
+    return {
+      backfill,
+      pruneJobs,
+      rateLimits: rateLimitsCount,
+      syncOrphans,
+      total: backfill + pruneJobs + rateLimitsCount + syncOrphans,
+    };
   }
 
   async backfillDoneJobCompletedAtBatch(batchSize: number): Promise<number> {

@@ -21,6 +21,8 @@ import {
   repairVictimRoles,
   runIndexerTick,
   runLoadLocalWatchlist,
+  runMaintenanceCli,
+  formatMaintenanceCliLine,
   runReBackfillHacker,
   runReBackfillHackers,
   runReBackfillHackersWait,
@@ -361,6 +363,128 @@ async function main() {
       console.log(formatCronStatusSummary(getCronStatusRemote(remoteClient())));
     } else {
       console.log(formatCronStatusSummary(await readCronStatusFromStore(openLocalStore())));
+    }
+    return;
+  }
+  if (cmd === "run-maintenance") {
+    const dryRun = argv.includes("--dry-run");
+    const yes = argv.includes("--yes");
+    const forceWithCron = argv.includes("--force-with-cron");
+    const statusOnly = argv.includes("--status");
+    const target = remote ? "remote-d1" : "local-sqlite";
+
+    async function withStore<T>(fn: (store: Store) => Promise<T>): Promise<T> {
+      if (remote) {
+        const { store, dispose } = await openRemoteProductionStore(config);
+        try {
+          return await fn(store);
+        } finally {
+          await dispose();
+        }
+      }
+      return fn(openLocalStore());
+    }
+
+    if (remote && !dryRun && !statusOnly && !forceWithCron) {
+      const cronPaused = getCronStatusRemote(remoteClient()).cronIndexerPaused;
+      if (!cronPaused) {
+        console.error(
+          "Remote maintenance requires cron to be paused. Run: node apps/indexer/dist/index.js pause-cron --remote",
+        );
+        console.error("Or pass --force-with-cron to override (not recommended).");
+        process.exit(1);
+      }
+    }
+
+    if (remote && !dryRun && !statusOnly && !yes) {
+      console.error("Reminder: back up prod D1 before running maintenance on remote.");
+      console.error(
+        '  npx wrangler d1 export cointrace --remote --env production --output "backups/d1-export-remote-<timestamp>.sql"',
+      );
+      const rl = readline.createInterface({ input, output });
+      try {
+        const answer = await rl.question("Proceed with maintenance on remote prod D1? [y/N] ");
+        if (!/^y(es)?$/i.test(answer.trim())) process.exit(1);
+      } finally {
+        rl.close();
+      }
+    }
+
+    console.log(
+      `maintenance config: enabled=${config.jobPruneEnabled} retention_days=${config.jobDoneRetentionDays} interval_days=${config.jobPruneIntervalDays} rate_limit_inactive_days=${config.rateLimitPruneInactiveDays}`,
+    );
+
+    if (statusOnly) {
+      const payload = await withStore(async (store) => {
+        const scheduler = await store.getSchedulerState();
+        const estimate = await store.estimateMaintenanceWork({
+          jobDoneRetentionDays: config.jobDoneRetentionDays,
+          rateLimitPruneInactiveDays: config.rateLimitPruneInactiveDays,
+        });
+        return {
+          target,
+          maintenance: store.buildMaintenanceStatus(scheduler, {
+            jobPruneEnabled: config.jobPruneEnabled,
+            jobDoneRetentionDays: config.jobDoneRetentionDays,
+            jobPruneIntervalDays: config.jobPruneIntervalDays,
+          }),
+          estimate,
+        };
+      });
+      console.log(JSON.stringify(payload, null, 2));
+      return;
+    }
+
+    if (!config.jobPruneEnabled) {
+      console.error("JOB_PRUNE_ENABLED is disabled (JOB_PRUNE_ENABLED=0). Nothing to run.");
+      process.exit(1);
+    }
+
+    const controller = new AbortController();
+    let sigintCount = 0;
+    const onSigint = () => {
+      sigintCount++;
+      if (sigintCount === 1) {
+        console.error("\nAbort requested — finishing current batch…");
+        controller.abort();
+      }
+    };
+    process.on("SIGINT", onSigint);
+
+    let lastLine = "";
+    const result = await withStore(async (store) =>
+      runMaintenanceCli(store, config, {
+        dryRun,
+        tickMs: config.tickBudgetMs,
+        signal: controller.signal,
+        onProgress: (progress) => {
+          const line = formatMaintenanceCliLine(progress);
+          if (line !== lastLine) {
+            process.stdout.write(`\r${line.padEnd(100)}`);
+            lastLine = line;
+          }
+        },
+      }),
+    );
+
+    process.off("SIGINT", onSigint);
+    process.stdout.write("\n");
+
+    const payload = {
+      ok: result.ok,
+      target,
+      dryRun,
+      aborted: result.aborted,
+      complete: result.complete,
+      iterations: result.iterations,
+      session: result.session,
+      lastPhase: result.lastPhase,
+    };
+    console.log(JSON.stringify(payload, null, 2));
+
+    if (result.aborted) {
+      console.error("Aborted — re-run the same command to resume.");
+      process.exit(130);
     }
     return;
   }
