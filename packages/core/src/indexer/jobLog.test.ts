@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Job } from "@cointrace/db";
 import { RateLimitNotReadyError } from "../chain/router.js";
-import { formatJobDoneLine, formatJobStartLine, logCronDetail, logJobDefer, logJobFail } from "./jobLog.js";
+import { formatJobDoneLine, formatJobStartLine, logCronDetail, logCronException, logJobDefer, logJobFail } from "./jobLog.js";
 
 function makeJob(overrides: Partial<Job> & Pick<Job, "type" | "payloadJson">): Job {
   return {
@@ -160,6 +160,20 @@ describe("jobLog", () => {
     logJobFail(job, drizzleLike, { attempt: 1 });
     expect(spy).toHaveBeenCalledWith(
       expect.stringContaining("error=Failed query: select ... params: 1; cause: D1 read limit exceeded"),
+    );
+    spy.mockRestore();
+  });
+
+  it("logCronException includes cause for wrapped Drizzle-like errors", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const drizzleLike = new Error("Failed query: select ...\nparams: 1", {
+      cause: new Error("D1 read limit exceeded"),
+    });
+    logCronException("[cron] scheduled failed: ", drizzleLike);
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "[cron] scheduled failed: Failed query: select ... params: 1; cause: D1 read limit exceeded",
+      ),
     );
     spy.mockRestore();
   });

@@ -28,6 +28,21 @@ import {
   type RecentHackerActivityDelta,
   type RecentHackerEntry,
 } from "./recentHackers.js";
+import {
+  FLAGGED_HACKERS_CACHE_DEFAULT_TTL_SEC,
+  SYNC_SNAPSHOT_DEFAULT_TTL_SEC,
+  isCacheFresh,
+  parseFlaggedHackersCache,
+  parseSyncSnapshot,
+  serializeFlaggedHackersCache,
+  serializeSyncSnapshot,
+  syncSnapshotParamsMatch,
+  type FlaggedHackerCacheEntry,
+  type SyncSnapshotLastCompletedJob,
+  type SyncSnapshotParams,
+  type SyncSnapshotStats,
+  type SyncSnapshotV1,
+} from "./readCache.js";
 
 const INGEST_JOB_TYPES = [
   "backfill_hacker_address",
@@ -76,6 +91,22 @@ function effectivePriorityExpr(ageBoost?: ClaimAgeBoost, ts?: string) {
     return sql`${jobs.priority} + ${jobAgeBoostExpr(ageBoost, ts!)}`;
   }
   return sql`${jobs.priority}`;
+}
+
+type SchedulerStateRow = typeof schedulerState.$inferSelect;
+
+function isD1QuotaBlockedFromState(
+  state: SchedulerStateRow | null | undefined,
+  kind?: D1QuotaKind,
+  nowMs = Date.now(),
+): boolean {
+  const readBlocked =
+    state?.d1ReadRetryAfterAt != null && new Date(state.d1ReadRetryAfterAt).getTime() > nowMs;
+  const writeBlocked =
+    state?.d1WriteRetryAfterAt != null && new Date(state.d1WriteRetryAfterAt).getTime() > nowMs;
+  if (kind === "read") return readBlocked;
+  if (kind === "write") return writeBlocked;
+  return readBlocked || writeBlocked;
 }
 
 function jobClaimOrderBy(ageBoost?: ClaimAgeBoost, ts?: string) {
@@ -504,6 +535,9 @@ export class Store {
           ELSE addresses.live_balance_at END,
         last_seen_at = ${ts}
     `);
+    if (isFlaggedHackerProvided === 1) {
+      await this.invalidateFlaggedHackersCache();
+    }
   }
 
   /** Insert address row only when absent; returns true when a new row was created. */
@@ -546,14 +580,29 @@ export class Store {
       .all();
   }
 
+  private hackerListSelect() {
+    return {
+      address: addresses.address,
+      role: addresses.role,
+      label: addresses.label,
+      source: addresses.source,
+      isFlaggedHacker: addresses.isFlaggedHacker,
+      totalReceivedSats: addresses.totalReceivedSats,
+      liveBalanceSats: addresses.liveBalanceSats,
+      liveBalanceAt: addresses.liveBalanceAt,
+      lastGraphActivityAt: addresses.lastGraphActivityAt,
+    };
+  }
+
   async listHackers(q?: string, activeOnly?: boolean) {
     const conditions = [eq(addresses.isFlaggedHacker, true)];
     if (activeOnly) conditions.push(gt(addresses.totalReceivedSats, 0));
     const base = and(...conditions);
+    const select = this.hackerListSelect();
     if (q?.trim()) {
       const pattern = `%${escapeLikePattern(q.trim())}%`;
       return await this.db
-        .select()
+        .select(select)
         .from(addresses)
         .where(
           and(
@@ -567,12 +616,37 @@ export class Store {
         .orderBy(desc(addresses.totalReceivedSats))
         .all();
     }
-    return await this.db
-      .select()
-      .from(addresses)
-      .where(base)
-      .orderBy(desc(addresses.totalReceivedSats))
-      .all();
+    return await this.db.select(select).from(addresses).where(base).orderBy(desc(addresses.totalReceivedSats)).all();
+  }
+
+  async invalidateFlaggedHackersCache(): Promise<void> {
+    await this.updateSchedulerState({
+      flaggedHackersCacheJson: null,
+      flaggedHackersCacheAt: null,
+    });
+  }
+
+  async refreshFlaggedHackersCache(): Promise<FlaggedHackerCacheEntry[]> {
+    const rows = await this.listHackers();
+    const at = now();
+    await this.updateSchedulerState({
+      flaggedHackersCacheJson: serializeFlaggedHackersCache(rows),
+      flaggedHackersCacheAt: at,
+    });
+    return rows;
+  }
+
+  async listHackersCached(opts?: { maxAgeSec?: number; activeOnly?: boolean }): Promise<FlaggedHackerCacheEntry[]> {
+    const maxAgeSec = opts?.maxAgeSec ?? FLAGGED_HACKERS_CACHE_DEFAULT_TTL_SEC;
+    const state = await this.getSchedulerState();
+    if (isCacheFresh(state?.flaggedHackersCacheAt, maxAgeSec)) {
+      let rows = parseFlaggedHackersCache(state?.flaggedHackersCacheJson);
+      if (opts?.activeOnly) rows = rows.filter((row) => row.totalReceivedSats > 0);
+      return rows;
+    }
+    const rows = await this.refreshFlaggedHackersCache();
+    if (opts?.activeOnly) return rows.filter((row) => row.totalReceivedSats > 0);
+    return rows;
   }
 
   private async executeSqlBatch(statements: ReturnType<typeof sql>[]): Promise<void> {
@@ -599,6 +673,7 @@ export class Store {
   async upsertAddressesBatch(rows: AddressUpsertData[]): Promise<void> {
     if (rows.length === 0) return;
     const ts = now();
+    let flaggedCacheDirty = false;
     for (let i = 0; i < rows.length; i += this.d1BatchSize) {
       const chunk = rows.slice(i, i + this.d1BatchSize);
       const statements = chunk.map((data) => {
@@ -615,6 +690,7 @@ export class Store {
         const labelProvided = data.label !== undefined ? 1 : 0;
         const sourceProvided = data.source !== undefined ? 1 : 0;
         const isFlaggedHackerProvided = data.isFlaggedHacker !== undefined ? 1 : 0;
+        if (isFlaggedHackerProvided === 1) flaggedCacheDirty = true;
         const hopProvided = data.hopFromHacker !== undefined ? 1 : 0;
         const expandStatusProvided = data.expandStatus !== undefined ? 1 : 0;
         const totalReceivedProvided = data.totalReceivedSats !== undefined ? 1 : 0;
@@ -658,6 +734,9 @@ export class Store {
         `;
       });
       await this.executeSqlBatch(statements);
+    }
+    if (flaggedCacheDirty) {
+      await this.invalidateFlaggedHackersCache();
     }
   }
 
@@ -790,37 +869,27 @@ export class Store {
     feeSats?: number | null;
     opReturnDisplay?: string | null;
   }) {
-    const existing = await this.db.select().from(transactions).where(eq(transactions.txid, data.txid)).get();
-    let opReturnDisplay = existing?.opReturnDisplay ?? null;
-    if (data.opReturnDisplay !== undefined) {
-      const hasReadable = Boolean(existing?.opReturnDisplay && existing.opReturnDisplay !== "");
-      if (!hasReadable) {
-        opReturnDisplay = data.opReturnDisplay;
-      }
-    }
-    if (existing) {
-      await this.db
-        .update(transactions)
-        .set({
-          blockHeight: data.blockHeight ?? existing.blockHeight,
-          blockTime: data.blockTime ?? existing.blockTime,
-          feeSats: data.feeSats ?? existing.feeSats,
-          opReturnDisplay,
-        })
-        .where(eq(transactions.txid, data.txid))
-        .run();
-    } else {
-      await this.db
-        .insert(transactions)
-        .values({
-          txid: data.txid,
-          blockHeight: data.blockHeight ?? null,
-          blockTime: data.blockTime ?? null,
-          feeSats: data.feeSats ?? null,
-          opReturnDisplay: data.opReturnDisplay ?? null,
-        })
-        .run();
-    }
+    const opReturnProvided = data.opReturnDisplay !== undefined ? 1 : 0;
+    await this.db.run(sql`
+      INSERT INTO transactions (txid, block_height, block_time, fee_sats, op_return_display)
+      VALUES (
+        ${data.txid},
+        ${data.blockHeight ?? null},
+        ${data.blockTime ?? null},
+        ${data.feeSats ?? null},
+        ${data.opReturnDisplay ?? null}
+      )
+      ON CONFLICT(txid) DO UPDATE SET
+        block_height = COALESCE(excluded.block_height, transactions.block_height),
+        block_time = COALESCE(excluded.block_time, transactions.block_time),
+        fee_sats = COALESCE(excluded.fee_sats, transactions.fee_sats),
+        op_return_display = CASE
+          WHEN transactions.op_return_display IS NOT NULL AND transactions.op_return_display != ''
+            THEN transactions.op_return_display
+          WHEN ${opReturnProvided} = 1 THEN excluded.op_return_display
+          ELSE transactions.op_return_display
+        END
+    `);
   }
 
   async listTxidsMissingOpReturn(limit: number): Promise<string[]> {
@@ -1039,11 +1108,12 @@ export class Store {
   }
 
   /** Distinct victim addresses with in_to_hacker edges into this hacker (for graph filtering). */
-  async getVictimAddressSetForHacker(hacker: string): Promise<Set<string>> {
+  async getVictimAddressSetForHacker(hacker: string, limit = 1000): Promise<Set<string>> {
     const rows = await this.db
       .selectDistinct({ address: edges.fromAddress })
       .from(edges)
       .where(and(eq(edges.toAddress, hacker), eq(edges.direction, "in_to_hacker")))
+      .limit(limit)
       .all();
     return new Set(rows.map((row) => row.address));
   }
@@ -1229,6 +1299,7 @@ export class Store {
     const unique = [...new Set(spenderAddresses)];
     if (unique.length === 0) return [];
 
+    const sqlLimit = Math.max(limit * 3, limit);
     const rows: Array<{
       txid: string;
       txBlockHeight: number | null;
@@ -1251,6 +1322,7 @@ export class Store {
           desc(sql`coalesce(${transactions.blockHeight}, 0)`),
           desc(sql`coalesce(${transactions.blockTime}, ${edges.blockTime}, '')`),
         )
+        .limit(sqlLimit)
         .all();
       rows.push(...part);
     }
@@ -1280,6 +1352,7 @@ export class Store {
     address: string,
     limit = OP_RETURN_SPEND_TX_LIMIT,
   ): Promise<string[]> {
+    const sqlLimit = Math.max(limit * 3, limit);
     const rows = await this.db
       .select({
         txid: edges.txid,
@@ -1300,6 +1373,7 @@ export class Store {
         desc(sql`coalesce(${transactions.blockHeight}, 0)`),
         desc(sql`coalesce(${transactions.blockTime}, ${edges.blockTime}, '')`),
       )
+      .limit(sqlLimit)
       .all();
 
     const seen = new Set<string>();
@@ -1472,10 +1546,9 @@ export class Store {
     for (const row of rows) {
       let entry = byHacker.get(row.hackerAddress);
       if (!entry) {
-        const hacker = await this.getAddress(row.hackerAddress);
         entry = {
           address: row.hackerAddress,
-          label: hacker?.label ?? null,
+          label: null,
           totalSats: 0,
           edges: [],
         };
@@ -1487,6 +1560,11 @@ export class Store {
         amountSats: row.amountSats,
         blockTime: row.blockTime,
       });
+    }
+
+    const hackerAddrMap = await this.getAddressesMap([...byHacker.keys()]);
+    for (const entry of byHacker.values()) {
+      entry.label = hackerAddrMap.get(entry.address)?.label ?? null;
     }
 
     return [...byHacker.values()].sort((a, b) => b.totalSats - a.totalSats);
@@ -2139,6 +2217,10 @@ export class Store {
     d1RowsReadCron?: number;
     d1RowsWrittenCron?: number;
     workersRequestsCron?: number;
+    flaggedHackersCacheJson?: string | null;
+    flaggedHackersCacheAt?: string | null;
+    syncSnapshotJson?: string | null;
+    syncSnapshotAt?: string | null;
   }) {
     await this.db
       .update(schedulerState)
@@ -2181,21 +2263,46 @@ export class Store {
 
   async isD1QuotaBlocked(kind?: D1QuotaKind): Promise<boolean> {
     const state = await this.getSchedulerState();
-    const ts = Date.now();
-    const readBlocked =
-      state?.d1ReadRetryAfterAt != null && new Date(state.d1ReadRetryAfterAt).getTime() > ts;
-    const writeBlocked =
-      state?.d1WriteRetryAfterAt != null && new Date(state.d1WriteRetryAfterAt).getTime() > ts;
-    if (kind === "read") return readBlocked;
-    if (kind === "write") return writeBlocked;
-    return readBlocked || writeBlocked;
+    return isD1QuotaBlockedFromState(state, kind);
   }
 
-  async getD1QuotaStatus(limits?: {
-    rowsReadLimit: number;
-    rowsWrittenLimit: number;
-    workersRequestsLimit: number;
-  }): Promise<{
+  getD1QuotaStatusFromState(
+    state: SchedulerStateRow | null | undefined,
+    snapshot: {
+      rowsReadTotal: number;
+      rowsWrittenTotal: number;
+      workersRequestsTotal: number;
+    },
+    limits?: {
+      rowsReadLimit: number;
+      rowsWrittenLimit: number;
+      workersRequestsLimit: number;
+    },
+  ) {
+    return {
+      readRetryAfterAt: state?.d1ReadRetryAfterAt ?? null,
+      writeRetryAfterAt: state?.d1WriteRetryAfterAt ?? null,
+      blocked: isD1QuotaBlockedFromState(state),
+      rowsRead: snapshot.rowsReadTotal,
+      rowsWritten: snapshot.rowsWrittenTotal,
+      workersRequests: snapshot.workersRequestsTotal,
+      rowsReadLimit: limits?.rowsReadLimit ?? 5_000_000,
+      rowsWrittenLimit: limits?.rowsWrittenLimit ?? 100_000,
+      workersRequestsLimit: limits?.workersRequestsLimit ?? 100_000,
+    };
+  }
+
+  async getD1QuotaStatus(
+    limits?: {
+      rowsReadLimit: number;
+      rowsWrittenLimit: number;
+      workersRequestsLimit: number;
+    },
+    preloaded?: {
+      state?: SchedulerStateRow | null;
+      snapshot?: Awaited<ReturnType<Store["getQuotaSnapshot"]>>;
+    },
+  ): Promise<{
     readRetryAfterAt: string | null;
     writeRetryAfterAt: string | null;
     blocked: boolean;
@@ -2206,25 +2313,12 @@ export class Store {
     rowsWrittenLimit: number;
     workersRequestsLimit: number;
   }> {
-    const snapshot = await this.getQuotaSnapshot();
-    const state = await this.getSchedulerState();
-    const readRetryAfterAt = state?.d1ReadRetryAfterAt ?? null;
-    const writeRetryAfterAt = state?.d1WriteRetryAfterAt ?? null;
-    const blocked = await this.isD1QuotaBlocked();
-    return {
-      readRetryAfterAt,
-      writeRetryAfterAt,
-      blocked,
-      rowsRead: snapshot.rowsReadTotal,
-      rowsWritten: snapshot.rowsWrittenTotal,
-      workersRequests: snapshot.workersRequestsTotal,
-      rowsReadLimit: limits?.rowsReadLimit ?? 5_000_000,
-      rowsWrittenLimit: limits?.rowsWrittenLimit ?? 100_000,
-      workersRequestsLimit: limits?.workersRequestsLimit ?? 100_000,
-    };
+    const snapshot = preloaded?.snapshot ?? await this.getQuotaSnapshot(preloaded?.state);
+    const state = preloaded?.state ?? await this.getSchedulerState();
+    return this.getD1QuotaStatusFromState(state, snapshot, limits);
   }
 
-  async getQuotaSnapshot(): Promise<{
+  async getQuotaSnapshot(preloadedState?: SchedulerStateRow | null): Promise<{
     quotaDayUtc: string;
     rowsReadTotal: number;
     rowsWrittenTotal: number;
@@ -2234,7 +2328,7 @@ export class Store {
     workersRequestsCron: number;
   }> {
     const today = todayUtcDate();
-    const state = await this.getSchedulerState();
+    const state = preloadedState ?? await this.getSchedulerState();
     if (!state) {
       return {
         quotaDayUtc: today,
@@ -2577,6 +2671,105 @@ export class Store {
     `);
   }
 
+  async getLastCompletedJobSummary(): Promise<SyncSnapshotLastCompletedJob> {
+    const lastDoneJob = await this.db
+      .select()
+      .from(jobs)
+      .where(eq(jobs.status, "done"))
+      .orderBy(sql`coalesce(${jobs.completedAt}, ${jobs.createdAt}) desc`, desc(jobs.id))
+      .limit(1)
+      .get();
+
+    const at = lastDoneJob?.completedAt ?? lastDoneJob?.createdAt ?? null;
+    const type = lastDoneJob?.type ?? null;
+    let durationMs: number | null = null;
+    if (lastDoneJob?.startedAt && lastDoneJob?.completedAt) {
+      const startMs = new Date(lastDoneJob.startedAt).getTime();
+      const endMs = new Date(lastDoneJob.completedAt).getTime();
+      if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs >= startMs) {
+        durationMs = endMs - startMs;
+      }
+    }
+    return { type, durationMs, at };
+  }
+
+  async computeStatsCounts(): Promise<SyncSnapshotStats> {
+    const victims = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(addresses)
+      .where(eq(addresses.role, "victim"))
+      .get();
+    const hackers = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(addresses)
+      .where(and(eq(addresses.isFlaggedHacker, true), gt(addresses.totalReceivedSats, 0)))
+      .get();
+    const totalIn = await this.db
+      .select({ total: sql<number>`coalesce(sum(${edges.amountSats}), 0)` })
+      .from(edges)
+      .where(eq(edges.direction, "in_to_hacker"))
+      .get();
+    const totalOut = await this.db
+      .select({ total: sql<number>`coalesce(sum(${edges.amountSats}), 0)` })
+      .from(edges)
+      .where(eq(edges.direction, "out_from_hacker"))
+      .get();
+    return {
+      victimCount: victims?.count ?? 0,
+      hackerCount: hackers?.count ?? 0,
+      totalInSats: totalIn?.total ?? 0,
+      totalOutSats: totalOut?.total ?? 0,
+    };
+  }
+
+  async refreshSyncSnapshot(params: SyncSnapshotParams): Promise<SyncSnapshotV1> {
+    const crawl = await this.getCrawlStats();
+    const monitor = await this.getDownstreamMonitorStats(
+      params.maxCrawlDepth,
+      params.downstreamPollIntervalSec,
+    );
+    const lastCompletedJob = await this.getLastCompletedJobSummary();
+    const stats = await this.computeStatsCounts();
+    const snapshot: SyncSnapshotV1 = {
+      v: 1,
+      at: now(),
+      params,
+      crawl: {
+        crawlPendingCount: crawl.crawlPendingCount,
+        crawlExpandedCount: crawl.crawlExpandedCount,
+        crawlMaxHopReached: crawl.crawlMaxHopReached,
+      },
+      monitor: {
+        treeNodeCount: monitor.treeNodeCount,
+        downstreamPollDueCount: monitor.downstreamPollDueCount,
+      },
+      lastCompletedJob,
+      stats,
+    };
+    await this.updateSchedulerState({
+      syncSnapshotJson: serializeSyncSnapshot(snapshot),
+      syncSnapshotAt: snapshot.at,
+    });
+    return snapshot;
+  }
+
+  async getSyncSnapshot(
+    params: SyncSnapshotParams,
+    opts?: { maxAgeSec?: number },
+  ): Promise<SyncSnapshotV1 | null> {
+    const maxAgeSec = opts?.maxAgeSec ?? SYNC_SNAPSHOT_DEFAULT_TTL_SEC;
+    const state = await this.getSchedulerState();
+    const parsed = parseSyncSnapshot(state?.syncSnapshotJson);
+    if (
+      parsed &&
+      isCacheFresh(state?.syncSnapshotAt ?? parsed.at, maxAgeSec) &&
+      syncSnapshotParamsMatch(parsed, params)
+    ) {
+      return parsed;
+    }
+    return null;
+  }
+
   async getCrawlStats() {
     const pending = await this.db
       .select({ count: sql<number>`count(*)` })
@@ -2751,8 +2944,17 @@ export class Store {
       .run();
   }
 
-  async getMonitoringStatus(staleSec: number, thresholdCooldownSec: number) {
-    const scheduler = await this.getSchedulerState();
+  async getMonitoringStatus(
+    staleSec: number,
+    thresholdCooldownSec: number,
+    preloaded?: {
+      scheduler?: SchedulerStateRow | null;
+      lastCompletedJob?: SyncSnapshotLastCompletedJob;
+    },
+  ) {
+    const scheduler = preloaded?.scheduler ?? await this.getSchedulerState();
+    const lastCompleted =
+      preloaded?.lastCompletedJob ?? await this.getLastCompletedJobSummary();
     const lastChainApiAt = scheduler?.lastProviderSuccessAt ?? null;
     const lastApiThresholdAt = scheduler?.lastApiThresholdAt ?? null;
     const apiThresholdCount = scheduler?.apiThresholdCount ?? 0;
@@ -2799,26 +3001,11 @@ export class Store {
       }
     }
 
-    const lastDoneJob = await this.db
-      .select()
-      .from(jobs)
-      .where(eq(jobs.status, "done"))
-      .orderBy(sql`coalesce(${jobs.completedAt}, ${jobs.createdAt}) desc`, desc(jobs.id))
-      .limit(1)
-      .get();
-
-    const lastCompletedJobAt = lastDoneJob?.completedAt ?? lastDoneJob?.createdAt ?? null;
-    const lastCompletedJobType = lastDoneJob?.type ?? null;
-    let lastCompletedJobDurationMs: number | null = null;
-    if (lastDoneJob?.startedAt && lastDoneJob?.completedAt) {
-      const startMs = new Date(lastDoneJob.startedAt).getTime();
-      const endMs = new Date(lastDoneJob.completedAt).getTime();
-      if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs >= startMs) {
-        lastCompletedJobDurationMs = endMs - startMs;
-      }
-    }
-
-    const lastJobAt = lastCompletedJobAt;
+    const lastDoneJobAt = lastCompleted.at;
+    const lastCompletedJobAt = lastCompleted.at;
+    const lastCompletedJobType = lastCompleted.type;
+    const lastCompletedJobDurationMs = lastCompleted.durationMs;
+    const lastJobAt = lastDoneJobAt;
 
     const candidates = [lastChainApiAt, lastExternalSyncAt, lastJobAt].filter(Boolean) as string[];
     const lastActivityAt =
@@ -2849,7 +3036,7 @@ export class Store {
     };
   }
 
-  async getStats() {
+  async getStats(snapshotParams?: SyncSnapshotParams) {
     const result = {
       victimCount: 0,
       hackerCount: 0,
@@ -2859,46 +3046,35 @@ export class Store {
       btcUsdPrice: null as number | null,
       btcUsdPriceAt: null as string | null,
     };
-    try {
-      const victims = await this.db
-        .select({ count: sql<number>`count(*)` })
-        .from(addresses)
-        .where(eq(addresses.role, "victim"))
-        .get();
-      result.victimCount = victims?.count ?? 0;
-    } catch (err) {
-      console.error("getStats victimCount failed", err);
+
+    let usedSnapshotStats = false;
+    if (snapshotParams) {
+      try {
+        const snapshot = await this.getSyncSnapshot(snapshotParams);
+        if (snapshot) {
+          result.victimCount = snapshot.stats.victimCount;
+          result.hackerCount = snapshot.stats.hackerCount;
+          result.totalInSats = snapshot.stats.totalInSats;
+          result.totalOutSats = snapshot.stats.totalOutSats;
+          usedSnapshotStats = true;
+        }
+      } catch (err) {
+        console.error("getStats sync snapshot failed", err);
+      }
     }
-    try {
-      const hackers = await this.db
-        .select({ count: sql<number>`count(*)` })
-        .from(addresses)
-        .where(and(eq(addresses.isFlaggedHacker, true), gt(addresses.totalReceivedSats, 0)))
-        .get();
-      result.hackerCount = hackers?.count ?? 0;
-    } catch (err) {
-      console.error("getStats hackerCount failed", err);
+
+    if (!usedSnapshotStats) {
+      try {
+        const counts = await this.computeStatsCounts();
+        result.victimCount = counts.victimCount;
+        result.hackerCount = counts.hackerCount;
+        result.totalInSats = counts.totalInSats;
+        result.totalOutSats = counts.totalOutSats;
+      } catch (err) {
+        console.error("getStats counts failed", err);
+      }
     }
-    try {
-      const totalIn = await this.db
-        .select({ total: sql<number>`coalesce(sum(${edges.amountSats}), 0)` })
-        .from(edges)
-        .where(eq(edges.direction, "in_to_hacker"))
-        .get();
-      result.totalInSats = totalIn?.total ?? 0;
-    } catch (err) {
-      console.error("getStats totalInSats failed", err);
-    }
-    try {
-      const totalOut = await this.db
-        .select({ total: sql<number>`coalesce(sum(${edges.amountSats}), 0)` })
-        .from(edges)
-        .where(eq(edges.direction, "out_from_hacker"))
-        .get();
-      result.totalOutSats = totalOut?.total ?? 0;
-    } catch (err) {
-      console.error("getStats totalOutSats failed", err);
-    }
+
     try {
       const lastJob = await this.db
         .select()

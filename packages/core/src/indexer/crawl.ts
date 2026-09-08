@@ -156,6 +156,11 @@ export async function scheduleDownstreamCrawl(
     return { ...emptyStats, skipNonCritical: true };
   }
 
+  await store.refreshFlaggedHackersCache().catch((err: unknown) => {
+    console.error("refreshFlaggedHackersCache failed", err);
+  });
+  const hackers = await store.listHackersCached();
+
   const ts = Date.now();
   const enqueueCache = await loadScheduleEnqueueCache(store);
   const throttled = enqueueCache.queueDepth >= config.queueSoftThrottleDepth;
@@ -190,7 +195,6 @@ export async function scheduleDownstreamCrawl(
     config.opReturnBackfillEveryNCrons > 0 &&
     tick % config.opReturnBackfillEveryNCrons === 0;
   if (isMaintTick && !scheduleBudgetLow(budget, reserve, 8)) {
-    const hackers = await store.listHackers();
     if (hackers.length > 0) {
       const idx = await store.claimNextHackerPollIndex(hackers.length);
       await maintainOneHacker(store, config, hackers[idx]!, ts);
@@ -224,11 +228,11 @@ export async function scheduleDownstreamCrawl(
     }
   }
 
-  const hackers = await store.listHackers();
-  if (hackers.length > 0) {
-    const idx = await store.claimNextHackerPollIndex(hackers.length);
+  const hackersForCrawl = hackers;
+  if (hackersForCrawl.length > 0) {
+    const idx = await store.claimNextHackerPollIndex(hackersForCrawl.length);
     const frontier = await store.getCrawlEnqueueCandidates(
-      hackers[idx]!.address,
+      hackersForCrawl[idx]!.address,
       config.crawlEnqueuePerCron,
       config.maxCrawlDepth,
     );
@@ -262,6 +266,15 @@ export async function scheduleDownstreamCrawl(
     );
     if (jobId != null) pollEnqueued++;
   }
+
+  await store
+    .refreshSyncSnapshot({
+      maxCrawlDepth: config.maxCrawlDepth,
+      downstreamPollIntervalSec: config.downstreamPollIntervalSec,
+    })
+    .catch((err: unknown) => {
+      console.error("refreshSyncSnapshot failed", err);
+    });
 
   return {
     skipNonCritical,

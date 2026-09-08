@@ -406,8 +406,15 @@ export async function listQueue(store: Store, config: AppConfig, opts: ListQueue
   }
 
   const rebuildActive = await isRebuildActive(store, config);
-  const crawl = await store.getCrawlStats();
-  const monitor = await store.getDownstreamMonitorStats(config.maxCrawlDepth, config.downstreamPollIntervalSec);
+  const snapshotParams = {
+    maxCrawlDepth: config.maxCrawlDepth,
+    downstreamPollIntervalSec: config.downstreamPollIntervalSec,
+  };
+  const snapshot = await store.getSyncSnapshot(snapshotParams);
+  const crawl = snapshot?.crawl ?? await store.getCrawlStats();
+  const monitor =
+    snapshot?.monitor ??
+    await store.getDownstreamMonitorStats(config.maxCrawlDepth, config.downstreamPollIntervalSec);
   const scheduler = await store.getSchedulerState();
 
   const result: ListQueueResult = {

@@ -102,6 +102,9 @@ function baseConfig(): AppConfig {
 function mockStore(overrides: Partial<Store> = {}): Store {
   return {
     listHackers: vi.fn().mockResolvedValue([]),
+    listHackersCached: vi.fn().mockResolvedValue([]),
+    refreshFlaggedHackersCache: vi.fn().mockResolvedValue([]),
+    refreshSyncSnapshot: vi.fn().mockResolvedValue(undefined),
     hasPendingJob: vi.fn().mockResolvedValue(false),
     countActiveJobs: vi.fn().mockResolvedValue(0),
     getAddress: vi.fn(),
@@ -231,7 +234,7 @@ describe("scheduleDownstreamCrawl", () => {
   it("skips all cron enqueue when rebuild is active", async () => {
     const store = mockStore({
       countActiveJobs: vi.fn().mockResolvedValue(5),
-      listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack", liveBalanceAt: null }]),
+      listHackersCached: vi.fn().mockResolvedValue([{ address: "bc1qhack", liveBalanceAt: null }]),
       getSourceSync: vi.fn().mockResolvedValue(null),
       getCrawlEnqueueCandidates: vi.fn().mockResolvedValue([{ address: "bc1qdown" }]),
       listDownstreamForPoll: vi.fn().mockResolvedValue([{ address: "bc1qdown2" }]),
@@ -245,7 +248,7 @@ describe("scheduleDownstreamCrawl", () => {
   it("skips hacker maintenance when counter is not divisible by stride", async () => {
     const store = mockStore({
       incrementMaintenanceCronCounter: vi.fn().mockResolvedValue(7),
-      listHackers: vi.fn().mockResolvedValue([{ address: "bc1qa" }]),
+      listHackersCached: vi.fn().mockResolvedValue([{ address: "bc1qa" }]),
       getSourceSync: vi.fn().mockResolvedValue({ lastSyncAt: new Date().toISOString() }),
       getCrawlEnqueueCandidates: vi.fn().mockResolvedValue([]),
       listDownstreamForPoll: vi.fn().mockResolvedValue([]),
@@ -253,13 +256,13 @@ describe("scheduleDownstreamCrawl", () => {
 
     await scheduleDownstreamCrawl(store, baseConfig(), unlimitedBudget, 0);
 
-    expect(store.listHackers).toHaveBeenCalled();
+    expect(store.listHackersCached).toHaveBeenCalled();
     expect(store.getBackfillState).not.toHaveBeenCalled();
   });
 
   it("skips poll when backfill is not complete on maintenance tick", async () => {
     const store = mockStore({
-      listHackers: vi.fn().mockResolvedValue([{ address: "bc1qa" }]),
+      listHackersCached: vi.fn().mockResolvedValue([{ address: "bc1qa" }]),
       getBackfillState: vi.fn().mockResolvedValue({ backfillComplete: false }),
       getSourceSync: vi.fn().mockResolvedValue({ lastSyncAt: new Date().toISOString() }),
       claimNextHackerPollIndex: vi.fn().mockResolvedValue(0),
@@ -278,12 +281,33 @@ describe("scheduleDownstreamCrawl", () => {
     );
   });
 
+  it("calls listHackersCached once per tick", async () => {
+    const hackers = [{ address: "bc1qa" }, { address: "bc1qb" }];
+    const store = mockStore({
+      incrementMaintenanceCronCounter: vi.fn().mockResolvedValue(10),
+      listHackersCached: vi.fn().mockResolvedValue(hackers),
+      getBackfillState: vi.fn().mockResolvedValue({ backfillComplete: true }),
+      getSyncState: vi.fn().mockResolvedValue(null),
+      getSourceSync: vi.fn().mockResolvedValue({ lastSyncAt: new Date().toISOString() }),
+      claimNextHackerPollIndex: vi.fn().mockResolvedValue(0),
+      getCrawlEnqueueCandidates: vi.fn().mockResolvedValue([]),
+      listDownstreamForPoll: vi.fn().mockResolvedValue([]),
+    });
+
+    await scheduleDownstreamCrawl(store, baseConfig(), unlimitedBudget, 0);
+
+    expect(store.refreshFlaggedHackersCache).toHaveBeenCalledOnce();
+    expect(store.listHackersCached).toHaveBeenCalledOnce();
+    expect(store.refreshSyncSnapshot).toHaveBeenCalledOnce();
+    expect(store.listHackers).not.toHaveBeenCalled();
+  });
+
   it("maintains exactly one hacker per maintenance tick", async () => {
     const hackers = [{ address: "bc1qa" }, { address: "bc1qb" }, { address: "bc1qc" }];
     const getBackfillState = vi.fn().mockResolvedValue({ backfillComplete: true });
     const getSyncState = vi.fn().mockResolvedValue(null);
     const store = mockStore({
-      listHackers: vi.fn().mockResolvedValue(hackers),
+      listHackersCached: vi.fn().mockResolvedValue(hackers),
       getBackfillState,
       getSyncState,
       getSourceSync: vi.fn().mockResolvedValue({ lastSyncAt: new Date().toISOString() }),
@@ -308,7 +332,7 @@ describe("scheduleDownstreamCrawl", () => {
   it("round-robins maintenance starting from hacker_poll_index", async () => {
     const hackers = [{ address: "bc1qa" }, { address: "bc1qb" }];
     const store = mockStore({
-      listHackers: vi.fn().mockResolvedValue(hackers),
+      listHackersCached: vi.fn().mockResolvedValue(hackers),
       getBackfillState: vi.fn().mockResolvedValue({ backfillComplete: true }),
       getSyncState: vi.fn().mockResolvedValue(null),
       getSourceSync: vi.fn().mockResolvedValue({ lastSyncAt: new Date().toISOString() }),
@@ -332,7 +356,7 @@ describe("scheduleDownstreamCrawl", () => {
   it("enqueues backfill heal for backfilling hacker on maintenance tick", async () => {
     const addr = "bc1qhack";
     const store = mockStore({
-      listHackers: vi.fn().mockResolvedValue([{ address: addr }]),
+      listHackersCached: vi.fn().mockResolvedValue([{ address: addr }]),
       getAddress: vi.fn().mockResolvedValue({ address: addr, expandStatus: "backfilling" }),
       getBackfillState: vi.fn().mockResolvedValue({
         payload: { chainCursor: "txabc", pagesExhausted: false },
@@ -362,7 +386,7 @@ describe("scheduleDownstreamCrawl", () => {
       getQueueDepth: vi.fn().mockResolvedValue(80),
       getSchedulerState: vi.fn().mockResolvedValue({ queueSchedulingPaused: 0 }),
       incrementMaintenanceCronCounter: vi.fn().mockResolvedValue(10),
-      listHackers: vi.fn().mockResolvedValue([{ address: "bc1qa" }]),
+      listHackersCached: vi.fn().mockResolvedValue([{ address: "bc1qa" }]),
       getBackfillState: vi.fn().mockResolvedValue({ backfillComplete: true }),
       getSyncState: vi.fn().mockResolvedValue(null),
       getSourceSync: vi.fn().mockResolvedValue({ lastSyncAt: new Date().toISOString() }),
@@ -391,7 +415,7 @@ describe("scheduleDownstreamCrawl", () => {
       getQueueDepth: vi.fn().mockResolvedValue(10),
       getSchedulerState: vi.fn().mockResolvedValue({ queueSchedulingPaused: 0 }),
       incrementMaintenanceCronCounter: vi.fn().mockResolvedValue(11),
-      listHackers: vi.fn().mockResolvedValue([{ address: "bc1qh1" }]),
+      listHackersCached: vi.fn().mockResolvedValue([{ address: "bc1qh1" }]),
       claimNextHackerPollIndex: vi.fn().mockResolvedValue(0),
       getSourceSync: vi.fn().mockResolvedValue({ lastSyncAt: new Date().toISOString() }),
       getCrawlEnqueueCandidates: vi.fn().mockResolvedValue([{ address: "bc1qdown" }]),

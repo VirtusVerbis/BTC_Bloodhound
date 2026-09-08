@@ -208,7 +208,9 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
 
   app.get("/api/hackers", async (c) => {
     const q = c.req.query("q");
-    const hackers = await store.listHackers(q, true);
+    const hackers = q?.trim()
+      ? await store.listHackers(q, true)
+      : await store.listHackersCached({ activeOnly: true });
     const recentHackers = await store.getRecentHackersActivity();
     const recentByAddress = new Map(recentHackers.map((entry) => [entry.address, entry]));
     return c.json({
@@ -361,10 +363,20 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
   });
 
   app.get("/api/stats", async (c) => {
-    return c.json(await store.getStats());
+    return c.json(
+      await store.getStats({
+        maxCrawlDepth: config.maxCrawlDepth,
+        downstreamPollIntervalSec: config.downstreamPollIntervalSec,
+      }),
+    );
   });
 
   app.get("/api/sync/status", async (c) => {
+    const snapshotParams = {
+      maxCrawlDepth: config.maxCrawlDepth,
+      downstreamPollIntervalSec: config.downstreamPollIntervalSec,
+    };
+
     let scheduler: Awaited<ReturnType<Store["getSchedulerState"]>>;
     try {
       scheduler = await store.getSchedulerState();
@@ -373,21 +385,32 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
       scheduler = undefined;
     }
 
-    let crawl = { crawlPendingCount: 0, crawlExpandedCount: 0, crawlMaxHopReached: 0 };
+    let snapshot: Awaited<ReturnType<Store["getSyncSnapshot"]>> = null;
     try {
-      crawl = await store.getCrawlStats();
+      snapshot = await store.getSyncSnapshot(snapshotParams);
     } catch (err) {
-      console.error("sync/status getCrawlStats failed", err);
+      console.error("sync/status getSyncSnapshot failed", err);
     }
 
-    let monitor = { treeNodeCount: 0, downstreamPollDueCount: 0 };
-    try {
-      monitor = await store.getDownstreamMonitorStats(
-        config.maxCrawlDepth,
-        config.downstreamPollIntervalSec,
-      );
-    } catch (err) {
-      console.error("sync/status getDownstreamMonitorStats failed", err);
+    let crawl = snapshot?.crawl ?? { crawlPendingCount: 0, crawlExpandedCount: 0, crawlMaxHopReached: 0 };
+    if (!snapshot) {
+      try {
+        crawl = await store.getCrawlStats();
+      } catch (err) {
+        console.error("sync/status getCrawlStats failed", err);
+      }
+    }
+
+    let monitor = snapshot?.monitor ?? { treeNodeCount: 0, downstreamPollDueCount: 0 };
+    if (!snapshot) {
+      try {
+        monitor = await store.getDownstreamMonitorStats(
+          config.maxCrawlDepth,
+          config.downstreamPollIntervalSec,
+        );
+      } catch (err) {
+        console.error("sync/status getDownstreamMonitorStats failed", err);
+      }
     }
 
     let monitoring: Awaited<ReturnType<Store["getMonitoringStatus"]>>;
@@ -395,6 +418,10 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
       monitoring = await store.getMonitoringStatus(
         config.monitoringStaleSec,
         config.apiThresholdCooldownSec,
+        {
+          scheduler,
+          lastCompletedJob: snapshot?.lastCompletedJob,
+        },
       );
     } catch (err) {
       console.error("sync/status getMonitoringStatus failed", err);
@@ -432,26 +459,22 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
       rowsWrittenLimit: config.d1WriteDailyLimit,
       workersRequestsLimit: config.workersRequestDailyLimit,
     };
+    let pendingProcessTx = 0;
     try {
       queueDepth = await store.getQueueDepth();
       pendingQueueDepthAll = await store.getPendingQueueDepthAll();
-      d1Quota = await store.getD1QuotaStatus(quotaLimits(config));
+      const quotaSnapshot = await store.getQuotaSnapshot(scheduler);
+      d1Quota = store.getD1QuotaStatusFromState(scheduler, quotaSnapshot, quotaLimits(config));
+      pendingProcessTx = await store.countActiveJobs("process_tx");
     } catch (err) {
-      console.error("sync/status getQueueDepth failed", err);
+      console.error("sync/status queue/quota failed", err);
     }
 
     let rebuildActive = false;
     try {
-      rebuildActive = await isRebuildActive(store, config);
+      rebuildActive = await isRebuildActive(store, config, pendingProcessTx);
     } catch (err) {
       console.error("sync/status isRebuildActive failed", err);
-    }
-
-    let pendingProcessTx = 0;
-    try {
-      pendingProcessTx = await store.countActiveJobs("process_tx");
-    } catch (err) {
-      console.error("sync/status countActiveJobs failed", err);
     }
 
     return c.json({

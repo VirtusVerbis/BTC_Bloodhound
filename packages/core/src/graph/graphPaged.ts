@@ -327,7 +327,10 @@ export async function buildGraphL2Page(
   if (options.cursor && !l2Cursor) throw new Error("invalid cursor");
 
   const parentAddrMap = await store.getAddressesMap(token.parents);
-  const victimSet = await store.getVictimAddressSetForHacker(token.hacker);
+  const victimSet = await store.getVictimAddressSetForHacker(
+    token.hacker,
+    Math.max(token.maxPerParent * token.parents.length, 100),
+  );
   const expandableParents = token.parents.filter((id: string) => {
     const row = parentAddrMap.get(id);
     return (row?.hopFromHacker ?? 1) < token.maxGraphDepth;

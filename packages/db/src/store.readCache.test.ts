@@ -1,0 +1,101 @@
+import { describe, expect, it, beforeEach } from "vitest";
+import { openDatabase, runMigrations, Store } from "./index.js";
+
+describe("read cache", () => {
+  let store: Store;
+
+  beforeEach(() => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    store = new Store(db);
+  });
+
+  it("listHackersCached serves fresh cache without re-querying addresses", async () => {
+    await store.upsertAddress({
+      address: "bc1qhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+      totalReceivedSats: 5000,
+      label: "H1",
+    });
+    await store.refreshFlaggedHackersCache();
+
+    await store.upsertAddress({
+      address: "bc1qother",
+      role: "hacker",
+      totalReceivedSats: 1000,
+    });
+
+    const cached = await store.listHackersCached();
+    expect(cached).toHaveLength(1);
+    expect(cached[0]!.address).toBe("bc1qhacker");
+  });
+
+  it("invalidates flagged hackers cache when isFlaggedHacker is upserted", async () => {
+    await store.upsertAddress({
+      address: "bc1qhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+      totalReceivedSats: 5000,
+    });
+    await store.refreshFlaggedHackersCache();
+
+    await store.upsertAddress({
+      address: "bc1qnew",
+      role: "hacker",
+      isFlaggedHacker: true,
+      totalReceivedSats: 2000,
+    });
+
+    const rows = await store.listHackersCached();
+    expect(rows.map((r) => r.address).sort()).toEqual(["bc1qhacker", "bc1qnew"].sort());
+  });
+
+  it("getSyncSnapshot returns null when params mismatch", async () => {
+    await store.refreshSyncSnapshot({
+      maxCrawlDepth: 5,
+      downstreamPollIntervalSec: 600,
+    });
+
+    const snap = await store.getSyncSnapshot({
+      maxCrawlDepth: 3,
+      downstreamPollIntervalSec: 600,
+    });
+    expect(snap).toBeNull();
+  });
+
+  it("refreshSyncSnapshot includes stats counts", async () => {
+    await store.upsertAddress({ address: "bc1qvictim", role: "victim" });
+    await store.upsertAddress({
+      address: "bc1qhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+      totalReceivedSats: 100,
+    });
+
+    const snapshot = await store.refreshSyncSnapshot({
+      maxCrawlDepth: 5,
+      downstreamPollIntervalSec: 600,
+    });
+
+    expect(snapshot.stats.victimCount).toBe(1);
+    expect(snapshot.stats.hackerCount).toBe(1);
+    expect(snapshot.v).toBe(1);
+  });
+
+  it("getStats uses snapshot stats when fresh", async () => {
+    await store.upsertAddress({ address: "bc1qvictim", role: "victim" });
+    await store.refreshSyncSnapshot({
+      maxCrawlDepth: 5,
+      downstreamPollIntervalSec: 600,
+    });
+
+    await store.upsertAddress({ address: "bc1qvictim2", role: "victim" });
+
+    const stats = await store.getStats({
+      maxCrawlDepth: 5,
+      downstreamPollIntervalSec: 600,
+    });
+    expect(stats.victimCount).toBe(1);
+  });
+});

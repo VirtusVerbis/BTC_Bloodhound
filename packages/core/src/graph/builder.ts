@@ -224,7 +224,7 @@ export async function buildGraph(
   const addressLookupBudget = () => MAX_GRAPH_ADDRESS_LOOKUPS - level1Ids.length - level2Ids.length;
 
   if (depth > 1) {
-    const victimSet = await store.getVictimAddressSetForHacker(hacker);
+    const victimSet = await store.getVictimAddressSetForHacker(hacker, maxVictims);
     const expandableParents = level1Ids.filter((id) => {
       const row = level1AddrMap.get(id);
       return (row?.hopFromHacker ?? 1) < depth;

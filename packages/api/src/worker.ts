@@ -9,6 +9,7 @@ import {
   loadConfig,
   logCronDetail,
   logCronError,
+  logCronException,
   runIndexerTick,
   shouldPaceCron,
   TICK_LEASE_SKEW_MS,
@@ -180,14 +181,14 @@ const worker = {
         try {
           await flushCronQuota(store, d1RowMeter, meterStart);
         } catch (err) {
-          logCronError(`[cron] flushQuotaUsage failed: ${String(err)}`, config.indexerLogColor);
+          logCronException("[cron] flushQuotaUsage failed: ", err, config.indexerLogColor);
         }
         await clearTickLeaseSafe(store, (msg) =>
           logCronError(`[cron] clearTickLease failed: ${msg}`, config.indexerLogColor),
         );
       }
     } catch (err) {
-      logCronError(`[cron] scheduled failed: ${String(err)}`, config.indexerLogColor);
+      logCronException("[cron] scheduled failed: ", err, config.indexerLogColor);
     }
   },
 };

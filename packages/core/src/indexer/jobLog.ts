@@ -153,6 +153,15 @@ export function logCronError(message: string, color = false, colorMode?: Indexer
   emitLog(console.error, message, color, colorMode);
 }
 
+export function logCronException(
+  prefix: string,
+  err: unknown,
+  color = false,
+  colorMode?: IndexerLogColorMode,
+): void {
+  logCronError(`${prefix}${formatErrorMessage(err)}`, color, colorMode);
+}
+
 export function logJobFail(
   job: Job,
   err: unknown,

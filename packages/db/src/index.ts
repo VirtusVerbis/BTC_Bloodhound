@@ -259,6 +259,18 @@ export function runMigrations(sqlite: Database.Database): void {
   if (!schedulerCols.some((c) => c.name === "workers_requests_cron")) {
     sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN workers_requests_cron INTEGER NOT NULL DEFAULT 0`);
   }
+  if (!schedulerCols.some((c) => c.name === "flagged_hackers_cache_json")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN flagged_hackers_cache_json TEXT`);
+  }
+  if (!schedulerCols.some((c) => c.name === "flagged_hackers_cache_at")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN flagged_hackers_cache_at TEXT`);
+  }
+  if (!schedulerCols.some((c) => c.name === "sync_snapshot_json")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN sync_snapshot_json TEXT`);
+  }
+  if (!schedulerCols.some((c) => c.name === "sync_snapshot_at")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN sync_snapshot_at TEXT`);
+  }
 
   const syncCols = sqlite.prepare("PRAGMA table_info(sync_state)").all() as Array<{ name: string }>;
   if (!syncCols.some((c) => c.name === "backfill_state_json")) {
@@ -333,11 +345,33 @@ export function runMigrations(sqlite: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_edges_from_dir_amount
       ON edges(from_address, direction, amount_sats, to_address);
   `);
+
+  sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_addresses_flagged_received
+      ON addresses(is_flagged_hacker, total_received_sats DESC);
+  `);
+  sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_addresses_role ON addresses(role);`);
+  sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_addresses_expand_status ON addresses(expand_status);`);
+  sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_addresses_role_hop ON addresses(role, hop_from_hacker);
+  `);
+  sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_jobs_done_completed
+      ON jobs(completed_at DESC, created_at DESC) WHERE status = 'done';
+  `);
+  sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_edges_to_dir ON edges(to_address, direction);
+  `);
+  sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_transactions_missing_op_return
+      ON transactions(txid) WHERE op_return_display IS NULL;
+  `);
 }
 
 export * from "./schema.js";
 export * from "./store.js";
 export * from "./recentHackers.js";
+export * from "./readCache.js";
 // D1 helper is also available via `@cointrace/db/d1` (avoids bundling better-sqlite3 in Workers).
 export { createD1Store, instrumentD1Binding, type D1Binding, type D1Db, type D1SubrequestSink } from "./d1.js";
 export {
