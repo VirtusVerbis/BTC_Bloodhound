@@ -96,6 +96,10 @@ export async function runScheduledMaintenance(
 
   result.seedCache = await store.seedLastCompletedJobCache();
 
+  if (maintenanceCronCounter % 60 === 0) {
+    await store.reconcileStatsCounters();
+  }
+
   const pruneDueTick =
     config.jobPruneIntervalDays > 0 &&
     maintenanceCronCounter % (config.jobPruneIntervalDays * 1440) === 0;

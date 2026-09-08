@@ -51,6 +51,34 @@ describe("read cache", () => {
     expect(rows.map((r) => r.address).sort()).toEqual(["bc1qhacker", "bc1qnew"].sort());
   });
 
+  it("maybeRefreshSyncSnapshot skips when snapshot is fresh and not dirty", async () => {
+    const snapshot = await store.refreshSyncSnapshot({
+      maxCrawlDepth: 5,
+      downstreamPollIntervalSec: 600,
+    });
+
+    const again = await store.maybeRefreshSyncSnapshot({
+      maxCrawlDepth: 5,
+      downstreamPollIntervalSec: 600,
+    });
+    expect(again?.at).toBe(snapshot.at);
+  });
+
+  it("maybeRefreshSyncSnapshot refreshes when dirty", async () => {
+    await store.refreshSyncSnapshot({
+      maxCrawlDepth: 5,
+      downstreamPollIntervalSec: 600,
+    });
+    await store.markSyncSnapshotDirty();
+    await store.upsertAddress({ address: "bc1qvictim2", role: "victim" });
+
+    const snapshot = await store.maybeRefreshSyncSnapshot({
+      maxCrawlDepth: 5,
+      downstreamPollIntervalSec: 600,
+    });
+    expect(snapshot?.stats.victimCount).toBe(1);
+  });
+
   it("getSyncSnapshot returns null when params mismatch", async () => {
     await store.refreshSyncSnapshot({
       maxCrawlDepth: 5,

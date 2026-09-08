@@ -128,6 +128,15 @@ export const schedulerState = sqliteTable("scheduler_state", {
   maintenancePrunePending: integer("maintenance_prune_pending").notNull().default(0),
   maintenanceRunJson: text("maintenance_run_json"),
   crawlPendingCount: integer("crawl_pending_count").notNull().default(0),
+  syncSnapshotDirty: integer("sync_snapshot_dirty").notNull().default(0),
+  totalInSats: integer("total_in_sats").notNull().default(0),
+  totalOutSats: integer("total_out_sats").notNull().default(0),
+  victimCount: integer("victim_count").notNull().default(0),
+  hackerActiveCount: integer("hacker_active_count").notNull().default(0),
+  crawlExpandedCount: integer("crawl_expanded_count").notNull().default(0),
+  crawlMaxHopReached: integer("crawl_max_hop_reached").notNull().default(0),
+  downstreamTreeCount: integer("downstream_tree_count").notNull().default(0),
+  downstreamTreeMaxDepth: integer("downstream_tree_max_depth").notNull().default(0),
 });
 
 export const rateLimits = sqliteTable("rate_limits", {

@@ -158,24 +158,25 @@ export class RemoteReadStore {
 
   async getCrawlStats() {
     const state = this.client.query(
-      "SELECT crawl_pending_count FROM scheduler_state WHERE id = 1 LIMIT 1;",
-    )[0];
-    const expanded = this.client.query(
-      "SELECT COUNT(*) AS count FROM addresses WHERE expand_status = 'expanded';",
-    )[0];
-    const maxHop = this.client.query(
-      "SELECT MAX(hop_from_hacker) AS max FROM addresses WHERE role = 'downstream';",
+      "SELECT crawl_pending_count, crawl_expanded_count, crawl_max_hop_reached FROM scheduler_state WHERE id = 1 LIMIT 1;",
     )[0];
     return {
       crawlPendingCount: num(state?.crawl_pending_count),
-      crawlExpandedCount: num(expanded?.count),
-      crawlMaxHopReached: num(maxHop?.max),
+      crawlExpandedCount: num(state?.crawl_expanded_count),
+      crawlMaxHopReached: num(state?.crawl_max_hop_reached),
     };
   }
 
   async countDownstreamTreeNodes(maxDepth: number) {
+    const depth = Math.floor(maxDepth);
+    const state = this.client.query(
+      "SELECT downstream_tree_count, downstream_tree_max_depth FROM scheduler_state WHERE id = 1 LIMIT 1;",
+    )[0];
+    if (num(state?.downstream_tree_max_depth) === depth) {
+      return num(state?.downstream_tree_count);
+    }
     const row = this.client.query(
-      `SELECT COUNT(*) AS count FROM addresses WHERE role = 'downstream' AND hop_from_hacker < ${Math.floor(maxDepth)};`,
+      `SELECT COUNT(*) AS count FROM addresses WHERE role = 'downstream' AND hop_from_hacker < ${depth};`,
     )[0];
     return num(row?.count);
   }
@@ -185,14 +186,11 @@ export class RemoteReadStore {
     const row = this.client.query(`
 SELECT COUNT(*) AS count
 FROM addresses
+LEFT JOIN sync_state ON addresses.address = sync_state.address
 WHERE addresses.role = 'downstream'
   AND (addresses.expand_status = 'expanded' OR addresses.expand_status = 'pending')
   AND addresses.hop_from_hacker < ${Math.floor(maxDepth)}
-  AND NOT EXISTS (
-    SELECT 1 FROM sync_state s
-    WHERE s.address = addresses.address
-      AND s.last_polled_at > ${cutoff}
-  );
+  AND (sync_state.last_polled_at IS NULL OR sync_state.last_polled_at <= ${cutoff});
 `)[0];
     return num(row?.count);
   }
@@ -297,11 +295,7 @@ LEFT JOIN sync_state ON addresses.address = sync_state.address
 WHERE addresses.role = 'downstream'
   AND (addresses.expand_status = 'expanded' OR addresses.expand_status = 'pending')
   AND addresses.hop_from_hacker < ${Math.floor(maxDepth)}
-  AND NOT EXISTS (
-    SELECT 1 FROM sync_state s
-    WHERE s.address = addresses.address
-      AND s.last_polled_at > ${cutoff}
-  )
+  AND (sync_state.last_polled_at IS NULL OR sync_state.last_polled_at <= ${cutoff})
 ORDER BY sync_state.last_polled_at ASC, addresses.hop_from_hacker ASC
 LIMIT ${Math.max(0, Math.floor(limit))};
 `)

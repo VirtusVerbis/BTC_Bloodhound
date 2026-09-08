@@ -62,6 +62,16 @@ describe("crawl pending counter", () => {
     expect(await readCounter(store)).toBe(1);
   });
 
+  it("upsertAddressesBatch adjusts counter incrementally without reconcile", async () => {
+    const { store } = await openStore();
+    await store.upsertAddressesBatch([
+      { address: "bc1qdown1", role: "downstream", expandStatus: "pending" },
+      { address: "bc1qdown2", role: "downstream", expandStatus: "pending" },
+      { address: "bc1qvictim", role: "victim", expandStatus: "pending" },
+    ]);
+    expect(await readCounter(store)).toBe(2);
+  });
+
   it("reconcileCrawlPendingCount repairs drift", async () => {
     const { sqlite, store } = await openStore();
     await store.upsertAddress({ address: "bc1qdown1", role: "downstream", expandStatus: "pending" });

@@ -99,6 +99,18 @@ export function isCrawlPendingEligible(role: string, expandStatus: string): bool
   return expandStatus === "pending" && (role === "downstream" || role === "hacker");
 }
 
+function isExpandedStatus(expandStatus: string): boolean {
+  return expandStatus === "expanded";
+}
+
+function isHackerActive(isFlaggedHacker: boolean, totalReceivedSats: number): boolean {
+  return isFlaggedHacker && totalReceivedSats > 0;
+}
+
+function isDownstreamTreeNode(role: string, hop: number | null | undefined, maxDepth: number): boolean {
+  return role === "downstream" && hop != null && hop < maxDepth;
+}
+
 function isD1QuotaBlockedFromState(
   state: SchedulerStateRow | null | undefined,
   kind?: D1QuotaKind,
@@ -630,7 +642,9 @@ export class Store {
       const before = existing ? isCrawlPendingEligible(existing.role, existing.expandStatus) : false;
       const after = isCrawlPendingEligible(updated.role, updated.expandStatus);
       await this.adjustCrawlPendingCount((after ? 1 : 0) - (before ? 1 : 0));
+      await this.applyAddressStatsDelta(existing, updated);
     }
+    await this.markSyncSnapshotDirty();
   }
 
   /** Insert address row only when absent; returns true when a new row was created. */
@@ -658,6 +672,11 @@ export class Store {
     const inserted = changesCount(result as { changes?: number; meta?: { changes?: number } }) > 0;
     if (inserted && isCrawlPendingEligible(data.role ?? "unknown", data.expandStatus ?? "pending")) {
       await this.adjustCrawlPendingCount(1);
+    }
+    if (inserted) {
+      const row = await this.getAddress(data.address);
+      if (row) await this.applyAddressStatsDelta(undefined, row);
+      await this.markSyncSnapshotDirty();
     }
     return inserted;
   }
@@ -767,9 +786,21 @@ export class Store {
     }
   }
 
+  private async loadAddressesByList(addressList: string[]): Promise<Map<string, Address>> {
+    const unique = [...new Set(addressList)].filter(Boolean);
+    const out = new Map<string, Address>();
+    if (unique.length === 0) return out;
+    for (const chunk of chunkArray(unique, D1_IN_CLAUSE_CHUNK_SIZE)) {
+      const rows = await this.db.select().from(addresses).where(inArray(addresses.address, chunk)).all();
+      for (const row of rows) out.set(row.address, row);
+    }
+    return out;
+  }
+
   async upsertAddressesBatch(rows: AddressUpsertData[]): Promise<void> {
     if (rows.length === 0) return;
     const ts = now();
+    const beforeByAddress = await this.loadAddressesByList(rows.map((r) => r.address));
     let flaggedCacheDirty = false;
     for (let i = 0; i < rows.length; i += this.d1BatchSize) {
       const chunk = rows.slice(i, i + this.d1BatchSize);
@@ -835,15 +866,32 @@ export class Store {
     if (flaggedCacheDirty) {
       await this.invalidateFlaggedHackersCache();
     }
-    await this.reconcileCrawlPendingCount();
+    const afterByAddress = await this.loadAddressesByList(rows.map((r) => r.address));
+    let crawlPendingDelta = 0;
+    const seen = new Set<string>();
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const address = rows[i]!.address;
+      if (seen.has(address)) continue;
+      seen.add(address);
+      const before = beforeByAddress.get(address);
+      const after = afterByAddress.get(address);
+      const wasPending = before ? isCrawlPendingEligible(before.role, before.expandStatus) : false;
+      const isPending = after ? isCrawlPendingEligible(after.role, after.expandStatus) : false;
+      crawlPendingDelta += (isPending ? 1 : 0) - (wasPending ? 1 : 0);
+      await this.applyAddressStatsDelta(before, after);
+    }
+    await this.adjustCrawlPendingCount(crawlPendingDelta);
+    await this.markSyncSnapshotDirty();
   }
 
   async upsertEdgesBatch(rows: EdgeUpsertData[]): Promise<void> {
     if (rows.length === 0) return;
+    let totalInDelta = 0;
+    let totalOutDelta = 0;
     for (let i = 0; i < rows.length; i += this.d1BatchSize) {
       const chunk = rows.slice(i, i + this.d1BatchSize);
       const inToHackerRows = chunk.filter((row) => row.direction === "in_to_hacker");
-      const oldAmountByKey = new Map<string, number>();
+      const oldEdgeByKey = new Map<string, { amountSats: number; direction: string }>();
       if (inToHackerRows.length > 0) {
         const txids = [...new Set(inToHackerRows.map((row) => row.txid))];
         for (const txidChunk of chunkArray(txids, D1_IN_CLAUSE_CHUNK_SIZE)) {
@@ -853,17 +901,16 @@ export class Store {
               toAddress: edges.toAddress,
               txid: edges.txid,
               amountSats: edges.amountSats,
+              direction: edges.direction,
             })
             .from(edges)
-            .where(
-              and(
-                inArray(edges.txid, txidChunk),
-                eq(edges.direction, "in_to_hacker"),
-              ),
-            )
+            .where(and(inArray(edges.txid, txidChunk), eq(edges.direction, "in_to_hacker")))
             .all();
           for (const row of existing) {
-            oldAmountByKey.set(`${row.fromAddress}|${row.toAddress}|${row.txid}`, row.amountSats);
+            oldEdgeByKey.set(`${row.fromAddress}|${row.toAddress}|${row.txid}`, {
+              amountSats: row.amountSats,
+              direction: row.direction,
+            });
           }
         }
       }
@@ -890,9 +937,17 @@ export class Store {
       await this.executeSqlBatch(statements);
 
       const deltaByHacker = new Map<string, number>();
-      for (const row of inToHackerRows) {
+      for (const row of chunk) {
         const key = `${row.fromAddress}|${row.toAddress}|${row.txid}`;
-        const oldAmount = oldAmountByKey.get(key) ?? 0;
+        const old = oldEdgeByKey.get(key);
+        const oldAmount = old?.amountSats ?? 0;
+        if (row.direction === "in_to_hacker") {
+          totalInDelta += row.amountSats - oldAmount;
+        } else if (row.direction === "out_from_hacker") {
+          totalOutDelta += row.amountSats;
+        }
+
+        if (row.direction !== "in_to_hacker") continue;
         const delta = row.amountSats - oldAmount;
         if (delta === 0) continue;
         deltaByHacker.set(row.toAddress, (deltaByHacker.get(row.toAddress) ?? 0) + delta);
@@ -901,10 +956,21 @@ export class Store {
         await this.applyTotalReceivedDelta(hackerAddress, delta);
       }
     }
+    await this.adjustEdgeTotalsCounters(totalInDelta, totalOutDelta);
+    await this.markSyncSnapshotDirty();
   }
 
   private async applyTotalReceivedDelta(hackerAddress: string, deltaSats: number): Promise<void> {
     if (deltaSats === 0) return;
+    const before = await this.db
+      .select({
+        isFlaggedHacker: addresses.isFlaggedHacker,
+        totalReceivedSats: addresses.totalReceivedSats,
+      })
+      .from(addresses)
+      .where(eq(addresses.address, hackerAddress))
+      .get();
+    const wasActive = before ? isHackerActive(before.isFlaggedHacker, before.totalReceivedSats) : false;
     await this.db
       .update(addresses)
       .set({
@@ -912,6 +978,11 @@ export class Store {
       })
       .where(eq(addresses.address, hackerAddress))
       .run();
+    const afterTotal = (before?.totalReceivedSats ?? 0) + deltaSats;
+    const isActive = before ? isHackerActive(before.isFlaggedHacker, afterTotal) : false;
+    if (wasActive !== isActive) {
+      await this.adjustSchedulerCounter("hackerActiveCount", isActive ? 1 : -1);
+    }
   }
 
   async recalcTotalReceivedFor(hackerAddresses: string[]): Promise<void> {
@@ -2053,6 +2124,7 @@ export class Store {
         startedAt: job.startedAt,
       });
     }
+    await this.markSyncSnapshotDirty();
   }
 
   async failJob(id: number, error: string, runAfter?: string) {
@@ -2309,6 +2381,186 @@ export class Store {
     `);
   }
 
+  async markSyncSnapshotDirty(): Promise<void> {
+    await this.db.run(sql`
+      UPDATE scheduler_state SET sync_snapshot_dirty = 1 WHERE id = 1
+    `);
+  }
+
+  private async adjustSchedulerCounter(
+    field:
+      | "victimCount"
+      | "hackerActiveCount"
+      | "crawlExpandedCount"
+      | "downstreamTreeCount",
+    delta: number,
+  ): Promise<void> {
+    if (delta === 0) return;
+    switch (field) {
+      case "victimCount":
+        await this.db.run(sql`
+          UPDATE scheduler_state SET victim_count = MAX(0, victim_count + ${delta}) WHERE id = 1
+        `);
+        break;
+      case "hackerActiveCount":
+        await this.db.run(sql`
+          UPDATE scheduler_state SET hacker_active_count = MAX(0, hacker_active_count + ${delta}) WHERE id = 1
+        `);
+        break;
+      case "crawlExpandedCount":
+        await this.db.run(sql`
+          UPDATE scheduler_state SET crawl_expanded_count = MAX(0, crawl_expanded_count + ${delta}) WHERE id = 1
+        `);
+        break;
+      case "downstreamTreeCount":
+        await this.db.run(sql`
+          UPDATE scheduler_state SET downstream_tree_count = MAX(0, downstream_tree_count + ${delta}) WHERE id = 1
+        `);
+        break;
+    }
+  }
+
+  private async adjustEdgeTotalsCounters(totalInDelta: number, totalOutDelta: number): Promise<void> {
+    if (totalInDelta === 0 && totalOutDelta === 0) return;
+    await this.db.run(sql`
+      UPDATE scheduler_state
+      SET
+        total_in_sats = MAX(0, total_in_sats + ${totalInDelta}),
+        total_out_sats = MAX(0, total_out_sats + ${totalOutDelta})
+      WHERE id = 1
+    `);
+  }
+
+  private async applyAddressStatsDelta(
+    before: Address | undefined,
+    after: Address | undefined,
+  ): Promise<void> {
+    if (!after) return;
+    const state = await this.getSchedulerState();
+    const maxDepth = state?.downstreamTreeMaxDepth ?? 0;
+
+    const wasVictim = before?.role === "victim";
+    const isVictim = after.role === "victim";
+    if (wasVictim !== isVictim) {
+      await this.adjustSchedulerCounter("victimCount", isVictim ? 1 : -1);
+    }
+
+    const wasExpanded = before ? isExpandedStatus(before.expandStatus) : false;
+    const isExpanded = isExpandedStatus(after.expandStatus);
+    if (wasExpanded !== isExpanded) {
+      await this.adjustSchedulerCounter("crawlExpandedCount", isExpanded ? 1 : -1);
+    }
+
+    if (maxDepth > 0) {
+      const wasTree = before ? isDownstreamTreeNode(before.role, before.hopFromHacker, maxDepth) : false;
+      const isTree = isDownstreamTreeNode(after.role, after.hopFromHacker, maxDepth);
+      if (wasTree !== isTree) {
+        await this.adjustSchedulerCounter("downstreamTreeCount", isTree ? 1 : -1);
+      }
+    }
+
+    const wasHackerActive = before
+      ? isHackerActive(before.isFlaggedHacker, before.totalReceivedSats)
+      : false;
+    const isHackerActiveNow = isHackerActive(after.isFlaggedHacker, after.totalReceivedSats);
+    if (wasHackerActive !== isHackerActiveNow) {
+      await this.adjustSchedulerCounter("hackerActiveCount", isHackerActiveNow ? 1 : -1);
+    }
+
+    if (after.role === "downstream" && after.hopFromHacker != null) {
+      const currentMax = state?.crawlMaxHopReached ?? 0;
+      if (after.hopFromHacker > currentMax) {
+        await this.updateSchedulerState({ crawlMaxHopReached: after.hopFromHacker });
+      }
+    }
+  }
+
+  async maybeRefreshSyncSnapshot(
+    params: SyncSnapshotParams,
+    opts?: { maxAgeSec?: number },
+  ): Promise<SyncSnapshotV1 | null> {
+    const maxAgeSec = opts?.maxAgeSec ?? SYNC_SNAPSHOT_DEFAULT_TTL_SEC;
+    const state = await this.getSchedulerState();
+    const parsed = parseSyncSnapshot(state?.syncSnapshotJson);
+    const fresh =
+      parsed &&
+      isCacheFresh(state?.syncSnapshotAt ?? parsed.at, maxAgeSec) &&
+      syncSnapshotParamsMatch(parsed, params);
+    if (!state?.syncSnapshotDirty && fresh) {
+      return parsed;
+    }
+    return await this.refreshSyncSnapshot(params);
+  }
+
+  async reconcileDownstreamTreeCount(maxDepth: number): Promise<number> {
+    const row = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(addresses)
+      .where(
+        and(eq(addresses.role, "downstream"), sql`${addresses.hopFromHacker} < ${maxDepth}`),
+      )
+      .get();
+    const count = row?.count ?? 0;
+    await this.updateSchedulerState({
+      downstreamTreeCount: count,
+      downstreamTreeMaxDepth: maxDepth,
+    });
+    return count;
+  }
+
+  async reconcileStatsCounters(): Promise<void> {
+    await this.reconcileCrawlPendingCount();
+    const victims = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(addresses)
+      .where(eq(addresses.role, "victim"))
+      .get();
+    const hackers = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(addresses)
+      .where(and(eq(addresses.isFlaggedHacker, true), gt(addresses.totalReceivedSats, 0)))
+      .get();
+    const totalIn = await this.db
+      .select({ total: sql<number>`coalesce(sum(${edges.amountSats}), 0)` })
+      .from(edges)
+      .where(eq(edges.direction, "in_to_hacker"))
+      .get();
+    const totalOut = await this.db
+      .select({ total: sql<number>`coalesce(sum(${edges.amountSats}), 0)` })
+      .from(edges)
+      .where(eq(edges.direction, "out_from_hacker"))
+      .get();
+    const expanded = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(addresses)
+      .where(eq(addresses.expandStatus, "expanded"))
+      .get();
+    const maxHop = await this.db
+      .select({ max: sql<number>`max(${addresses.hopFromHacker})` })
+      .from(addresses)
+      .where(eq(addresses.role, "downstream"))
+      .get();
+    const state = await this.getSchedulerState();
+    const maxDepth = state?.downstreamTreeMaxDepth ?? 10;
+    const tree = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(addresses)
+      .where(
+        and(eq(addresses.role, "downstream"), sql`${addresses.hopFromHacker} < ${maxDepth}`),
+      )
+      .get();
+    await this.updateSchedulerState({
+      victimCount: victims?.count ?? 0,
+      hackerActiveCount: hackers?.count ?? 0,
+      totalInSats: totalIn?.total ?? 0,
+      totalOutSats: totalOut?.total ?? 0,
+      crawlExpandedCount: expanded?.count ?? 0,
+      crawlMaxHopReached: maxHop?.max ?? 0,
+      downstreamTreeCount: tree?.count ?? 0,
+      downstreamTreeMaxDepth: maxDepth,
+    });
+  }
+
   async updateSchedulerState(data: {
     nextProviderCallAt?: string;
     lastProviderUsed?: string;
@@ -2353,6 +2605,15 @@ export class Store {
     maintenancePrunePending?: number;
     maintenanceRunJson?: string | null;
     crawlPendingCount?: number;
+    syncSnapshotDirty?: number;
+    totalInSats?: number;
+    totalOutSats?: number;
+    victimCount?: number;
+    hackerActiveCount?: number;
+    crawlExpandedCount?: number;
+    crawlMaxHopReached?: number;
+    downstreamTreeCount?: number;
+    downstreamTreeMaxDepth?: number;
   }) {
     await this.db
       .update(schedulerState)
@@ -2650,6 +2911,7 @@ export class Store {
         })
         .run();
     }
+    await this.markSyncSnapshotDirty();
   }
 
   async touchSyncPoll(address: string) {
@@ -2660,6 +2922,7 @@ export class Store {
     } else {
       await this.db.insert(syncState).values({ address, lastPolledAt: ts }).run();
     }
+    await this.markSyncSnapshotDirty();
   }
 
   async countIndexedTxsForHacker(address: string): Promise<number> {
@@ -3152,31 +3415,12 @@ export class Store {
   }
 
   async computeStatsCounts(): Promise<SyncSnapshotStats> {
-    const victims = await this.db
-      .select({ count: sql<number>`count(*)` })
-      .from(addresses)
-      .where(eq(addresses.role, "victim"))
-      .get();
-    const hackers = await this.db
-      .select({ count: sql<number>`count(*)` })
-      .from(addresses)
-      .where(and(eq(addresses.isFlaggedHacker, true), gt(addresses.totalReceivedSats, 0)))
-      .get();
-    const totalIn = await this.db
-      .select({ total: sql<number>`coalesce(sum(${edges.amountSats}), 0)` })
-      .from(edges)
-      .where(eq(edges.direction, "in_to_hacker"))
-      .get();
-    const totalOut = await this.db
-      .select({ total: sql<number>`coalesce(sum(${edges.amountSats}), 0)` })
-      .from(edges)
-      .where(eq(edges.direction, "out_from_hacker"))
-      .get();
+    const state = await this.getSchedulerState();
     return {
-      victimCount: victims?.count ?? 0,
-      hackerCount: hackers?.count ?? 0,
-      totalInSats: totalIn?.total ?? 0,
-      totalOutSats: totalOut?.total ?? 0,
+      victimCount: state?.victimCount ?? 0,
+      hackerCount: state?.hackerActiveCount ?? 0,
+      totalInSats: state?.totalInSats ?? 0,
+      totalOutSats: state?.totalOutSats ?? 0,
     };
   }
 
@@ -3207,6 +3451,7 @@ export class Store {
     await this.updateSchedulerState({
       syncSnapshotJson: serializeSyncSnapshot(snapshot),
       syncSnapshotAt: snapshot.at,
+      syncSnapshotDirty: 0,
     });
     return snapshot;
   }
@@ -3230,20 +3475,10 @@ export class Store {
 
   async getCrawlStats() {
     const state = await this.getSchedulerState();
-    const expanded = await this.db
-      .select({ count: sql<number>`count(*)` })
-      .from(addresses)
-      .where(eq(addresses.expandStatus, "expanded"))
-      .get();
-    const maxHop = await this.db
-      .select({ max: sql<number>`max(${addresses.hopFromHacker})` })
-      .from(addresses)
-      .where(eq(addresses.role, "downstream"))
-      .get();
     return {
       crawlPendingCount: state?.crawlPendingCount ?? 0,
-      crawlExpandedCount: expanded?.count ?? 0,
-      crawlMaxHopReached: maxHop?.max ?? 0,
+      crawlExpandedCount: state?.crawlExpandedCount ?? 0,
+      crawlMaxHopReached: state?.crawlMaxHopReached ?? 0,
     };
   }
 
@@ -3339,11 +3574,7 @@ export class Store {
           eq(addresses.role, "downstream"),
           or(eq(addresses.expandStatus, "expanded"), eq(addresses.expandStatus, "pending")),
           sql`${addresses.hopFromHacker} < ${maxDepth}`,
-          sql`NOT EXISTS (
-            SELECT 1 FROM sync_state s
-            WHERE s.address = ${addresses.address}
-            AND s.last_polled_at > ${cutoff}
-          )`,
+          or(isNull(syncState.lastPolledAt), sql`${syncState.lastPolledAt} <= ${cutoff}`),
         ),
       )
       .orderBy(asc(syncState.lastPolledAt), asc(addresses.hopFromHacker))
@@ -3352,12 +3583,11 @@ export class Store {
   }
 
   async countDownstreamTreeNodes(maxDepth: number) {
-    const row = await this.db
-      .select({ count: sql<number>`count(*)` })
-      .from(addresses)
-      .where(and(eq(addresses.role, "downstream"), sql`${addresses.hopFromHacker} < ${maxDepth}`))
-      .get();
-    return row?.count ?? 0;
+    const state = await this.getSchedulerState();
+    if (state?.downstreamTreeMaxDepth === maxDepth) {
+      return state.downstreamTreeCount ?? 0;
+    }
+    return await this.reconcileDownstreamTreeCount(maxDepth);
   }
 
   async countDownstreamPollDue(maxDepth: number, minIntervalSec: number) {
@@ -3365,16 +3595,13 @@ export class Store {
     const row = await this.db
       .select({ count: sql<number>`count(*)` })
       .from(addresses)
+      .leftJoin(syncState, eq(addresses.address, syncState.address))
       .where(
         and(
           eq(addresses.role, "downstream"),
           or(eq(addresses.expandStatus, "expanded"), eq(addresses.expandStatus, "pending")),
           sql`${addresses.hopFromHacker} < ${maxDepth}`,
-          sql`NOT EXISTS (
-            SELECT 1 FROM sync_state s
-            WHERE s.address = ${addresses.address}
-            AND s.last_polled_at > ${cutoff}
-          )`,
+          or(isNull(syncState.lastPolledAt), sql`${syncState.lastPolledAt} <= ${cutoff}`),
         ),
       )
       .get();
@@ -3399,7 +3626,13 @@ export class Store {
       const before = isCrawlPendingEligible(existing.role, existing.expandStatus);
       const after = isCrawlPendingEligible(existing.role, status);
       await this.adjustCrawlPendingCount((after ? 1 : 0) - (before ? 1 : 0));
+      const wasExpanded = isExpandedStatus(existing.expandStatus);
+      const isExpanded = isExpandedStatus(status);
+      if (wasExpanded !== isExpanded) {
+        await this.adjustSchedulerCounter("crawlExpandedCount", isExpanded ? 1 : -1);
+      }
     }
+    await this.markSyncSnapshotDirty();
   }
 
   /** Reset in-flight expand scheduling states so cron can re-enqueue after clear-queue. */

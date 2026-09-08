@@ -301,7 +301,7 @@ export async function scheduleDownstreamCrawl(
   };
   } finally {
     await store
-      .refreshSyncSnapshot({
+      .maybeRefreshSyncSnapshot({
         maxCrawlDepth: config.maxCrawlDepth,
         downstreamPollIntervalSec: config.downstreamPollIntervalSec,
       })

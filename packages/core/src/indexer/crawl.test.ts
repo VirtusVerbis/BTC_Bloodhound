@@ -146,6 +146,7 @@ function mockStore(overrides: Partial<Store> = {}): Store {
     listHackersCached: vi.fn().mockResolvedValue([]),
     refreshFlaggedHackersCache: vi.fn().mockResolvedValue([]),
     refreshSyncSnapshot: vi.fn().mockResolvedValue(undefined),
+    maybeRefreshSyncSnapshot: vi.fn().mockResolvedValue(undefined),
     hasPendingJob: vi.fn().mockResolvedValue(false),
     countActiveJobs: vi.fn().mockResolvedValue(0),
     getAddress: vi.fn(),
@@ -347,7 +348,7 @@ describe("scheduleDownstreamCrawl", () => {
 
     expect(store.refreshFlaggedHackersCache).toHaveBeenCalledOnce();
     expect(store.listHackersCached).toHaveBeenCalledOnce();
-    expect(store.refreshSyncSnapshot).toHaveBeenCalledOnce();
+    expect(store.maybeRefreshSyncSnapshot).toHaveBeenCalledOnce();
     expect(store.listHackers).not.toHaveBeenCalled();
   });
 
@@ -450,7 +451,7 @@ describe("scheduleDownstreamCrawl", () => {
     expect(stats.pollEnqueued).toBe(0);
     expect(store.getCrawlEnqueueCandidates).not.toHaveBeenCalled();
     expect(store.listDownstreamForPoll).not.toHaveBeenCalled();
-    expect(store.refreshSyncSnapshot).toHaveBeenCalledOnce();
+    expect(store.maybeRefreshSyncSnapshot).toHaveBeenCalledOnce();
     expect(store.enqueueJobIfAbsent).toHaveBeenCalledWith(
       "poll_hacker_address",
       { address: "bc1qa" },
