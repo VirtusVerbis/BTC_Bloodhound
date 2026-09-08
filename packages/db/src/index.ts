@@ -376,6 +376,9 @@ export function runMigrations(sqlite: Database.Database): void {
   sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_addresses_role ON addresses(role);`);
   sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_addresses_expand_status ON addresses(expand_status);`);
   sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_addresses_expand_role ON addresses(expand_status, role);
+  `);
+  sqlite.exec(`
     CREATE INDEX IF NOT EXISTS idx_addresses_role_hop ON addresses(role, hop_from_hacker);
   `);
   sqlite.exec(`
