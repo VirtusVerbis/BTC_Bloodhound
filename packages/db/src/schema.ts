@@ -120,6 +120,13 @@ export const schedulerState = sqliteTable("scheduler_state", {
   flaggedHackersCacheAt: text("flagged_hackers_cache_at"),
   syncSnapshotJson: text("sync_snapshot_json"),
   syncSnapshotAt: text("sync_snapshot_at"),
+  lastCompletedJobAt: text("last_completed_job_at"),
+  lastCompletedJobType: text("last_completed_job_type"),
+  lastCompletedJobDurationMs: integer("last_completed_job_duration_ms"),
+  lastDoneJobsPrunedAt: text("last_done_jobs_pruned_at"),
+  lastHousekeepingAt: text("last_housekeeping_at"),
+  maintenancePrunePending: integer("maintenance_prune_pending").notNull().default(0),
+  maintenanceRunJson: text("maintenance_run_json"),
 });
 
 export const rateLimits = sqliteTable("rate_limits", {

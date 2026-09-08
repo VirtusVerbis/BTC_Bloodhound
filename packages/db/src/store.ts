@@ -332,6 +332,80 @@ export type EnqueueJobOptions = {
   bypassQueueCap?: boolean;
 };
 
+export type MaintenancePhase =
+  | "backfill_completed_at"
+  | "prune_done_jobs"
+  | "rate_limits"
+  | "sync_state_orphans";
+
+export interface MaintenanceRunProgress {
+  phase?: MaintenancePhase;
+  jobsDeleted?: number;
+  rateLimitsDeleted?: number;
+  syncStateOrphansDeleted?: number;
+  completedAtBackfillUpdated?: number;
+  startedAt?: string;
+}
+
+export interface MaintenanceBatchOpts {
+  batchSize?: number;
+  maxBatchesPerRun?: number;
+  maxPerRun?: number;
+  deadlineMs?: number;
+  remainingBatches?: number;
+  remainingWrites?: number;
+  retentionDays?: number;
+  inactiveSec?: number;
+}
+
+export interface MaintenanceBatchRunResult {
+  affected: number;
+  batches: number;
+  complete: boolean;
+}
+
+export type MaintenanceStatusValue = "idle" | "running" | "scheduled" | "disabled";
+
+export interface MaintenanceStatus {
+  enabled: boolean;
+  status: MaintenanceStatusValue;
+  phase?: MaintenancePhase;
+  pending: boolean;
+  progress?: {
+    jobsDeleted?: number;
+    rateLimitsDeleted?: number;
+    syncStateOrphansDeleted?: number;
+    completedAtBackfillUpdated?: number;
+  };
+  lastPrunedAt: string | null;
+  lastHousekeepingAt: string | null;
+  retentionDays: number;
+  intervalDays: number;
+  ticksUntilPrune: number | null;
+  nextPruneAt: string | null;
+}
+
+function maintenanceShouldStop(opts: MaintenanceBatchOpts): boolean {
+  if (opts.deadlineMs != null && Date.now() >= opts.deadlineMs) return true;
+  if (opts.remainingBatches != null && opts.remainingBatches <= 0) return true;
+  if (opts.remainingWrites != null && opts.remainingWrites <= 0) return true;
+  return false;
+}
+
+function parseMaintenanceRunJson(raw: string | null | undefined): MaintenanceRunProgress | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as MaintenanceRunProgress;
+  } catch {
+    return null;
+  }
+}
+
+function retentionCutoffIso(retentionDays: number): string {
+  const ms = Math.max(1, retentionDays) * 24 * 60 * 60 * 1000;
+  return new Date(Date.now() - ms).toISOString();
+}
+
 function retryAfterSecondsLeft(retryAfterAt: string | null | undefined): number {
   if (!retryAfterAt) return 0;
   const remaining = (new Date(retryAfterAt).getTime() - Date.now()) / 1000;
@@ -1927,17 +2001,34 @@ export class Store {
   }
 
   async completeJob(id: number) {
+    const job = await this.db
+      .select({
+        type: jobs.type,
+        startedAt: jobs.startedAt,
+        createdAt: jobs.createdAt,
+      })
+      .from(jobs)
+      .where(eq(jobs.id, id))
+      .get();
+    const completedAt = now();
     await this.db
       .update(jobs)
       .set({
         status: "done",
         lastError: null,
-        completedAt: now(),
+        completedAt,
         reclaimCount: 0,
         reclaimProgressJson: null,
       })
       .where(eq(jobs.id, id))
       .run();
+    if (job) {
+      await this.maybeUpdateLastCompletedJobCache({
+        type: job.type,
+        at: completedAt,
+        startedAt: job.startedAt,
+      });
+    }
   }
 
   async failJob(id: number, error: string, runAfter?: string) {
@@ -2221,6 +2312,13 @@ export class Store {
     flaggedHackersCacheAt?: string | null;
     syncSnapshotJson?: string | null;
     syncSnapshotAt?: string | null;
+    lastCompletedJobAt?: string | null;
+    lastCompletedJobType?: string | null;
+    lastCompletedJobDurationMs?: number | null;
+    lastDoneJobsPrunedAt?: string | null;
+    lastHousekeepingAt?: string | null;
+    maintenancePrunePending?: number;
+    maintenanceRunJson?: string | null;
   }) {
     await this.db
       .update(schedulerState)
@@ -2672,15 +2770,29 @@ export class Store {
   }
 
   async getLastCompletedJobSummary(): Promise<SyncSnapshotLastCompletedJob> {
+    const state = await this.getSchedulerState();
+    if (state?.lastCompletedJobAt) {
+      return {
+        type: state.lastCompletedJobType ?? null,
+        durationMs: state.lastCompletedJobDurationMs ?? null,
+        at: state.lastCompletedJobAt,
+      };
+    }
+
     const lastDoneJob = await this.db
-      .select()
+      .select({
+        type: jobs.type,
+        startedAt: jobs.startedAt,
+        completedAt: jobs.completedAt,
+        createdAt: jobs.createdAt,
+      })
       .from(jobs)
-      .where(eq(jobs.status, "done"))
-      .orderBy(sql`coalesce(${jobs.completedAt}, ${jobs.createdAt}) desc`, desc(jobs.id))
+      .where(and(eq(jobs.status, "done"), isNotNull(jobs.completedAt)))
+      .orderBy(desc(jobs.completedAt), desc(jobs.id))
       .limit(1)
       .get();
 
-    const at = lastDoneJob?.completedAt ?? lastDoneJob?.createdAt ?? null;
+    const at = lastDoneJob?.completedAt ?? null;
     const type = lastDoneJob?.type ?? null;
     let durationMs: number | null = null;
     if (lastDoneJob?.startedAt && lastDoneJob?.completedAt) {
@@ -2691,6 +2803,263 @@ export class Store {
       }
     }
     return { type, durationMs, at };
+  }
+
+  private jobDurationMs(startedAt: string | null | undefined, completedAt: string): number | null {
+    if (!startedAt) return null;
+    const startMs = new Date(startedAt).getTime();
+    const endMs = new Date(completedAt).getTime();
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return null;
+    return endMs - startMs;
+  }
+
+  private async maybeUpdateLastCompletedJobCache(job: {
+    type: string;
+    at: string;
+    startedAt: string | null;
+  }): Promise<void> {
+    const state = await this.getSchedulerState();
+    const cachedAt = state?.lastCompletedJobAt;
+    if (cachedAt && new Date(cachedAt).getTime() >= new Date(job.at).getTime()) return;
+    const durationMs = this.jobDurationMs(job.startedAt, job.at);
+    await this.updateSchedulerState({
+      lastCompletedJobAt: job.at,
+      lastCompletedJobType: job.type,
+      lastCompletedJobDurationMs: durationMs,
+    });
+  }
+
+  async seedLastCompletedJobCache(): Promise<boolean> {
+    const state = await this.getSchedulerState();
+    if (state?.lastCompletedJobAt) return false;
+
+    const lastDoneJob = await this.db
+      .select({
+        type: jobs.type,
+        startedAt: jobs.startedAt,
+        completedAt: jobs.completedAt,
+      })
+      .from(jobs)
+      .where(and(eq(jobs.status, "done"), isNotNull(jobs.completedAt)))
+      .orderBy(desc(jobs.completedAt), desc(jobs.id))
+      .limit(1)
+      .get();
+    if (!lastDoneJob?.completedAt) return false;
+
+    const durationMs = this.jobDurationMs(lastDoneJob.startedAt, lastDoneJob.completedAt);
+    await this.updateSchedulerState({
+      lastCompletedJobAt: lastDoneJob.completedAt,
+      lastCompletedJobType: lastDoneJob.type,
+      lastCompletedJobDurationMs: durationMs,
+    });
+    return true;
+  }
+
+  async countDoneJobsWithNullCompletedAt(): Promise<number> {
+    const row = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(jobs)
+      .where(and(eq(jobs.status, "done"), isNull(jobs.completedAt)))
+      .get();
+    return row?.count ?? 0;
+  }
+
+  async backfillDoneJobCompletedAtBatch(batchSize: number): Promise<number> {
+    const size = Math.max(1, batchSize);
+    const result = await this.db.run(sql`
+      UPDATE jobs
+      SET completed_at = created_at
+      WHERE id IN (
+        SELECT id FROM jobs
+        WHERE status = 'done' AND completed_at IS NULL
+        ORDER BY id ASC
+        LIMIT ${size}
+      )
+    `);
+    return changesCount(result as { changes?: number; meta?: { changes?: number } });
+  }
+
+  async backfillDoneJobCompletedAt(opts: MaintenanceBatchOpts = {}): Promise<MaintenanceBatchRunResult> {
+    const batchSize = opts.batchSize ?? 500;
+    const maxBatches = opts.maxBatchesPerRun ?? 5;
+    let batches = 0;
+    let affected = 0;
+    while (batches < maxBatches) {
+      if (maintenanceShouldStop({ ...opts, remainingBatches: (opts.remainingBatches ?? maxBatches) - batches })) {
+        break;
+      }
+      const maxWrites = opts.maxPerRun ?? opts.remainingWrites;
+      if (maxWrites != null && affected >= maxWrites) break;
+
+      const n = await this.backfillDoneJobCompletedAtBatch(batchSize);
+      batches++;
+      affected += n;
+      if (n === 0) return { affected, batches, complete: true };
+    }
+    const remaining = await this.countDoneJobsWithNullCompletedAt();
+    return { affected, batches, complete: remaining === 0 };
+  }
+
+  async pruneDoneJobsBatch(batchSize: number, cutoffIso: string): Promise<number> {
+    const size = Math.max(1, batchSize);
+    const result = await this.db.run(sql`
+      DELETE FROM jobs
+      WHERE id IN (
+        SELECT id FROM jobs
+        WHERE status = 'done'
+          AND completed_at IS NOT NULL
+          AND completed_at < ${cutoffIso}
+        ORDER BY completed_at ASC
+        LIMIT ${size}
+      )
+    `);
+    return changesCount(result as { changes?: number; meta?: { changes?: number } });
+  }
+
+  async pruneDoneJobs(opts: MaintenanceBatchOpts = {}): Promise<MaintenanceBatchRunResult> {
+    const batchSize = opts.batchSize ?? 500;
+    const maxBatches = opts.maxBatchesPerRun ?? 20;
+    const maxDeletes = opts.maxPerRun ?? 10_000;
+    const cutoff = retentionCutoffIso(opts.retentionDays ?? 5);
+    let batches = 0;
+    let affected = 0;
+    while (batches < maxBatches && affected < maxDeletes) {
+      if (maintenanceShouldStop({ ...opts, remainingBatches: (opts.remainingBatches ?? maxBatches) - batches })) {
+        break;
+      }
+      const remainingWrites = opts.remainingWrites != null ? opts.remainingWrites - affected : undefined;
+      if (remainingWrites != null && remainingWrites <= 0) break;
+
+      const n = await this.pruneDoneJobsBatch(batchSize, cutoff);
+      batches++;
+      affected += n;
+      if (n === 0) return { affected, batches, complete: true };
+      if (affected >= maxDeletes) break;
+    }
+    const tail = await this.pruneDoneJobsBatch(1, cutoff);
+    return {
+      affected: affected + tail,
+      batches: batches + (tail > 0 ? 1 : 0),
+      complete: tail === 0,
+    };
+  }
+
+  async pruneStaleRateLimitsBatch(batchSize: number, inactiveSec: number): Promise<number> {
+    const size = Math.max(1, batchSize);
+    const result = await this.db.run(sql`
+      DELETE FROM rate_limits
+      WHERE key IN (
+        SELECT key FROM rate_limits
+        WHERE (unixepoch('now') - unixepoch(window_start)) > ${inactiveSec}
+        ORDER BY window_start ASC
+        LIMIT ${size}
+      )
+    `);
+    return changesCount(result as { changes?: number; meta?: { changes?: number } });
+  }
+
+  async pruneStaleRateLimits(opts: MaintenanceBatchOpts = {}): Promise<MaintenanceBatchRunResult> {
+    const batchSize = opts.batchSize ?? 200;
+    const maxBatches = opts.maxBatchesPerRun ?? 10;
+    const maxDeletes = opts.maxPerRun ?? 2000;
+    const inactiveSec = opts.inactiveSec ?? 7 * 24 * 60 * 60;
+    let batches = 0;
+    let affected = 0;
+    while (batches < maxBatches && affected < maxDeletes) {
+      if (maintenanceShouldStop({ ...opts, remainingBatches: (opts.remainingBatches ?? maxBatches) - batches })) {
+        break;
+      }
+      const n = await this.pruneStaleRateLimitsBatch(batchSize, inactiveSec);
+      batches++;
+      affected += n;
+      if (n === 0) return { affected, batches, complete: true };
+    }
+    const probe = await this.pruneStaleRateLimitsBatch(1, inactiveSec);
+    return { affected, batches, complete: probe === 0 };
+  }
+
+  async pruneOrphanSyncStateBatch(batchSize: number): Promise<number> {
+    const size = Math.max(1, batchSize);
+    const result = await this.db.run(sql`
+      DELETE FROM sync_state
+      WHERE address IN (
+        SELECT s.address FROM sync_state s
+        LEFT JOIN addresses a ON a.address = s.address
+        WHERE a.address IS NULL
+        ORDER BY s.address ASC
+        LIMIT ${size}
+      )
+    `);
+    return changesCount(result as { changes?: number; meta?: { changes?: number } });
+  }
+
+  async pruneOrphanSyncState(opts: MaintenanceBatchOpts = {}): Promise<MaintenanceBatchRunResult> {
+    const batchSize = opts.batchSize ?? 500;
+    const maxBatches = opts.maxBatchesPerRun ?? 10;
+    const maxDeletes = opts.maxPerRun ?? 5000;
+    let batches = 0;
+    let affected = 0;
+    while (batches < maxBatches && affected < maxDeletes) {
+      if (maintenanceShouldStop({ ...opts, remainingBatches: (opts.remainingBatches ?? maxBatches) - batches })) {
+        break;
+      }
+      const n = await this.pruneOrphanSyncStateBatch(batchSize);
+      batches++;
+      affected += n;
+      if (n === 0) return { affected, batches, complete: true };
+    }
+    const probe = await this.pruneOrphanSyncStateBatch(1);
+    return { affected, batches, complete: probe === 0 };
+  }
+
+  buildMaintenanceStatus(
+    scheduler: Awaited<ReturnType<Store["getSchedulerState"]>>,
+    config: {
+      jobPruneEnabled: boolean;
+      jobDoneRetentionDays: number;
+      jobPruneIntervalDays: number;
+    },
+    nowMs = Date.now(),
+  ): MaintenanceStatus {
+    const enabled = config.jobPruneEnabled;
+    const pending = (scheduler?.maintenancePrunePending ?? 0) !== 0;
+    const progressRaw = parseMaintenanceRunJson(scheduler?.maintenanceRunJson);
+    const intervalTicks = Math.max(1, config.jobPruneIntervalDays) * 1440;
+    const counter = scheduler?.maintenanceCronCounter ?? 0;
+    const ticksUntil =
+      !enabled || pending
+        ? null
+        : intervalTicks - (counter % intervalTicks);
+    const nextPruneAt =
+      ticksUntil == null ? null : new Date(nowMs + ticksUntil * 60_000).toISOString();
+
+    let status: MaintenanceStatusValue = "disabled";
+    if (enabled) {
+      if (pending) status = "running";
+      else if (scheduler?.lastDoneJobsPrunedAt) status = "idle";
+      else status = "scheduled";
+    }
+
+    return {
+      enabled,
+      status,
+      phase: progressRaw?.phase,
+      pending,
+      progress: progressRaw
+        ? {
+            jobsDeleted: progressRaw.jobsDeleted,
+            rateLimitsDeleted: progressRaw.rateLimitsDeleted,
+            syncStateOrphansDeleted: progressRaw.syncStateOrphansDeleted,
+            completedAtBackfillUpdated: progressRaw.completedAtBackfillUpdated,
+          }
+        : undefined,
+      lastPrunedAt: scheduler?.lastDoneJobsPrunedAt ?? null,
+      lastHousekeepingAt: scheduler?.lastHousekeepingAt ?? null,
+      retentionDays: config.jobDoneRetentionDays,
+      intervalDays: config.jobPruneIntervalDays,
+      ticksUntilPrune: ticksUntil,
+      nextPruneAt,
+    };
   }
 
   async computeStatsCounts(): Promise<SyncSnapshotStats> {
@@ -3048,6 +3417,7 @@ export class Store {
     };
 
     let usedSnapshotStats = false;
+    let snapshotLastJobAt: string | null = null;
     if (snapshotParams) {
       try {
         const snapshot = await this.getSyncSnapshot(snapshotParams);
@@ -3056,6 +3426,7 @@ export class Store {
           result.hackerCount = snapshot.stats.hackerCount;
           result.totalInSats = snapshot.stats.totalInSats;
           result.totalOutSats = snapshot.stats.totalOutSats;
+          snapshotLastJobAt = snapshot.lastCompletedJob.at;
           usedSnapshotStats = true;
         }
       } catch (err) {
@@ -3076,14 +3447,23 @@ export class Store {
     }
 
     try {
-      const lastJob = await this.db
-        .select()
-        .from(jobs)
-        .where(ne(jobs.status, "pending"))
-        .orderBy(desc(jobs.id))
-        .limit(1)
-        .get();
-      result.lastJobAt = lastJob?.createdAt ?? null;
+      if (snapshotLastJobAt) {
+        result.lastJobAt = snapshotLastJobAt;
+      } else {
+        const scheduler = await this.getSchedulerState();
+        if (scheduler?.lastCompletedJobAt) {
+          result.lastJobAt = scheduler.lastCompletedJobAt;
+        } else {
+          const lastJob = await this.db
+            .select({ createdAt: jobs.createdAt })
+            .from(jobs)
+            .where(ne(jobs.status, "pending"))
+            .orderBy(desc(jobs.id))
+            .limit(1)
+            .get();
+          result.lastJobAt = lastJob?.createdAt ?? null;
+        }
+      }
     } catch (err) {
       console.error("getStats lastJobAt failed", err);
     }

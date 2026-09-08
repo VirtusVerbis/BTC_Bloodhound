@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import type { MonitoringSyncStatus } from "./MonitoringIndicator";
+import type { MonitoringSyncStatus, MaintenanceStatus } from "./MonitoringIndicator";
 import type { QueueSnapshot } from "../lib/queueApi";
+import {
+  formatCountdown,
+  formatHoursMinutesCountdown,
+} from "./MonitoringIndicator";
 import {
   formatJobDetailLine,
   formatJobPriorityBadge,
@@ -22,6 +26,57 @@ interface QueuePageProps {
 
 const SNAPSHOT_TOOLTIP =
   "Refreshes when an indexer job completes. Running job details update on completion slices only.";
+
+function formatRelativeTime(iso: string | null | undefined, nowMs: number): string {
+  if (!iso) return "—";
+  const ms = new Date(iso).getTime();
+  if (!Number.isFinite(ms)) return "—";
+  const sec = Math.max(0, Math.floor((nowMs - ms) / 1000));
+  if (sec < 60) return `${sec}s ago`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+  return `${Math.floor(sec / 86400)}d ago`;
+}
+
+function maintenancePhaseLabel(phase?: string): string {
+  switch (phase) {
+    case "backfill_completed_at":
+      return "backfilling job timestamps";
+    case "prune_done_jobs":
+      return "pruning done jobs";
+    case "rate_limits":
+      return "cleaning rate limits";
+    case "sync_state_orphans":
+      return "cleaning orphan sync state";
+    default:
+      return "maintenance";
+  }
+}
+
+function formatMaintenanceLine(maintenance: MaintenanceStatus, nowMs: number): string {
+  if (!maintenance.enabled || maintenance.status === "disabled") {
+    return "Auto-prune: off";
+  }
+  if (maintenance.status === "running" || maintenance.pending) {
+    const phase = maintenancePhaseLabel(maintenance.phase);
+    const parts: string[] = [`Auto-prune: running — ${phase}`];
+    const p = maintenance.progress;
+    if (p?.jobsDeleted) parts.push(`${p.jobsDeleted} jobs deleted`);
+    if (p?.completedAtBackfillUpdated) parts.push(`${p.completedAtBackfillUpdated} timestamps backfilled`);
+    if (p?.rateLimitsDeleted) parts.push(`${p.rateLimitsDeleted} rate limits`);
+    if (p?.syncStateOrphansDeleted) parts.push(`${p.syncStateOrphansDeleted} sync orphans`);
+    return parts.join(" · ");
+  }
+  if (maintenance.status === "scheduled" && maintenance.nextPruneAt) {
+    const sec = Math.max(0, Math.ceil((new Date(maintenance.nextPruneAt).getTime() - nowMs) / 1000));
+    const eta = sec >= 86400 ? formatHoursMinutesCountdown(sec) : formatCountdown(sec);
+    return `Auto-prune: next run ~${eta} (${maintenance.retentionDays}d retention, every ${maintenance.intervalDays}d)`;
+  }
+  if (maintenance.lastPrunedAt) {
+    return `Auto-prune: last run ${formatRelativeTime(maintenance.lastPrunedAt, nowMs)} (${maintenance.retentionDays}d retention)`;
+  }
+  return `Auto-prune: scheduled (${maintenance.intervalDays}d interval, ${maintenance.retentionDays}d retention)`;
+}
 
 function topTypesByCount(byType: Record<string, number>, limit = 5) {
   return Object.entries(byType)
@@ -82,6 +137,19 @@ export function QueuePage({
         <p className="queue-meta-updated" title={SNAPSHOT_TOOLTIP}>
           Snapshot updated {formatSnapshotAge(snapshotAge)}
         </p>
+        {sync?.maintenance && (
+          <p
+            className={[
+              "queue-maintenance-line",
+              sync.maintenance.pending ? "queue-maintenance-line--running" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            role="status"
+          >
+            {formatMaintenanceLine(sync.maintenance, nowMs)}
+          </p>
+        )}
       </section>
 
       {error && (

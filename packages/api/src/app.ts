@@ -486,6 +486,11 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
       lastProviderUsed: scheduler?.lastProviderUsed ?? null,
       rebuildActive,
       pendingProcessTx,
+      maintenance: store.buildMaintenanceStatus(scheduler, {
+        jobPruneEnabled: config.jobPruneEnabled,
+        jobDoneRetentionDays: config.jobDoneRetentionDays,
+        jobPruneIntervalDays: config.jobPruneIntervalDays,
+      }),
       ...crawl,
       ...monitor,
       ...monitoring,

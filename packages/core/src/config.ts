@@ -185,6 +185,23 @@ export interface AppConfig {
   opReturnBackfillPerJob: number;
   /** Enqueue backfill_op_return every N maintenance cron ticks when backlog exists. */
   opReturnBackfillEveryNCrons: number;
+  /** Delete done jobs older than this many days. */
+  jobDoneRetentionDays: number;
+  /** Run prune housekeeping every N days (one cron tick per minute). */
+  jobPruneIntervalDays: number;
+  jobPruneBatchSize: number;
+  jobPruneMaxBatchesPerRun: number;
+  jobPruneMaxDeletesPerRun: number;
+  jobPruneEnabled: boolean;
+  jobCompletedAtBackfillBatchSize: number;
+  jobCompletedAtBackfillMaxBatchesPerTick: number;
+  rateLimitPruneInactiveDays: number;
+  rateLimitPruneBatchSize: number;
+  rateLimitPruneMaxBatchesPerRun: number;
+  syncStateOrphanPruneBatchSize: number;
+  syncStateOrphanPruneMaxBatchesPerRun: number;
+  maintenanceMaxBatchesPerTick: number;
+  maintenanceMaxWritesPerTick: number;
 }
 
 let envFileLoaded = false;
@@ -345,6 +362,27 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     maintSliceMinWaitSec: Math.max(0, Number(env.MAINT_SLICE_MIN_WAIT_SEC ?? 3600)),
     opReturnBackfillPerJob: Math.max(1, Number(env.OP_RETURN_BACKFILL_PER_JOB ?? 3)),
     opReturnBackfillEveryNCrons: Math.max(1, Number(env.OP_RETURN_BACKFILL_EVERY_N_CRONS ?? 10)),
+    jobDoneRetentionDays: Math.max(1, Number(env.JOB_DONE_RETENTION_DAYS ?? 5)),
+    jobPruneIntervalDays: Math.max(1, Number(env.JOB_PRUNE_INTERVAL_DAYS ?? 5)),
+    jobPruneBatchSize: Math.max(1, Number(env.JOB_PRUNE_BATCH_SIZE ?? 500)),
+    jobPruneMaxBatchesPerRun: Math.max(1, Number(env.JOB_PRUNE_MAX_BATCHES_PER_RUN ?? 20)),
+    jobPruneMaxDeletesPerRun: Math.max(1, Number(env.JOB_PRUNE_MAX_DELETES_PER_RUN ?? 10_000)),
+    jobPruneEnabled: env.JOB_PRUNE_ENABLED !== "0",
+    jobCompletedAtBackfillBatchSize: Math.max(1, Number(env.JOB_COMPLETED_AT_BACKFILL_BATCH_SIZE ?? 500)),
+    jobCompletedAtBackfillMaxBatchesPerTick: Math.max(
+      1,
+      Number(env.JOB_COMPLETED_AT_BACKFILL_MAX_BATCHES_PER_TICK ?? 5),
+    ),
+    rateLimitPruneInactiveDays: Math.max(1, Number(env.RATE_LIMIT_PRUNE_INACTIVE_DAYS ?? 7)),
+    rateLimitPruneBatchSize: Math.max(1, Number(env.RATE_LIMIT_PRUNE_BATCH_SIZE ?? 200)),
+    rateLimitPruneMaxBatchesPerRun: Math.max(1, Number(env.RATE_LIMIT_PRUNE_MAX_BATCHES_PER_RUN ?? 10)),
+    syncStateOrphanPruneBatchSize: Math.max(1, Number(env.SYNC_STATE_ORPHAN_PRUNE_BATCH_SIZE ?? 500)),
+    syncStateOrphanPruneMaxBatchesPerRun: Math.max(
+      1,
+      Number(env.SYNC_STATE_ORPHAN_PRUNE_MAX_BATCHES_PER_RUN ?? 10),
+    ),
+    maintenanceMaxBatchesPerTick: Math.max(1, Number(env.MAINTENANCE_MAX_BATCHES_PER_TICK ?? 25)),
+    maintenanceMaxWritesPerTick: Math.max(1, Number(env.MAINTENANCE_MAX_WRITES_PER_TICK ?? 12_000)),
   };
 }
 

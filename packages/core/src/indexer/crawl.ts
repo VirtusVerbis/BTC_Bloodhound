@@ -5,8 +5,18 @@ import type { ChainRouter } from "../chain/router.js";
 import { fetchMempoolBtcUsd } from "../price/mempoolPrices.js";
 import { buildBackfillJobPayload } from "./processor.js";
 import { isRebuildActive } from "./rebuildMode.js";
+import { logCronDetail } from "./jobLog.js";
+import type { IndexerLogColorMode } from "./logColor.js";
+import { formatMaintenanceLogLine, runScheduledMaintenance } from "./maintenance.js";
 import type { SubrequestBudget } from "./subrequestBudget.js";
 import type { BtcScheduleMode, ScheduleTickStats } from "./tickStats.js";
+
+export interface ScheduleDownstreamOpts {
+  deadlineMs?: number;
+  jobDetails?: boolean;
+  logColor?: boolean;
+  logColorMode?: IndexerLogColorMode;
+}
 
 const BACKFILL_DEDUPE_TYPES = ["backfill_hacker_address", "audit_hacker_backfill"] as const;
 
@@ -142,6 +152,7 @@ export async function scheduleDownstreamCrawl(
   config: AppConfig,
   budget: SubrequestBudget,
   reserve: number,
+  scheduleOpts?: ScheduleDownstreamOpts,
 ): Promise<Omit<ScheduleTickStats, "btc">> {
   const emptyStats = {
     skipNonCritical: false,
@@ -275,6 +286,19 @@ export async function scheduleDownstreamCrawl(
     .catch((err: unknown) => {
       console.error("refreshSyncSnapshot failed", err);
     });
+
+  const maintenance = await runScheduledMaintenance(store, config, budget, tick, {
+    deadlineMs: scheduleOpts?.deadlineMs,
+    skipNonCritical,
+  });
+  if (scheduleOpts?.jobDetails) {
+    logCronDetail(
+      true,
+      formatMaintenanceLogLine(maintenance),
+      scheduleOpts.logColor ?? false,
+      scheduleOpts.logColorMode,
+    );
+  }
 
   return {
     skipNonCritical,

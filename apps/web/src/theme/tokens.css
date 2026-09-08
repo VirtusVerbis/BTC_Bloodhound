@@ -746,6 +746,16 @@ button.primary {
   color: #ffb74d;
 }
 
+.queue-maintenance-line {
+  margin: 0.35rem 0 0;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.queue-maintenance-line--running {
+  color: #81c784;
+}
+
 .queue-section-title {
   margin: 0 0 0.75rem;
   font-size: 0.95rem;

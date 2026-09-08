@@ -98,4 +98,20 @@ describe("read cache", () => {
     });
     expect(stats.victimCount).toBe(1);
   });
+
+  it("getStats uses scheduler lastCompletedJobAt when snapshot stats are fresh", async () => {
+    const jobId = await store.enqueueJob("process_tx", { txid: "abc" }, 1);
+    await store.completeJob(jobId);
+    await store.refreshSyncSnapshot({
+      maxCrawlDepth: 5,
+      downstreamPollIntervalSec: 600,
+    });
+
+    const stats = await store.getStats({
+      maxCrawlDepth: 5,
+      downstreamPollIntervalSec: 600,
+    });
+    const state = await store.getSchedulerState();
+    expect(stats.lastJobAt).toBe(state?.lastCompletedJobAt);
+  });
 });

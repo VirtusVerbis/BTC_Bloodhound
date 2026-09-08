@@ -46,6 +46,7 @@ async function runSchedulePhase(
   jobDetails: boolean,
   logColor: boolean,
   logColorMode?: IndexerLogColorMode,
+  deadlineMs?: number,
 ): Promise<number> {
   const maintCounter = (await store.getSchedulerState())?.maintenanceCronCounter ?? 0;
   const reserve = scheduleSubrequestReserve({
@@ -56,7 +57,12 @@ async function runSchedulePhase(
   });
   const schedBefore = budget.used();
   const btc = await scheduleBtcUsdPriceRefresh(store, router, config, budget, reserve);
-  const crawlStats = await scheduleDownstreamCrawl(store, config, budget, reserve);
+  const crawlStats = await scheduleDownstreamCrawl(store, config, budget, reserve, {
+    deadlineMs,
+    jobDetails,
+    logColor,
+    logColorMode,
+  });
   const schedSubreq = budget.used() - schedBefore;
   logCronDetail(
     jobDetails,
@@ -139,7 +145,16 @@ export async function runIndexerTick(
       tickStop = jobResult.stopReason;
 
       if (schedule && budget.remaining() > config.scheduleSubrequestReserve) {
-        schedSubreq = await runSchedulePhase(store, router, config, budget, jobDetails, logColor, logColorMode);
+        schedSubreq = await runSchedulePhase(
+          store,
+          router,
+          config,
+          budget,
+          jobDetails,
+          logColor,
+          logColorMode,
+          deadlineMs,
+        );
       } else if (schedule) {
         logCronDetail(
           jobDetails,
@@ -150,7 +165,16 @@ export async function runIndexerTick(
       }
     } else {
       if (schedule) {
-        schedSubreq = await runSchedulePhase(store, router, config, budget, jobDetails, logColor, logColorMode);
+        schedSubreq = await runSchedulePhase(
+          store,
+          router,
+          config,
+          budget,
+          jobDetails,
+          logColor,
+          logColorMode,
+          deadlineMs,
+        );
       }
       const jobResult = await processJobs(store, router, config, jobOpts);
       jobsProcessed = jobResult.processed;

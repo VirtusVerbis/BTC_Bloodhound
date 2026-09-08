@@ -271,6 +271,29 @@ export function runMigrations(sqlite: Database.Database): void {
   if (!schedulerCols.some((c) => c.name === "sync_snapshot_at")) {
     sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN sync_snapshot_at TEXT`);
   }
+  if (!schedulerCols.some((c) => c.name === "last_completed_job_at")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN last_completed_job_at TEXT`);
+  }
+  if (!schedulerCols.some((c) => c.name === "last_completed_job_type")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN last_completed_job_type TEXT`);
+  }
+  if (!schedulerCols.some((c) => c.name === "last_completed_job_duration_ms")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN last_completed_job_duration_ms INTEGER`);
+  }
+  if (!schedulerCols.some((c) => c.name === "last_done_jobs_pruned_at")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN last_done_jobs_pruned_at TEXT`);
+  }
+  if (!schedulerCols.some((c) => c.name === "last_housekeeping_at")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN last_housekeeping_at TEXT`);
+  }
+  if (!schedulerCols.some((c) => c.name === "maintenance_prune_pending")) {
+    sqlite.exec(
+      `ALTER TABLE scheduler_state ADD COLUMN maintenance_prune_pending INTEGER NOT NULL DEFAULT 0`,
+    );
+  }
+  if (!schedulerCols.some((c) => c.name === "maintenance_run_json")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN maintenance_run_json TEXT`);
+  }
 
   const syncCols = sqlite.prepare("PRAGMA table_info(sync_state)").all() as Array<{ name: string }>;
   if (!syncCols.some((c) => c.name === "backfill_state_json")) {

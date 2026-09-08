@@ -34,6 +34,28 @@ export interface MonitoringSyncStatus {
   chainApis?: ChainApiStatus[];
   queueSchedulingPaused?: boolean;
   maxQueueDepth?: number;
+  maintenance?: MaintenanceStatus;
+}
+
+export type MaintenanceStatusValue = "idle" | "running" | "scheduled" | "disabled";
+
+export interface MaintenanceStatus {
+  enabled: boolean;
+  status: MaintenanceStatusValue;
+  phase?: string;
+  pending: boolean;
+  progress?: {
+    jobsDeleted?: number;
+    rateLimitsDeleted?: number;
+    syncStateOrphansDeleted?: number;
+    completedAtBackfillUpdated?: number;
+  };
+  lastPrunedAt: string | null;
+  lastHousekeepingAt: string | null;
+  retentionDays: number;
+  intervalDays: number;
+  ticksUntilPrune: number | null;
+  nextPruneAt: string | null;
 }
 
 function formatLocal(iso: string | null | undefined) {
