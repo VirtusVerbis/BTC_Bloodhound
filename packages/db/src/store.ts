@@ -95,6 +95,10 @@ function effectivePriorityExpr(ageBoost?: ClaimAgeBoost, ts?: string) {
 
 type SchedulerStateRow = typeof schedulerState.$inferSelect;
 
+export function isCrawlPendingEligible(role: string, expandStatus: string): boolean {
+  return expandStatus === "pending" && (role === "downstream" || role === "hacker");
+}
+
 function isD1QuotaBlockedFromState(
   state: SchedulerStateRow | null | undefined,
   kind?: D1QuotaKind,
@@ -560,6 +564,7 @@ export class Store {
   }
 
   async upsertAddress(data: AddressUpsertData) {
+    const existing = await this.getAddress(data.address);
     const ts = now();
     const role = data.role ?? "unknown";
     const label = data.label !== undefined ? data.label : null;
@@ -620,6 +625,12 @@ export class Store {
     if (isFlaggedHackerProvided === 1) {
       await this.invalidateFlaggedHackersCache();
     }
+    const updated = await this.getAddress(data.address);
+    if (updated) {
+      const before = existing ? isCrawlPendingEligible(existing.role, existing.expandStatus) : false;
+      const after = isCrawlPendingEligible(updated.role, updated.expandStatus);
+      await this.adjustCrawlPendingCount((after ? 1 : 0) - (before ? 1 : 0));
+    }
   }
 
   /** Insert address row only when absent; returns true when a new row was created. */
@@ -644,7 +655,11 @@ export class Store {
       )
       ON CONFLICT(address) DO NOTHING
     `);
-    return changesCount(result as { changes?: number; meta?: { changes?: number } }) > 0;
+    const inserted = changesCount(result as { changes?: number; meta?: { changes?: number } }) > 0;
+    if (inserted && isCrawlPendingEligible(data.role ?? "unknown", data.expandStatus ?? "pending")) {
+      await this.adjustCrawlPendingCount(1);
+    }
+    return inserted;
   }
 
   async getAddress(address: string) {
@@ -820,6 +835,7 @@ export class Store {
     if (flaggedCacheDirty) {
       await this.invalidateFlaggedHackersCache();
     }
+    await this.reconcileCrawlPendingCount();
   }
 
   async upsertEdgesBatch(rows: EdgeUpsertData[]): Promise<void> {
@@ -2284,6 +2300,15 @@ export class Store {
     return await this.db.select().from(schedulerState).where(eq(schedulerState.id, 1)).get();
   }
 
+  private async adjustCrawlPendingCount(delta: number): Promise<void> {
+    if (delta === 0) return;
+    await this.db.run(sql`
+      UPDATE scheduler_state
+      SET crawl_pending_count = MAX(0, crawl_pending_count + ${delta})
+      WHERE id = 1
+    `);
+  }
+
   async updateSchedulerState(data: {
     nextProviderCallAt?: string;
     lastProviderUsed?: string;
@@ -2327,6 +2352,7 @@ export class Store {
     lastHousekeepingAt?: string | null;
     maintenancePrunePending?: number;
     maintenanceRunJson?: string | null;
+    crawlPendingCount?: number;
   }) {
     await this.db
       .update(schedulerState)
@@ -3203,11 +3229,7 @@ export class Store {
   }
 
   async getCrawlStats() {
-    const pending = await this.db
-      .select({ count: sql<number>`count(*)` })
-      .from(addresses)
-      .where(and(eq(addresses.expandStatus, "pending"), or(eq(addresses.role, "downstream"), eq(addresses.role, "hacker"))))
-      .get();
+    const state = await this.getSchedulerState();
     const expanded = await this.db
       .select({ count: sql<number>`count(*)` })
       .from(addresses)
@@ -3219,10 +3241,27 @@ export class Store {
       .where(eq(addresses.role, "downstream"))
       .get();
     return {
-      crawlPendingCount: pending?.count ?? 0,
+      crawlPendingCount: state?.crawlPendingCount ?? 0,
       crawlExpandedCount: expanded?.count ?? 0,
       crawlMaxHopReached: maxHop?.max ?? 0,
     };
+  }
+
+  /** Reconcile trigger-maintained crawl pending counter from addresses (maintenance / repair). */
+  async reconcileCrawlPendingCount(): Promise<number> {
+    const row = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(addresses)
+      .where(
+        and(
+          eq(addresses.expandStatus, "pending"),
+          or(eq(addresses.role, "downstream"), eq(addresses.role, "hacker")),
+        ),
+      )
+      .get();
+    const count = row?.count ?? 0;
+    await this.updateSchedulerState({ crawlPendingCount: count });
+    return count;
   }
 
   async getDownstreamFrontier(limit: number, maxDepth: number) {
@@ -3300,7 +3339,11 @@ export class Store {
           eq(addresses.role, "downstream"),
           or(eq(addresses.expandStatus, "expanded"), eq(addresses.expandStatus, "pending")),
           sql`${addresses.hopFromHacker} < ${maxDepth}`,
-          or(sql`${syncState.lastPolledAt} IS NULL`, sql`${syncState.lastPolledAt} <= ${cutoff}`),
+          sql`NOT EXISTS (
+            SELECT 1 FROM sync_state s
+            WHERE s.address = ${addresses.address}
+            AND s.last_polled_at > ${cutoff}
+          )`,
         ),
       )
       .orderBy(asc(syncState.lastPolledAt), asc(addresses.hopFromHacker))
@@ -3322,13 +3365,16 @@ export class Store {
     const row = await this.db
       .select({ count: sql<number>`count(*)` })
       .from(addresses)
-      .leftJoin(syncState, eq(addresses.address, syncState.address))
       .where(
         and(
           eq(addresses.role, "downstream"),
           or(eq(addresses.expandStatus, "expanded"), eq(addresses.expandStatus, "pending")),
           sql`${addresses.hopFromHacker} < ${maxDepth}`,
-          or(sql`${syncState.lastPolledAt} IS NULL`, sql`${syncState.lastPolledAt} <= ${cutoff}`),
+          sql`NOT EXISTS (
+            SELECT 1 FROM sync_state s
+            WHERE s.address = ${addresses.address}
+            AND s.last_polled_at > ${cutoff}
+          )`,
         ),
       )
       .get();
@@ -3343,20 +3389,33 @@ export class Store {
   }
 
   async setExpandStatus(address: string, status: string) {
+    const existing = await this.getAddress(address);
     await this.db
       .update(addresses)
       .set({ expandStatus: status, lastExpandedAt: now() })
       .where(eq(addresses.address, address))
       .run();
+    if (existing) {
+      const before = isCrawlPendingEligible(existing.role, existing.expandStatus);
+      const after = isCrawlPendingEligible(existing.role, status);
+      await this.adjustCrawlPendingCount((after ? 1 : 0) - (before ? 1 : 0));
+    }
   }
 
   /** Reset in-flight expand scheduling states so cron can re-enqueue after clear-queue. */
   async resetStuckExpandStatuses(): Promise<number> {
+    const stuck = await this.db
+      .select({ role: addresses.role })
+      .from(addresses)
+      .where(or(eq(addresses.expandStatus, "queued"), eq(addresses.expandStatus, "expanding")))
+      .all();
+    const delta = stuck.filter((row) => isCrawlPendingEligible(row.role, "pending")).length;
     const result = await this.db
       .update(addresses)
       .set({ expandStatus: "pending" })
       .where(or(eq(addresses.expandStatus, "queued"), eq(addresses.expandStatus, "expanding")))
       .run();
+    await this.adjustCrawlPendingCount(delta);
     return changesCount(result as { changes?: number; meta?: { changes?: number } });
   }
 

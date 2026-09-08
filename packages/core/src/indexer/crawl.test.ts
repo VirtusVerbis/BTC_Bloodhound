@@ -450,6 +450,7 @@ describe("scheduleDownstreamCrawl", () => {
     expect(stats.pollEnqueued).toBe(0);
     expect(store.getCrawlEnqueueCandidates).not.toHaveBeenCalled();
     expect(store.listDownstreamForPoll).not.toHaveBeenCalled();
+    expect(store.refreshSyncSnapshot).toHaveBeenCalledOnce();
     expect(store.enqueueJobIfAbsent).toHaveBeenCalledWith(
       "poll_hacker_address",
       { address: "bc1qa" },

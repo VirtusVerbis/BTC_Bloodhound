@@ -345,6 +345,10 @@ WHERE NOT EXISTS (
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cointrace-ops-"));
   try {
     const filePath = path.join(tmpDir, "re-backfill-hacker.sql");
+    statements.push(`UPDATE scheduler_state SET crawl_pending_count = (
+  SELECT COUNT(*) FROM addresses
+  WHERE expand_status = 'pending' AND role IN ('downstream', 'hacker')
+) WHERE id = 1;`);
     fs.writeFileSync(filePath, statements.join("\n") + "\n", "utf8");
     client.executeFile(filePath);
   } finally {

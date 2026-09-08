@@ -157,8 +157,8 @@ export class RemoteReadStore {
   }
 
   async getCrawlStats() {
-    const pending = this.client.query(
-      "SELECT COUNT(*) AS count FROM addresses WHERE expand_status = 'pending' AND (role = 'downstream' OR role = 'hacker');",
+    const state = this.client.query(
+      "SELECT crawl_pending_count FROM scheduler_state WHERE id = 1 LIMIT 1;",
     )[0];
     const expanded = this.client.query(
       "SELECT COUNT(*) AS count FROM addresses WHERE expand_status = 'expanded';",
@@ -167,7 +167,7 @@ export class RemoteReadStore {
       "SELECT MAX(hop_from_hacker) AS max FROM addresses WHERE role = 'downstream';",
     )[0];
     return {
-      crawlPendingCount: num(pending?.count),
+      crawlPendingCount: num(state?.crawl_pending_count),
       crawlExpandedCount: num(expanded?.count),
       crawlMaxHopReached: num(maxHop?.max),
     };
@@ -185,11 +185,14 @@ export class RemoteReadStore {
     const row = this.client.query(`
 SELECT COUNT(*) AS count
 FROM addresses
-LEFT JOIN sync_state ON addresses.address = sync_state.address
 WHERE addresses.role = 'downstream'
   AND (addresses.expand_status = 'expanded' OR addresses.expand_status = 'pending')
   AND addresses.hop_from_hacker < ${Math.floor(maxDepth)}
-  AND (sync_state.last_polled_at IS NULL OR sync_state.last_polled_at <= ${cutoff});
+  AND NOT EXISTS (
+    SELECT 1 FROM sync_state s
+    WHERE s.address = addresses.address
+      AND s.last_polled_at > ${cutoff}
+  );
 `)[0];
     return num(row?.count);
   }
@@ -294,7 +297,11 @@ LEFT JOIN sync_state ON addresses.address = sync_state.address
 WHERE addresses.role = 'downstream'
   AND (addresses.expand_status = 'expanded' OR addresses.expand_status = 'pending')
   AND addresses.hop_from_hacker < ${Math.floor(maxDepth)}
-  AND (sync_state.last_polled_at IS NULL OR sync_state.last_polled_at <= ${cutoff})
+  AND NOT EXISTS (
+    SELECT 1 FROM sync_state s
+    WHERE s.address = addresses.address
+      AND s.last_polled_at > ${cutoff}
+  )
 ORDER BY sync_state.last_polled_at ASC, addresses.hop_from_hacker ASC
 LIMIT ${Math.max(0, Math.floor(limit))};
 `)

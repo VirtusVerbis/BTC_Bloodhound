@@ -212,15 +212,16 @@ export async function scheduleDownstreamCrawl(
     }
   }
 
-  if (skipNonCritical) {
-    return { ...emptyStats, skipNonCritical, maintTick: isMaintTick, throttled };
-  }
+  try {
+    if (skipNonCritical) {
+      return { ...emptyStats, skipNonCritical, maintTick: isMaintTick, throttled };
+    }
 
-  if (throttled) {
-    return { ...emptyStats, skipNonCritical: false, maintTick: isMaintTick, throttled };
-  }
+    if (throttled) {
+      return { ...emptyStats, skipNonCritical: false, maintTick: isMaintTick, throttled };
+    }
 
-  if (
+    if (
     isOpReturnMaintTick &&
     !skipNonCritical &&
     !enqueueCache.queueSchedulingPaused &&
@@ -278,15 +279,6 @@ export async function scheduleDownstreamCrawl(
     if (jobId != null) pollEnqueued++;
   }
 
-  await store
-    .refreshSyncSnapshot({
-      maxCrawlDepth: config.maxCrawlDepth,
-      downstreamPollIntervalSec: config.downstreamPollIntervalSec,
-    })
-    .catch((err: unknown) => {
-      console.error("refreshSyncSnapshot failed", err);
-    });
-
   const maintenance = await runScheduledMaintenance(store, config, budget, tick, {
     deadlineMs: scheduleOpts?.deadlineMs,
     skipNonCritical,
@@ -307,4 +299,14 @@ export async function scheduleDownstreamCrawl(
     maintTick: isMaintTick,
     throttled: false,
   };
+  } finally {
+    await store
+      .refreshSyncSnapshot({
+        maxCrawlDepth: config.maxCrawlDepth,
+        downstreamPollIntervalSec: config.downstreamPollIntervalSec,
+      })
+      .catch((err: unknown) => {
+        console.error("refreshSyncSnapshot failed", err);
+      });
+  }
 }

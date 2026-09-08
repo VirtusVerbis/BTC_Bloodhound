@@ -28,6 +28,32 @@ describe("listDownstreamForPoll", () => {
     expect(due.map((r) => r.address)).toEqual(["stale", "recent"]);
   });
 
+  it("countDownstreamPollDue matches poll-eligible downstream nodes", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.upsertAddress({
+      address: "due",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "expanded",
+    });
+    await store.upsertAddress({
+      address: "recent",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "expanded",
+    });
+    await store.upsertSyncState("recent", { lastSeenTxid: "tx1" });
+    sqlite
+      .prepare("UPDATE sync_state SET last_polled_at = ? WHERE address = ?")
+      .run(new Date().toISOString(), "recent");
+
+    expect(await store.countDownstreamPollDue(5, 600)).toBe(1);
+    expect((await store.listDownstreamForPoll(10, 5, 600)).map((r) => r.address)).toEqual(["due"]);
+  });
+
   it("excludes nodes at max crawl depth", async () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);

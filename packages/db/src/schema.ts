@@ -127,6 +127,7 @@ export const schedulerState = sqliteTable("scheduler_state", {
   lastHousekeepingAt: text("last_housekeeping_at"),
   maintenancePrunePending: integer("maintenance_prune_pending").notNull().default(0),
   maintenanceRunJson: text("maintenance_run_json"),
+  crawlPendingCount: integer("crawl_pending_count").notNull().default(0),
 });
 
 export const rateLimits = sqliteTable("rate_limits", {

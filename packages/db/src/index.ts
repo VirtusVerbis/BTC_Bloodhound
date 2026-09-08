@@ -294,6 +294,17 @@ export function runMigrations(sqlite: Database.Database): void {
   if (!schedulerCols.some((c) => c.name === "maintenance_run_json")) {
     sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN maintenance_run_json TEXT`);
   }
+  if (!schedulerCols.some((c) => c.name === "crawl_pending_count")) {
+    sqlite.exec(
+      `ALTER TABLE scheduler_state ADD COLUMN crawl_pending_count INTEGER NOT NULL DEFAULT 0`,
+    );
+    sqlite.exec(`
+      UPDATE scheduler_state SET crawl_pending_count = (
+        SELECT COUNT(*) FROM addresses
+        WHERE expand_status = 'pending' AND role IN ('downstream', 'hacker')
+      ) WHERE id = 1
+    `);
+  }
 
   const syncCols = sqlite.prepare("PRAGMA table_info(sync_state)").all() as Array<{ name: string }>;
   if (!syncCols.some((c) => c.name === "backfill_state_json")) {
@@ -391,6 +402,16 @@ export function runMigrations(sqlite: Database.Database): void {
   sqlite.exec(`
     CREATE INDEX IF NOT EXISTS idx_transactions_missing_op_return
       ON transactions(txid) WHERE op_return_display IS NULL;
+  `);
+  sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_addresses_crawl_pending
+      ON addresses(role, hop_from_hacker)
+      WHERE expand_status = 'pending' AND role IN ('downstream', 'hacker');
+  `);
+  sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_addresses_downstream_poll
+      ON addresses(hop_from_hacker, expand_status)
+      WHERE role = 'downstream' AND expand_status IN ('pending', 'expanded');
   `);
 }
 
