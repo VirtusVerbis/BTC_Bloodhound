@@ -1,5 +1,6 @@
 import type { Store } from "@cointrace/db";
 import type { Job } from "@cointrace/db";
+import { isCacheFresh, pollDueCacheTtlSec } from "@cointrace/db";
 import { D1WranglerClient, sqlString } from "./d1Wrangler.js";
 
 type Row = Record<string, unknown>;
@@ -182,14 +183,31 @@ export class RemoteReadStore {
   }
 
   async countDownstreamPollDue(maxDepth: number, minIntervalSec: number) {
-    const cutoff = sqlString(new Date(Date.now() - minIntervalSec * 1000).toISOString());
+    const depth = Math.floor(maxDepth);
+    const intervalSec = Math.floor(minIntervalSec);
+    const state = this.client.query(
+      `SELECT downstream_poll_due_count, downstream_poll_due_at, downstream_poll_max_depth, downstream_poll_interval_sec, monitor_snapshot_dirty FROM scheduler_state WHERE id = 1 LIMIT 1;`,
+    )[0];
+    const ttlSec = pollDueCacheTtlSec(intervalSec);
+    const paramsMatch =
+      num(state?.downstream_poll_max_depth) === depth &&
+      num(state?.downstream_poll_interval_sec) === intervalSec;
+    const cacheFresh =
+      paramsMatch &&
+      isCacheFresh(state?.downstream_poll_due_at != null ? str(state.downstream_poll_due_at) : null, ttlSec) &&
+      num(state?.monitor_snapshot_dirty) === 0;
+    if (cacheFresh) {
+      return num(state?.downstream_poll_due_count);
+    }
+
+    const cutoff = sqlString(new Date(Date.now() - intervalSec * 1000).toISOString());
     const row = this.client.query(`
 SELECT COUNT(*) AS count
 FROM addresses
 LEFT JOIN sync_state ON addresses.address = sync_state.address
 WHERE addresses.role = 'downstream'
   AND (addresses.expand_status = 'expanded' OR addresses.expand_status = 'pending')
-  AND addresses.hop_from_hacker < ${Math.floor(maxDepth)}
+  AND addresses.hop_from_hacker < ${depth}
   AND (sync_state.last_polled_at IS NULL OR sync_state.last_polled_at <= ${cutoff});
 `)[0];
     return num(row?.count);
@@ -222,7 +240,8 @@ WHERE addresses.role = 'downstream'
   async listHackers() {
     return this.client
       .query(
-        "SELECT * FROM addresses WHERE is_flagged_hacker = 1 ORDER BY total_received_sats DESC;",
+        `SELECT address, role, label, source, is_flagged_hacker, total_received_sats, live_balance_sats, live_balance_at, last_graph_activity_at
+FROM addresses WHERE is_flagged_hacker = 1 ORDER BY total_received_sats DESC;`,
       )
       .map((row) => mapAddressRow(row)!);
   }

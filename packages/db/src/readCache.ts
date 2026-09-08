@@ -2,6 +2,11 @@ import type { Address } from "./schema.js";
 
 export const FLAGGED_HACKERS_CACHE_DEFAULT_TTL_SEC = 120;
 export const SYNC_SNAPSHOT_DEFAULT_TTL_SEC = 60;
+export const POLL_DUE_CACHE_MAX_TTL_SEC = 60;
+
+export function pollDueCacheTtlSec(downstreamPollIntervalSec: number): number {
+  return Math.min(Math.max(0, downstreamPollIntervalSec), POLL_DUE_CACHE_MAX_TTL_SEC);
+}
 
 export type SyncSnapshotParams = {
   maxCrawlDepth: number;

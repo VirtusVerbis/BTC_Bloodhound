@@ -489,15 +489,21 @@ export function runMigrations(sqlite: Database.Database): void {
   if (!schedulerCols.some((c) => c.name === "downstream_tree_count")) {
     sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN downstream_tree_count INTEGER NOT NULL DEFAULT 0`);
     sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN downstream_tree_max_depth INTEGER NOT NULL DEFAULT 0`);
-    sqlite.exec(`
-      UPDATE scheduler_state SET
-        downstream_tree_count = (
-          SELECT COUNT(*) FROM addresses WHERE role = 'downstream' AND hop_from_hacker < 10
-        ),
-        downstream_tree_max_depth = 10
-      WHERE id = 1
-    `);
   }
+  if (!schedulerCols.some((c) => c.name === "monitor_snapshot_dirty")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN monitor_snapshot_dirty INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!schedulerCols.some((c) => c.name === "downstream_poll_due_count")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN downstream_poll_due_count INTEGER NOT NULL DEFAULT 0`);
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN downstream_poll_due_at TEXT`);
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN downstream_poll_max_depth INTEGER NOT NULL DEFAULT 0`);
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN downstream_poll_interval_sec INTEGER NOT NULL DEFAULT 0`);
+  }
+  sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_addresses_hackers_by_received
+      ON addresses(total_received_sats DESC)
+      WHERE is_flagged_hacker = 1;
+  `);
 
   sqlite.exec(`
     UPDATE scheduler_state SET

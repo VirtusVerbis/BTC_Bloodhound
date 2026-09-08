@@ -167,9 +167,6 @@ export async function scheduleDownstreamCrawl(
     return { ...emptyStats, skipNonCritical: true };
   }
 
-  await store.refreshFlaggedHackersCache().catch((err: unknown) => {
-    console.error("refreshFlaggedHackersCache failed", err);
-  });
   const hackers = await store.listHackersCached();
 
   const ts = Date.now();
@@ -300,6 +297,9 @@ export async function scheduleDownstreamCrawl(
     throttled: false,
   };
   } finally {
+    await store.ensureDownstreamTreeDepth(config.maxCrawlDepth).catch((err: unknown) => {
+      console.error("ensureDownstreamTreeDepth failed", err);
+    });
     await store
       .maybeRefreshSyncSnapshot({
         maxCrawlDepth: config.maxCrawlDepth,

@@ -404,12 +404,12 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
     let monitor = snapshot?.monitor ?? { treeNodeCount: 0, downstreamPollDueCount: 0 };
     if (!snapshot) {
       try {
-        monitor = await store.getDownstreamMonitorStats(
+        monitor = await store.getDownstreamMonitorStatsCached(
           config.maxCrawlDepth,
           config.downstreamPollIntervalSec,
         );
       } catch (err) {
-        console.error("sync/status getDownstreamMonitorStats failed", err);
+        console.error("sync/status getDownstreamMonitorStatsCached failed", err);
       }
     }
 

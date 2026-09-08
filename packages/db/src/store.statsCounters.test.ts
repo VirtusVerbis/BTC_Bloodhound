@@ -57,4 +57,19 @@ describe("scheduler stats counters", () => {
     await store.reconcileDownstreamTreeCount(5);
     expect(await store.countDownstreamTreeNodes(5)).toBe(1);
   });
+
+  it("ensureDownstreamTreeDepth reconciles when depth mismatches", async () => {
+    const { sqlite, store } = await openStore();
+    await store.upsertAddress({
+      address: "bc1qdown",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "expanded",
+    });
+    sqlite.prepare("UPDATE scheduler_state SET downstream_tree_max_depth = 10 WHERE id = 1").run();
+    await store.ensureDownstreamTreeDepth(5);
+    const state = await store.getSchedulerState();
+    expect(state?.downstreamTreeMaxDepth).toBe(5);
+    expect(state?.downstreamTreeCount).toBe(1);
+  });
 });

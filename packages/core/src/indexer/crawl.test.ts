@@ -147,6 +147,7 @@ function mockStore(overrides: Partial<Store> = {}): Store {
     refreshFlaggedHackersCache: vi.fn().mockResolvedValue([]),
     refreshSyncSnapshot: vi.fn().mockResolvedValue(undefined),
     maybeRefreshSyncSnapshot: vi.fn().mockResolvedValue(undefined),
+    ensureDownstreamTreeDepth: vi.fn().mockResolvedValue(undefined),
     hasPendingJob: vi.fn().mockResolvedValue(false),
     countActiveJobs: vi.fn().mockResolvedValue(0),
     getAddress: vi.fn(),
@@ -346,7 +347,7 @@ describe("scheduleDownstreamCrawl", () => {
 
     await scheduleDownstreamCrawl(store, baseConfig(), unlimitedBudget, 0);
 
-    expect(store.refreshFlaggedHackersCache).toHaveBeenCalledOnce();
+    expect(store.refreshFlaggedHackersCache).not.toHaveBeenCalled();
     expect(store.listHackersCached).toHaveBeenCalledOnce();
     expect(store.maybeRefreshSyncSnapshot).toHaveBeenCalledOnce();
     expect(store.listHackers).not.toHaveBeenCalled();

@@ -32,6 +32,7 @@ import {
   FLAGGED_HACKERS_CACHE_DEFAULT_TTL_SEC,
   SYNC_SNAPSHOT_DEFAULT_TTL_SEC,
   isCacheFresh,
+  pollDueCacheTtlSec,
   parseFlaggedHackersCache,
   parseSyncSnapshot,
   serializeFlaggedHackersCache,
@@ -109,6 +110,37 @@ function isHackerActive(isFlaggedHacker: boolean, totalReceivedSats: number): bo
 
 function isDownstreamTreeNode(role: string, hop: number | null | undefined, maxDepth: number): boolean {
   return role === "downstream" && hop != null && hop < maxDepth;
+}
+
+function isDownstreamPollEligible(
+  role: string,
+  expandStatus: string,
+  hop: number | null | undefined,
+  maxDepth: number,
+): boolean {
+  return (
+    role === "downstream" &&
+    (expandStatus === "expanded" || expandStatus === "pending") &&
+    hop != null &&
+    hop < maxDepth
+  );
+}
+
+function monitorEligibilityChanged(
+  before: Address | undefined,
+  after: Address | undefined,
+  maxDepth: number,
+): boolean {
+  const wasPoll = before
+    ? isDownstreamPollEligible(before.role, before.expandStatus, before.hopFromHacker, maxDepth)
+    : false;
+  const isPoll = after
+    ? isDownstreamPollEligible(after.role, after.expandStatus, after.hopFromHacker, maxDepth)
+    : false;
+  if (wasPoll !== isPoll) return true;
+  const wasTree = before ? isDownstreamTreeNode(before.role, before.hopFromHacker, maxDepth) : false;
+  const isTree = after ? isDownstreamTreeNode(after.role, after.hopFromHacker, maxDepth) : false;
+  return wasTree !== isTree;
 }
 
 function isD1QuotaBlockedFromState(
@@ -643,8 +675,8 @@ export class Store {
       const after = isCrawlPendingEligible(updated.role, updated.expandStatus);
       await this.adjustCrawlPendingCount((after ? 1 : 0) - (before ? 1 : 0));
       await this.applyAddressStatsDelta(existing, updated);
+      await this.maybeMarkMonitorSnapshotDirty(existing, updated);
     }
-    await this.markSyncSnapshotDirty();
   }
 
   /** Insert address row only when absent; returns true when a new row was created. */
@@ -675,8 +707,10 @@ export class Store {
     }
     if (inserted) {
       const row = await this.getAddress(data.address);
-      if (row) await this.applyAddressStatsDelta(undefined, row);
-      await this.markSyncSnapshotDirty();
+      if (row) {
+        await this.applyAddressStatsDelta(undefined, row);
+        await this.maybeMarkMonitorSnapshotDirty(undefined, row);
+      }
     }
     return inserted;
   }
@@ -867,7 +901,10 @@ export class Store {
       await this.invalidateFlaggedHackersCache();
     }
     const afterByAddress = await this.loadAddressesByList(rows.map((r) => r.address));
+    const scheduler = await this.getSchedulerState();
+    const maxDepth = scheduler?.downstreamTreeMaxDepth ?? 0;
     let crawlPendingDelta = 0;
+    let monitorDirty = false;
     const seen = new Set<string>();
     for (let i = rows.length - 1; i >= 0; i--) {
       const address = rows[i]!.address;
@@ -879,9 +916,14 @@ export class Store {
       const isPending = after ? isCrawlPendingEligible(after.role, after.expandStatus) : false;
       crawlPendingDelta += (isPending ? 1 : 0) - (wasPending ? 1 : 0);
       await this.applyAddressStatsDelta(before, after);
+      if (maxDepth > 0 && monitorEligibilityChanged(before, after, maxDepth)) {
+        monitorDirty = true;
+      }
     }
     await this.adjustCrawlPendingCount(crawlPendingDelta);
-    await this.markSyncSnapshotDirty();
+    if (monitorDirty) {
+      await this.markMonitorSnapshotDirty();
+    }
   }
 
   async upsertEdgesBatch(rows: EdgeUpsertData[]): Promise<void> {
@@ -957,7 +999,6 @@ export class Store {
       }
     }
     await this.adjustEdgeTotalsCounters(totalInDelta, totalOutDelta);
-    await this.markSyncSnapshotDirty();
   }
 
   private async applyTotalReceivedDelta(hackerAddress: string, deltaSats: number): Promise<void> {
@@ -2124,7 +2165,7 @@ export class Store {
         startedAt: job.startedAt,
       });
     }
-    await this.markSyncSnapshotDirty();
+    await this.markJobSnapshotDirty();
   }
 
   async failJob(id: number, error: string, runAfter?: string) {
@@ -2381,10 +2422,73 @@ export class Store {
     `);
   }
 
-  async markSyncSnapshotDirty(): Promise<void> {
+  async markJobSnapshotDirty(): Promise<void> {
     await this.db.run(sql`
       UPDATE scheduler_state SET sync_snapshot_dirty = 1 WHERE id = 1
     `);
+  }
+
+  async markMonitorSnapshotDirty(): Promise<void> {
+    await this.db.run(sql`
+      UPDATE scheduler_state SET monitor_snapshot_dirty = 1 WHERE id = 1
+    `);
+  }
+
+  /** @deprecated Use markJobSnapshotDirty or markMonitorSnapshotDirty */
+  async markSyncSnapshotDirty(): Promise<void> {
+    await this.markJobSnapshotDirty();
+    await this.markMonitorSnapshotDirty();
+  }
+
+  private async maybeMarkMonitorSnapshotDirty(
+    before: Address | undefined,
+    after: Address | undefined,
+  ): Promise<void> {
+    const state = await this.getSchedulerState();
+    const maxDepth = state?.downstreamTreeMaxDepth ?? 0;
+    if (maxDepth <= 0) return;
+
+    const minIntervalSec = state?.downstreamPollIntervalSec ?? 0;
+    const wasPoll = before
+      ? isDownstreamPollEligible(before.role, before.expandStatus, before.hopFromHacker, maxDepth)
+      : false;
+    const isPoll = after
+      ? isDownstreamPollEligible(after.role, after.expandStatus, after.hopFromHacker, maxDepth)
+      : false;
+
+    if (wasPoll === isPoll || minIntervalSec <= 0) return;
+
+    const pollAdjusted = await this.adjustPollDueCountDelta(isPoll ? 1 : -1, {
+      maxDepth,
+      minIntervalSec,
+    });
+    if (!pollAdjusted) {
+      await this.markMonitorSnapshotDirty();
+    }
+  }
+
+  private async adjustPollDueCountDelta(
+    delta: number,
+    params: { maxDepth: number; minIntervalSec: number },
+  ): Promise<boolean> {
+    if (delta === 0) return true;
+    const state = await this.getSchedulerState();
+    const ttlSec = pollDueCacheTtlSec(params.minIntervalSec);
+    const cacheFresh =
+      state?.downstreamPollMaxDepth === params.maxDepth &&
+      state?.downstreamPollIntervalSec === params.minIntervalSec &&
+      isCacheFresh(state?.downstreamPollDueAt, ttlSec) &&
+      (state?.monitorSnapshotDirty ?? 0) === 0;
+    if (!cacheFresh) return false;
+
+    await this.db.run(sql`
+      UPDATE scheduler_state
+      SET
+        downstream_poll_due_count = MAX(0, downstream_poll_due_count + ${delta}),
+        downstream_poll_due_at = ${now()}
+      WHERE id = 1
+    `);
+    return true;
   }
 
   private async adjustSchedulerCounter(
@@ -2482,14 +2586,23 @@ export class Store {
     const maxAgeSec = opts?.maxAgeSec ?? SYNC_SNAPSHOT_DEFAULT_TTL_SEC;
     const state = await this.getSchedulerState();
     const parsed = parseSyncSnapshot(state?.syncSnapshotJson);
-    const fresh =
+    if (
       parsed &&
       isCacheFresh(state?.syncSnapshotAt ?? parsed.at, maxAgeSec) &&
-      syncSnapshotParamsMatch(parsed, params);
-    if (!state?.syncSnapshotDirty && fresh) {
+      syncSnapshotParamsMatch(parsed, params) &&
+      (state?.syncSnapshotDirty ?? 0) === 0 &&
+      (state?.monitorSnapshotDirty ?? 0) === 0
+    ) {
       return parsed;
     }
     return await this.refreshSyncSnapshot(params);
+  }
+
+  async ensureDownstreamTreeDepth(maxDepth: number): Promise<void> {
+    const state = await this.getSchedulerState();
+    if (state?.downstreamTreeMaxDepth !== maxDepth) {
+      await this.reconcileDownstreamTreeCount(maxDepth);
+    }
   }
 
   async reconcileDownstreamTreeCount(maxDepth: number): Promise<number> {
@@ -2606,6 +2719,11 @@ export class Store {
     maintenanceRunJson?: string | null;
     crawlPendingCount?: number;
     syncSnapshotDirty?: number;
+    monitorSnapshotDirty?: number;
+    downstreamPollDueCount?: number;
+    downstreamPollDueAt?: string | null;
+    downstreamPollMaxDepth?: number;
+    downstreamPollIntervalSec?: number;
     totalInSats?: number;
     totalOutSats?: number;
     victimCount?: number;
@@ -2911,18 +3029,35 @@ export class Store {
         })
         .run();
     }
-    await this.markSyncSnapshotDirty();
+    await this.markMonitorSnapshotDirty();
   }
 
   async touchSyncPoll(address: string) {
+    const addr = await this.getAddress(address);
     const existing = await this.getSyncState(address);
+    const state = await this.getSchedulerState();
+    const maxDepth = state?.downstreamTreeMaxDepth ?? 0;
+    const minIntervalSec = state?.downstreamPollIntervalSec ?? 0;
+
+    let wasDue = false;
+    if (addr && maxDepth > 0 && minIntervalSec > 0) {
+      const cutoff = new Date(Date.now() - minIntervalSec * 1000).toISOString();
+      wasDue =
+        isDownstreamPollEligible(addr.role, addr.expandStatus, addr.hopFromHacker, maxDepth) &&
+        (!existing?.lastPolledAt || existing.lastPolledAt <= cutoff);
+    }
+
     const ts = now();
     if (existing) {
       await this.db.update(syncState).set({ lastPolledAt: ts }).where(eq(syncState.address, address)).run();
     } else {
       await this.db.insert(syncState).values({ address, lastPolledAt: ts }).run();
     }
-    await this.markSyncSnapshotDirty();
+
+    if (wasDue) {
+      const adjusted = await this.adjustPollDueCountDelta(-1, { maxDepth, minIntervalSec });
+      if (!adjusted) await this.markMonitorSnapshotDirty();
+    }
   }
 
   async countIndexedTxsForHacker(address: string): Promise<number> {
@@ -3425,12 +3560,19 @@ export class Store {
   }
 
   async refreshSyncSnapshot(params: SyncSnapshotParams): Promise<SyncSnapshotV1> {
+    const state = await this.getSchedulerState();
+    const parsed = parseSyncSnapshot(state?.syncSnapshotJson);
+    const jobDirty = (state?.syncSnapshotDirty ?? 0) !== 0;
     const crawl = await this.getCrawlStats();
-    const monitor = await this.getDownstreamMonitorStats(
+    const monitor = await this.getDownstreamMonitorStatsCached(
       params.maxCrawlDepth,
       params.downstreamPollIntervalSec,
+      { forceRefresh: (state?.monitorSnapshotDirty ?? 0) !== 0 },
     );
-    const lastCompletedJob = await this.getLastCompletedJobSummary();
+    const lastCompletedJob =
+      jobDirty || !parsed
+        ? await this.getLastCompletedJobSummary()
+        : parsed.lastCompletedJob;
     const stats = await this.computeStatsCounts();
     const snapshot: SyncSnapshotV1 = {
       v: 1,
@@ -3452,6 +3594,7 @@ export class Store {
       syncSnapshotJson: serializeSyncSnapshot(snapshot),
       syncSnapshotAt: snapshot.at,
       syncSnapshotDirty: 0,
+      monitorSnapshotDirty: 0,
     });
     return snapshot;
   }
@@ -3608,11 +3751,46 @@ export class Store {
     return row?.count ?? 0;
   }
 
+  async getDownstreamMonitorStatsCached(
+    maxDepth: number,
+    minIntervalSec: number,
+    opts?: { forceRefresh?: boolean },
+  ) {
+    const treeNodeCount = await this.countDownstreamTreeNodes(maxDepth);
+    const state = await this.getSchedulerState();
+    const ttlSec = pollDueCacheTtlSec(minIntervalSec);
+    const paramsMatch =
+      state?.downstreamPollMaxDepth === maxDepth &&
+      state?.downstreamPollIntervalSec === minIntervalSec;
+    const cacheFresh =
+      paramsMatch &&
+      isCacheFresh(state?.downstreamPollDueAt, ttlSec) &&
+      !opts?.forceRefresh &&
+      (state?.monitorSnapshotDirty ?? 0) === 0;
+
+    if (cacheFresh) {
+      return {
+        treeNodeCount,
+        downstreamPollDueCount: state?.downstreamPollDueCount ?? 0,
+      };
+    }
+
+    const downstreamPollDueCount = await this.countDownstreamPollDue(maxDepth, minIntervalSec);
+    const at = now();
+    await this.updateSchedulerState({
+      downstreamPollDueCount,
+      downstreamPollDueAt: at,
+      downstreamPollMaxDepth: maxDepth,
+      downstreamPollIntervalSec: minIntervalSec,
+      monitorSnapshotDirty: 0,
+    });
+    return { treeNodeCount, downstreamPollDueCount };
+  }
+
   async getDownstreamMonitorStats(maxDepth: number, minIntervalSec: number) {
-    return {
-      treeNodeCount: await this.countDownstreamTreeNodes(maxDepth),
-      downstreamPollDueCount: await this.countDownstreamPollDue(maxDepth, minIntervalSec),
-    };
+    return await this.getDownstreamMonitorStatsCached(maxDepth, minIntervalSec, {
+      forceRefresh: true,
+    });
   }
 
   async setExpandStatus(address: string, status: string) {
@@ -3631,8 +3809,11 @@ export class Store {
       if (wasExpanded !== isExpanded) {
         await this.adjustSchedulerCounter("crawlExpandedCount", isExpanded ? 1 : -1);
       }
+      const updated = await this.getAddress(address);
+      if (updated) {
+        await this.maybeMarkMonitorSnapshotDirty(existing, updated);
+      }
     }
-    await this.markSyncSnapshotDirty();
   }
 
   /** Reset in-flight expand scheduling states so cron can re-enqueue after clear-queue. */

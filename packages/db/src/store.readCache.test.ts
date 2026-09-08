@@ -64,19 +64,49 @@ describe("read cache", () => {
     expect(again?.at).toBe(snapshot.at);
   });
 
-  it("maybeRefreshSyncSnapshot refreshes when dirty", async () => {
+  it("maybeRefreshSyncSnapshot refreshes when job snapshot is dirty", async () => {
     await store.refreshSyncSnapshot({
       maxCrawlDepth: 5,
       downstreamPollIntervalSec: 600,
     });
-    await store.markSyncSnapshotDirty();
-    await store.upsertAddress({ address: "bc1qvictim2", role: "victim" });
+    await store.markJobSnapshotDirty();
 
     const snapshot = await store.maybeRefreshSyncSnapshot({
       maxCrawlDepth: 5,
       downstreamPollIntervalSec: 600,
     });
-    expect(snapshot?.stats.victimCount).toBe(1);
+    expect(snapshot).not.toBeNull();
+  });
+
+  it("edge upsert does not dirty monitor snapshot", async () => {
+    await store.upsertAddress({
+      address: "bc1qdown",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "expanded",
+    });
+    await store.reconcileDownstreamTreeCount(5);
+    const first = await store.refreshSyncSnapshot({
+      maxCrawlDepth: 5,
+      downstreamPollIntervalSec: 600,
+    });
+
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "bc1qa",
+        toAddress: "bc1qb",
+        txid: "tx-edge",
+        amountSats: 100,
+        direction: "out_from_hacker",
+      },
+    ]);
+
+    const again = await store.maybeRefreshSyncSnapshot({
+      maxCrawlDepth: 5,
+      downstreamPollIntervalSec: 600,
+    });
+    expect(again?.at).toBe(first.at);
+    expect(again?.monitor.downstreamPollDueCount).toBe(first.monitor.downstreamPollDueCount);
   });
 
   it("getSyncSnapshot returns null when params mismatch", async () => {

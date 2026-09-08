@@ -339,7 +339,7 @@ export async function previewNextCronEnqueue(store: Store, config: AppConfig): P
   const nextTick = (scheduler?.maintenanceCronCounter ?? 0) + 1;
   let hackerMaintenance: NextCronPreview["hackerMaintenance"] = null;
   if (nextTick % config.hackerMaintenanceEveryNCrons === 0) {
-    const hackers = await store.listHackers();
+    const hackers = await store.listHackersCached();
     if (hackers.length > 0) {
       const idx = (await store.getHackerPollIndex()) % hackers.length;
       const hacker = hackers[idx]!;
