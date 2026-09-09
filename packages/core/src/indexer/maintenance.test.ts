@@ -40,6 +40,42 @@ describe("runScheduledMaintenance", () => {
     expect((await store.getSchedulerState())?.maintenancePrunePending).toBe(0);
   });
 
+  it("reconciles cheap counters on the 60-tick cadence", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    const cheap = vi.spyOn(store, "reconcileCheapCounters");
+    const expensive = vi.spyOn(store, "reconcileStatsCounters");
+
+    await runScheduledMaintenance(
+      store,
+      testConfig(),
+      createUnlimitedSubrequestBudget(),
+      60,
+      { skipNonCritical: false },
+    );
+
+    expect(cheap).toHaveBeenCalledOnce();
+    expect(expensive).not.toHaveBeenCalled();
+  });
+
+  it("reconciles expensive stats counters on the 1440-tick cadence", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    const expensive = vi.spyOn(store, "reconcileStatsCounters");
+
+    await runScheduledMaintenance(
+      store,
+      testConfig(),
+      createUnlimitedSubrequestBudget(),
+      1440,
+      { skipNonCritical: false },
+    );
+
+    expect(expensive).toHaveBeenCalledOnce();
+  });
+
   it("skips prune when completed_at backfill backlog remains", async () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);

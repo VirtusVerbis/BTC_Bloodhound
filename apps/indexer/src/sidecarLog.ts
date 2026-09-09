@@ -59,7 +59,7 @@ export async function formatSidecarHeartbeat(
   meter?: D1RowMeter,
   quotaLimits?: SidecarD1QuotaLimits,
 ): Promise<string> {
-  const queue = await store.getQueueDepth();
+  const queue = await store.getPendingQueueDepthAll();
   const summary = await store.getActiveJobSummary({ statuses: ["pending", "running"] });
   let pending = 0;
   let running = 0;

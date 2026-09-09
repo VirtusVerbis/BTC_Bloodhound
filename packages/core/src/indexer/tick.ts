@@ -106,7 +106,7 @@ export async function runIndexerTick(
 
   logCronDetail(jobDetails, "[cron] tick start", logColor, logColorMode);
   try {
-    const queueDepth = await store.getQueueDepth();
+    const queueDepth = await store.getPendingQueueDepthAll();
     const continuationPending = schedule ? await store.hasPendingIngestContinuation() : false;
     drainFirst = shouldDrainBeforeSchedule({
       continuationPending,
@@ -184,7 +184,7 @@ export async function runIndexerTick(
   } finally {
     store.setSubrequestBudget(undefined);
     const elapsed = Date.now() - startedAt;
-    const queue = await store.getQueueDepth();
+    const queue = await store.getPendingQueueDepthAll();
     const subreqLimit = budget.limit();
     const subreqUsed = budget.used();
     logCronDetail(

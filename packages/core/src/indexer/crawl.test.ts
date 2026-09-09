@@ -160,6 +160,7 @@ function mockStore(overrides: Partial<Store> = {}): Store {
     getBtcUsdPrice: vi.fn().mockResolvedValue(null),
     getSchedulerState: vi.fn().mockResolvedValue(null),
     getQueueDepth: vi.fn().mockResolvedValue(0),
+    getPendingQueueDepthAll: vi.fn().mockResolvedValue(0),
     getSourceSync: vi.fn().mockResolvedValue(null),
     getCrawlEnqueueCandidates: vi.fn().mockResolvedValue([]),
     listDownstreamForPoll: vi.fn().mockResolvedValue([]),
@@ -434,8 +435,7 @@ describe("scheduleDownstreamCrawl", () => {
 
   it("skips crawl and poll enqueue when queue depth is at soft throttle threshold", async () => {
     const store = mockStore({
-      getQueueDepth: vi.fn().mockResolvedValue(80),
-      getSchedulerState: vi.fn().mockResolvedValue({ queueSchedulingPaused: 0 }),
+      getSchedulerState: vi.fn().mockResolvedValue({ queueSchedulingPaused: 0, pendingJobCount: 80 }),
       incrementMaintenanceCronCounter: vi.fn().mockResolvedValue(10),
       listHackersCached: vi.fn().mockResolvedValue([{ address: "bc1qa" }]),
       getBackfillState: vi.fn().mockResolvedValue({ backfillComplete: true }),
@@ -464,8 +464,7 @@ describe("scheduleDownstreamCrawl", () => {
 
   it("enqueues crawl and poll when queue depth is below soft throttle threshold", async () => {
     const store = mockStore({
-      getQueueDepth: vi.fn().mockResolvedValue(10),
-      getSchedulerState: vi.fn().mockResolvedValue({ queueSchedulingPaused: 0 }),
+      getSchedulerState: vi.fn().mockResolvedValue({ queueSchedulingPaused: 0, pendingJobCount: 10 }),
       incrementMaintenanceCronCounter: vi.fn().mockResolvedValue(11),
       listHackersCached: vi.fn().mockResolvedValue([{ address: "bc1qh1" }]),
       claimNextHackerPollIndex: vi.fn().mockResolvedValue(0),

@@ -503,6 +503,14 @@ export function runMigrations(sqlite: Database.Database): void {
     sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN downstream_poll_max_depth INTEGER NOT NULL DEFAULT 0`);
     sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN downstream_poll_interval_sec INTEGER NOT NULL DEFAULT 0`);
   }
+  if (!schedulerCols.some((c) => c.name === "pending_job_count")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN pending_job_count INTEGER NOT NULL DEFAULT 0`);
+    sqlite.exec(`
+      UPDATE scheduler_state SET pending_job_count = (
+        SELECT COUNT(*) FROM jobs WHERE status = 'pending'
+      ) WHERE id = 1
+    `);
+  }
   sqlite.exec(`
     CREATE INDEX IF NOT EXISTS idx_addresses_hackers_by_received
       ON addresses(total_received_sats DESC)

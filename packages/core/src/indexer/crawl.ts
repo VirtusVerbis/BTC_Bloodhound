@@ -29,7 +29,7 @@ async function loadScheduleEnqueueCache(store: Store): Promise<ScheduleEnqueueCa
   const state = await store.getSchedulerState();
   return {
     queueSchedulingPaused: (state?.queueSchedulingPaused ?? 0) !== 0,
-    queueDepth: await store.getQueueDepth(),
+    queueDepth: state?.pendingJobCount ?? 0,
   };
 }
 

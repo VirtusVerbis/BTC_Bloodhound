@@ -30,6 +30,12 @@ function jobPayloadAddressEqSql(address: string): string {
   return `json_extract(payload_json, '$.address') = ${sqlString(address)}`;
 }
 
+function pendingJobCountBackfillSql(): string {
+  return `UPDATE scheduler_state SET pending_job_count = (
+  SELECT COUNT(*) FROM jobs WHERE status = 'pending'
+) WHERE id = 1;`;
+}
+
 type Row = Record<string, unknown>;
 
 export function npxExecutable(): string {
@@ -223,6 +229,7 @@ WHERE NOT EXISTS (
     AND status IN ('pending', 'running')
     AND json_extract(payload_json, '$.address') = ${a}
 );`,
+    pendingJobCountBackfillSql(),
   ];
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cointrace-ops-"));
@@ -349,6 +356,7 @@ WHERE NOT EXISTS (
   SELECT COUNT(*) FROM addresses
   WHERE expand_status = 'pending' AND role IN ('downstream', 'hacker')
 ) WHERE id = 1;`);
+    statements.push(pendingJobCountBackfillSql());
     fs.writeFileSync(filePath, statements.join("\n") + "\n", "utf8");
     client.executeFile(filePath);
   } finally {

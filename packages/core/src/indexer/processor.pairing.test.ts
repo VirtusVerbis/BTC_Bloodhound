@@ -129,13 +129,16 @@ describe("processJobs weight-aware pairing", () => {
       completeJob,
       maybeClearQueueSchedulingPause: vi.fn(),
       getQueueDepth: vi.fn().mockResolvedValue(2),
+      getPendingQueueDepthAll: vi.fn().mockResolvedValue(2),
       canUseSubrequests: vi.fn().mockReturnValue(true),
       getSchedulerState: vi.fn().mockResolvedValue({ nextProviderCallAt: pacingAt }),
       listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack" }]),
+      listHackersCached: vi.fn().mockResolvedValue([{ address: "bc1qhack" }]),
       countIndexedTxsForHacker: vi.fn().mockResolvedValue(1),
       updateBackfillAudit: vi.fn(),
       upsertBackfillState: vi.fn(),
       getBackfillState: vi.fn(),
+      flushRecentHackerActivity: vi.fn(),
     } as unknown as Store;
 
     const router = {
@@ -173,11 +176,14 @@ describe("processJobs weight-aware pairing", () => {
       failJob: vi.fn(),
       maybeClearQueueSchedulingPause: vi.fn(),
       getQueueDepth: vi.fn().mockResolvedValue(1),
+      getPendingQueueDepthAll: vi.fn().mockResolvedValue(1),
       canUseSubrequests: vi.fn().mockReturnValue(true),
       getSchedulerState: vi.fn().mockResolvedValue({}),
       getSyncState: vi.fn().mockResolvedValue(null),
       listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack" }]),
+      listHackersCached: vi.fn().mockResolvedValue([{ address: "bc1qhack" }]),
       touchSyncPoll: vi.fn(),
+      flushRecentHackerActivity: vi.fn(),
     } as unknown as Store;
 
     const router = {

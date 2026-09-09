@@ -98,6 +98,18 @@ describe("queue cap", () => {
     expect(await store.getQueueDepth()).toBe(4);
   });
 
+  it("counts future run_after jobs toward the enqueue cap", async () => {
+    const store = openStore({ maxQueueDepth: 2 });
+    const future = new Date(Date.now() + 3600_000).toISOString();
+    await store.enqueueJob("poll_hacker_address", { address: "bc1qa" }, 1, future);
+    await store.enqueueJob("poll_hacker_address", { address: "bc1qb" }, 1, future);
+    const blocked = await store.enqueueJob("poll_hacker_address", { address: "bc1qc" }, 1);
+    expect(blocked).toBeNull();
+    expect(await store.getQueueDepth()).toBe(0);
+    expect(await store.getPendingQueueDepthAll()).toBe(2);
+    expect(await store.isQueueSchedulingPaused()).toBe(true);
+  });
+
   it("blocks expand enqueue when per-address cap is reached", async () => {
     const store = openStore({ maxPendingExpandPerAddress: 2, maxPendingExpandGlobal: 40 });
     await store.enqueueJob("expand_downstream", { address: "bc1qhot" }, 5);

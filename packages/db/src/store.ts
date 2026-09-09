@@ -551,7 +551,7 @@ export class Store {
       return false;
     }
 
-    const depth = await this.getQueueDepth();
+    const depth = state?.pendingJobCount ?? 0;
     if (depth >= this.maxQueueDepth) {
       await this.setQueueSchedulingPaused(true);
       if (!continuation) return false;
@@ -587,7 +587,8 @@ export class Store {
   }
 
   async maybeClearQueueSchedulingPause(): Promise<void> {
-    const depth = await this.getQueueDepth();
+    const state = await this.getSchedulerState();
+    const depth = state?.pendingJobCount ?? 0;
     if (depth <= this.queueSchedulingResumeDepth) {
       await this.setQueueSchedulingPaused(false);
     }
@@ -1789,6 +1790,7 @@ export class Store {
         createdAt: now(),
       })
       .run();
+    await this.adjustPendingJobCount(1);
     return lastInsertId(result as { lastInsertRowid?: number | bigint; meta?: { last_row_id?: number } });
   }
 
@@ -1829,6 +1831,7 @@ export class Store {
     if (changesCount(result as { changes?: number; meta?: { changes?: number } }) === 0) {
       return null;
     }
+    await this.adjustPendingJobCount(1);
     return lastInsertId(result as { lastInsertRowid?: number | bigint; meta?: { last_row_id?: number } });
   }
 
@@ -1991,6 +1994,7 @@ export class Store {
     if (changesCount(claimed as { changes?: number; meta?: { changes?: number } }) === 0) {
       return null;
     }
+    await this.adjustPendingJobCount(-1);
     return { ...job, status: "running" as const, startedAt: ts, completedAt: null };
   }
 
@@ -2028,6 +2032,7 @@ export class Store {
     if (changesCount(claimed as { changes?: number; meta?: { changes?: number } }) === 0) {
       return null;
     }
+    await this.adjustPendingJobCount(-1);
     return { ...job, status: "running" as const, startedAt: ts, completedAt: null };
   }
 
@@ -2073,6 +2078,7 @@ export class Store {
     if (changesCount(claimed as { changes?: number; meta?: { changes?: number } }) === 0) {
       return null;
     }
+    await this.adjustPendingJobCount(-1);
     return { ...job, status: "running" as const, startedAt: ts, completedAt: null };
   }
 
@@ -2105,6 +2111,7 @@ export class Store {
     if (changesCount(claimed as { changes?: number; meta?: { changes?: number } }) === 0) {
       return null;
     }
+    await this.adjustPendingJobCount(-1);
     return { ...pick, status: "running" as const, startedAt: ts, completedAt: null };
   }
 
@@ -2132,6 +2139,7 @@ export class Store {
         type: jobs.type,
         startedAt: jobs.startedAt,
         createdAt: jobs.createdAt,
+        status: jobs.status,
       })
       .from(jobs)
       .where(eq(jobs.id, id))
@@ -2148,6 +2156,9 @@ export class Store {
       })
       .where(eq(jobs.id, id))
       .run();
+    if (job?.status === "pending") {
+      await this.adjustPendingJobCount(-1);
+    }
     if (job) {
       await this.maybeUpdateLastCompletedJobCache({
         type: job.type,
@@ -2171,10 +2182,14 @@ export class Store {
       })
       .where(eq(jobs.id, id))
       .run();
+    if (job?.status === "running") {
+      await this.adjustPendingJobCount(1);
+    }
   }
 
   /** Push a stuck job to the back of the queue without incrementing attempts. */
   async deferJob(id: number, error: string, runAfter: string) {
+    const job = await this.db.select({ status: jobs.status }).from(jobs).where(eq(jobs.id, id)).get();
     await this.db
       .update(jobs)
       .set({
@@ -2186,6 +2201,9 @@ export class Store {
       })
       .where(eq(jobs.id, id))
       .run();
+    if (job?.status === "running") {
+      await this.adjustPendingJobCount(1);
+    }
   }
 
   async clearJobReclaimState(id: number) {
@@ -2251,6 +2269,7 @@ export class Store {
         })
         .where(eq(jobs.id, job.id))
         .run();
+      await this.adjustPendingJobCount(1);
       reclaimed++;
     }
 
@@ -2342,12 +2361,8 @@ export class Store {
 
   /** All pending jobs including future run_after (ops/debug). */
   async getPendingQueueDepthAll() {
-    const row = await this.db
-      .select({ count: sql<number>`count(*)` })
-      .from(jobs)
-      .where(eq(jobs.status, "pending"))
-      .get();
-    return row?.count ?? 0;
+    const state = await this.getSchedulerState();
+    return state?.pendingJobCount ?? 0;
   }
 
   async getActiveJobSummary(filters?: { statuses?: string[]; type?: string }) {
@@ -2408,6 +2423,15 @@ export class Store {
     await this.db.run(sql`
       UPDATE scheduler_state
       SET crawl_pending_count = MAX(0, crawl_pending_count + ${delta})
+      WHERE id = 1
+    `);
+  }
+
+  private async adjustPendingJobCount(delta: number): Promise<void> {
+    if (delta === 0) return;
+    await this.db.run(sql`
+      UPDATE scheduler_state
+      SET pending_job_count = MAX(0, pending_job_count + ${delta})
       WHERE id = 1
     `);
   }
@@ -2611,8 +2635,24 @@ export class Store {
     return count;
   }
 
-  async reconcileStatsCounters(): Promise<void> {
+  async reconcilePendingJobCount(): Promise<number> {
+    const row = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(jobs)
+      .where(eq(jobs.status, "pending"))
+      .get();
+    const count = row?.count ?? 0;
+    await this.updateSchedulerState({ pendingJobCount: count });
+    return count;
+  }
+
+  async reconcileCheapCounters(): Promise<void> {
     await this.reconcileCrawlPendingCount();
+    await this.reconcilePendingJobCount();
+  }
+
+  async reconcileStatsCounters(): Promise<void> {
+    await this.reconcileCheapCounters();
     const victims = await this.db
       .select({ count: sql<number>`count(*)` })
       .from(addresses)
@@ -2708,6 +2748,7 @@ export class Store {
     maintenancePrunePending?: number;
     maintenanceRunJson?: string | null;
     crawlPendingCount?: number;
+    pendingJobCount?: number;
     syncSnapshotDirty?: number;
     monitorSnapshotDirty?: number;
     downstreamPollDueCount?: number;
@@ -4400,6 +4441,11 @@ export class Store {
   }
 
   async deleteActiveJobsForAddress(address: string): Promise<number> {
+    const pendingRow = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(jobs)
+      .where(and(eq(jobs.status, "pending"), jobPayloadAddressEq(address)))
+      .get();
     const result = await this.db
       .delete(jobs)
       .where(
@@ -4409,6 +4455,7 @@ export class Store {
         ),
       )
       .run();
+    await this.adjustPendingJobCount(-(pendingRow?.count ?? 0));
     return changesCount(result as { changes?: number; meta?: { changes?: number } });
   }
 
@@ -4429,6 +4476,7 @@ export class Store {
       .delete(jobs)
       .where(or(eq(jobs.status, "pending"), eq(jobs.status, "running")))
       .run();
+    await this.updateSchedulerState({ pendingJobCount: 0 });
     return { deleted: pending + running, pending, running };
   }
 }

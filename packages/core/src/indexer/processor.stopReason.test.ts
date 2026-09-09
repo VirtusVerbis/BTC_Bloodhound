@@ -106,6 +106,10 @@ function processStoreMock(overrides: Record<string, unknown> = {}): Store {
     claimNextJob: vi.fn().mockResolvedValue(null),
     getSchedulerState: vi.fn().mockResolvedValue({}),
     canUseSubrequests: vi.fn().mockReturnValue(true),
+    getPendingQueueDepthAll: vi.fn().mockResolvedValue(0),
+    maybeClearQueueSchedulingPause: vi.fn(),
+    listHackersCached: vi.fn().mockResolvedValue([]),
+    flushRecentHackerActivity: vi.fn(),
     ...overrides,
   } as unknown as Store;
 }

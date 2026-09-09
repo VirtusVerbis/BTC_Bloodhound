@@ -46,6 +46,7 @@ describe("reBackfillHackerRemote", () => {
     expect(writtenSql).toContain("backfill_complete = 0");
     expect(writtenSql).toContain("backfill_state_json = NULL");
     expect(writtenSql).toContain("INSERT INTO jobs");
+    expect(writtenSql).toContain("pending_job_count");
     expect(writtenSql).toContain(`'${VALID_ADDRESS}'`);
     expect(result).toEqual({
       address: VALID_ADDRESS,

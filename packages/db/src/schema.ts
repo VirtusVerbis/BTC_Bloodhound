@@ -128,6 +128,7 @@ export const schedulerState = sqliteTable("scheduler_state", {
   maintenancePrunePending: integer("maintenance_prune_pending").notNull().default(0),
   maintenanceRunJson: text("maintenance_run_json"),
   crawlPendingCount: integer("crawl_pending_count").notNull().default(0),
+  pendingJobCount: integer("pending_job_count").notNull().default(0),
   syncSnapshotDirty: integer("sync_snapshot_dirty").notNull().default(0),
   monitorSnapshotDirty: integer("monitor_snapshot_dirty").notNull().default(0),
   downstreamPollDueCount: integer("downstream_poll_due_count").notNull().default(0),

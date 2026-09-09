@@ -46,6 +46,16 @@ describe("scheduler stats counters", () => {
     expect((await store.computeStatsCounts()).victimCount).toBe(1);
   });
 
+  it("reconcileCheapCounters does not rescan victim_count", async () => {
+    const { sqlite, store } = await openStore();
+    await store.upsertAddress({ address: "bc1qvictim", role: "victim" });
+    sqlite.prepare("UPDATE scheduler_state SET victim_count = 0 WHERE id = 1").run();
+    await store.reconcileCheapCounters();
+    expect((await store.computeStatsCounts()).victimCount).toBe(0);
+    await store.reconcileStatsCounters();
+    expect((await store.computeStatsCounts()).victimCount).toBe(1);
+  });
+
   it("countDownstreamTreeNodes uses cached count for matching maxDepth", async () => {
     const { store } = await openStore();
     await store.upsertAddress({

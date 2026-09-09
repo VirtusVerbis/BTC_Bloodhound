@@ -1677,7 +1677,7 @@ export async function processJobs(
       await store.maybeClearQueueSchedulingPause();
       processed++;
       const workSubreq = (budget?.used() ?? 0) - subreqBefore;
-      const queueDepth = await store.getQueueDepth();
+      const queueDepth = await store.getPendingQueueDepthAll();
       logJobDone(job, formatJobDurationMs(jobDurationMs(job)), queueDepth, {
         color: logColor,
         colorMode: logColorMode,

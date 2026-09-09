@@ -119,8 +119,10 @@ function mockStore(overrides: Record<string, unknown> = {}): Store {
     canUseSubrequests: vi.fn().mockReturnValue(true),
     maybeClearQueueSchedulingPause: vi.fn(),
     getQueueDepth: vi.fn().mockResolvedValue(0),
+    getPendingQueueDepthAll: vi.fn().mockResolvedValue(0),
     flushRecentHackerActivity: vi.fn(),
     failJob: vi.fn(),
+    listHackersCached: vi.fn().mockResolvedValue([]),
     ...overrides,
   } as unknown as Store;
 }
@@ -151,6 +153,7 @@ describe("processJobs fair scheduling", () => {
       enqueueJob: vi.fn(),
       setExpandStatus: vi.fn(),
       listHackers,
+      listHackersCached: listHackers,
     });
 
     const router = {

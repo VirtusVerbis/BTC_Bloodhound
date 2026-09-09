@@ -112,8 +112,10 @@ export class RemoteReadStore {
   }
 
   async getPendingQueueDepthAll() {
-    const row = this.client.query("SELECT COUNT(*) AS count FROM jobs WHERE status = 'pending';")[0];
-    return num(row?.count);
+    const row = this.client.query(
+      "SELECT pending_job_count FROM scheduler_state WHERE id = 1 LIMIT 1;",
+    )[0];
+    return num(row?.pending_job_count);
   }
 
   async countActiveJobs(type: string) {
@@ -154,6 +156,7 @@ export class RemoteReadStore {
       esploraRetryAfterAt: row.esplora_retry_after_at != null ? str(row.esplora_retry_after_at) : null,
       mempoolRetryAfterAt: row.mempool_retry_after_at != null ? str(row.mempool_retry_after_at) : null,
       queueSchedulingPaused: num(row.queue_scheduling_paused),
+      pendingJobCount: num(row.pending_job_count),
       backfillHealAuditIndex: num(row.backfill_heal_audit_index),
       hackerPollIndex: num(row.hacker_poll_index),
       maintenanceCronCounter: num(row.maintenance_cron_counter),

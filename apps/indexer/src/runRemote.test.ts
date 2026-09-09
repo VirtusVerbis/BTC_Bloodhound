@@ -109,6 +109,7 @@ function makeStore(overrides: Record<string, unknown> = {}) {
     tryAcquireTickLease: vi.fn(),
     clearTickLease: vi.fn(async () => {}),
     getQueueDepth: vi.fn(async () => 0),
+    getPendingQueueDepthAll: vi.fn(async () => 0),
     getActiveJobSummary: vi.fn(async () => []),
     getSchedulerState: vi.fn(async () => ({})),
     ...overrides,
