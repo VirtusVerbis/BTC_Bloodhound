@@ -36,6 +36,15 @@ export function isIngestJobType(type: string): boolean {
   return INGEST_TYPES.has(type as JobType);
 }
 
+export function jobNeedsHackersSet(type: string): boolean {
+  return (
+    isIngestJobType(type) ||
+    type === "poll_hacker_address" ||
+    type === "poll_downstream_address" ||
+    type === "process_tx"
+  );
+}
+
 export function isMaintCosmeticJobType(type: string): boolean {
   return MAINT_TYPES.has(type as JobType) || COSMETIC_TYPES.has(type as JobType);
 }

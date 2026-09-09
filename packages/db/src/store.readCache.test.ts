@@ -31,6 +31,52 @@ describe("read cache", () => {
     expect(cached[0]!.address).toBe("bc1qhacker");
   });
 
+  it("listHackersCached filters by q without SQL when cache is fresh", async () => {
+    await store.upsertAddress({
+      address: "bc1qAlpha",
+      role: "hacker",
+      isFlaggedHacker: true,
+      totalReceivedSats: 5000,
+      label: "Alpha",
+    });
+    await store.upsertAddress({
+      address: "bc1qBeta",
+      role: "hacker",
+      isFlaggedHacker: true,
+      totalReceivedSats: 3000,
+      label: "Beta",
+    });
+    await store.refreshFlaggedHackersCache();
+
+    const filtered = await store.listHackersCached({ q: "beta", activeOnly: true });
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0]!.address).toBe("bc1qBeta");
+  });
+
+  it("does not invalidate cache when isFlaggedHacker is unchanged on re-upsert", async () => {
+    await store.upsertAddress({
+      address: "bc1qhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+      totalReceivedSats: 5000,
+      label: "H1",
+    });
+    await store.refreshFlaggedHackersCache();
+
+    await store.upsertAddress({
+      address: "bc1qhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+      totalReceivedSats: 6000,
+      label: "H1 updated",
+    });
+
+    const cached = await store.listHackersCached();
+    expect(cached).toHaveLength(1);
+    expect(cached[0]!.address).toBe("bc1qhacker");
+    expect(cached[0]!.totalReceivedSats).toBe(5000);
+  });
+
   it("invalidates flagged hackers cache when isFlaggedHacker is upserted", async () => {
     await store.upsertAddress({
       address: "bc1qhacker",

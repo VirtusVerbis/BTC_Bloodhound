@@ -54,6 +54,43 @@ describe("listDownstreamForPoll", () => {
     expect((await store.listDownstreamForPoll(10, 5, 600)).map((r) => r.address)).toEqual(["due"]);
   });
 
+  it("countDownstreamPollDue matches listDownstreamForPoll for mixed poll states", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.upsertAddress({
+      address: "never-polled",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "expanded",
+    });
+    await store.upsertAddress({
+      address: "stale-poll",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "expanded",
+    });
+    await store.upsertAddress({
+      address: "recent-poll",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "expanded",
+    });
+    await store.upsertSyncState("stale-poll", { lastSeenTxid: "tx1" });
+    await store.upsertSyncState("recent-poll", { lastSeenTxid: "tx2" });
+    sqlite
+      .prepare("UPDATE sync_state SET last_polled_at = ? WHERE address = ?")
+      .run("2020-01-01T00:00:00.000Z", "stale-poll");
+    sqlite
+      .prepare("UPDATE sync_state SET last_polled_at = ? WHERE address = ?")
+      .run(new Date().toISOString(), "recent-poll");
+
+    const listed = await store.listDownstreamForPoll(10, 5, 600);
+    expect(listed.map((r) => r.address).sort()).toEqual(["never-polled", "stale-poll"]);
+    expect(await store.countDownstreamPollDue(5, 600)).toBe(2);
+  });
+
   it("excludes nodes at max crawl depth", async () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);
@@ -161,6 +198,51 @@ describe("listDownstreamForPoll", () => {
     await store.touchSyncPoll("due");
 
     expect((await store.getDownstreamMonitorStatsCached(5, 600)).downstreamPollDueCount).toBe(0);
+    const state = await store.getSchedulerState();
+    expect(state?.monitorSnapshotDirty).toBe(0);
+  });
+
+  it("upsertSyncState decrements poll due count when cache is fresh", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.upsertAddress({
+      address: "due",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "expanded",
+    });
+    await store.reconcileDownstreamTreeCount(5);
+    await store.getDownstreamMonitorStatsCached(5, 600);
+    expect((await store.getDownstreamMonitorStatsCached(5, 600)).downstreamPollDueCount).toBe(1);
+
+    await store.upsertSyncState("due", { lastSeenTxid: "tx1", lastBlockHeight: 100 });
+
+    expect((await store.getDownstreamMonitorStatsCached(5, 600)).downstreamPollDueCount).toBe(0);
+    const state = await store.getSchedulerState();
+    expect(state?.monitorSnapshotDirty).toBe(0);
+  });
+
+  it("upsertAddressesBatch increments poll due count without marking monitor dirty when cache is fresh", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.reconcileDownstreamTreeCount(5);
+    await store.getDownstreamMonitorStatsCached(5, 600);
+    expect((await store.getDownstreamMonitorStatsCached(5, 600)).downstreamPollDueCount).toBe(0);
+
+    await store.upsertAddressesBatch([
+      {
+        address: "newdown",
+        role: "downstream",
+        hopFromHacker: 1,
+        expandStatus: "expanded",
+      },
+    ]);
+
+    expect((await store.getDownstreamMonitorStatsCached(5, 600)).downstreamPollDueCount).toBe(1);
     const state = await store.getSchedulerState();
     expect(state?.monitorSnapshotDirty).toBe(0);
   });

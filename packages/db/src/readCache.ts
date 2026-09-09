@@ -2,10 +2,9 @@ import type { Address } from "./schema.js";
 
 export const FLAGGED_HACKERS_CACHE_DEFAULT_TTL_SEC = 120;
 export const SYNC_SNAPSHOT_DEFAULT_TTL_SEC = 60;
-export const POLL_DUE_CACHE_MAX_TTL_SEC = 60;
 
 export function pollDueCacheTtlSec(downstreamPollIntervalSec: number): number {
-  return Math.min(Math.max(0, downstreamPollIntervalSec), POLL_DUE_CACHE_MAX_TTL_SEC);
+  return Math.max(0, downstreamPollIntervalSec);
 }
 
 export type SyncSnapshotParams = {
@@ -78,6 +77,24 @@ export function parseFlaggedHackersCache(json: string | null | undefined): Flagg
   } catch {
     return [];
   }
+}
+
+export function filterFlaggedHackersCache(
+  rows: FlaggedHackerCacheEntry[],
+  opts?: { q?: string; activeOnly?: boolean },
+): FlaggedHackerCacheEntry[] {
+  let out = rows;
+  if (opts?.activeOnly) {
+    out = out.filter((row) => row.totalReceivedSats > 0);
+  }
+  const q = opts?.q?.trim();
+  if (!q) return out;
+  const needle = q.toLowerCase();
+  return out.filter((row) => {
+    if (row.address.toLowerCase().includes(needle)) return true;
+    if (row.label != null && row.label.toLowerCase().includes(needle)) return true;
+    return false;
+  });
 }
 
 export function serializeFlaggedHackersCache(rows: FlaggedHackerCacheEntry[]): string {

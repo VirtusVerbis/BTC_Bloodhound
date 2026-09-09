@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { jobClassForType, isIngestContinuation, isIngestJobType } from "./jobClass.js";
+import { jobClassForType, isIngestContinuation, isIngestJobType, jobNeedsHackersSet } from "./jobClass.js";
 
 describe("jobClassForType", () => {
   it("classifies ingest jobs", () => {
@@ -24,6 +24,22 @@ describe("isIngestJobType", () => {
   it("returns true only for ingest types", () => {
     expect(isIngestJobType("expand_downstream")).toBe(true);
     expect(isIngestJobType("poll_hacker_address")).toBe(false);
+  });
+});
+
+describe("jobNeedsHackersSet", () => {
+  it("returns true for ingest, poll, and process_tx jobs", () => {
+    expect(jobNeedsHackersSet("backfill_hacker_address")).toBe(true);
+    expect(jobNeedsHackersSet("expand_downstream")).toBe(true);
+    expect(jobNeedsHackersSet("poll_hacker_address")).toBe(true);
+    expect(jobNeedsHackersSet("poll_downstream_address")).toBe(true);
+    expect(jobNeedsHackersSet("process_tx")).toBe(true);
+  });
+
+  it("returns false for cosmetic and unrelated maintenance jobs", () => {
+    expect(jobNeedsHackersSet("refresh_live_balance")).toBe(false);
+    expect(jobNeedsHackersSet("sync_coldcardwatch")).toBe(false);
+    expect(jobNeedsHackersSet("backfill_op_return")).toBe(false);
   });
 });
 

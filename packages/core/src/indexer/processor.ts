@@ -26,7 +26,7 @@ import { normalizeBitcoinAddress } from "../util/address.js";
 import { formatErrorMessage } from "../util/error.js";
 import { logJobDefer, logJobDone, logJobFail, logJobStart } from "./jobLog.js";
 import type { IndexerLogColorMode } from "./logColor.js";
-import { isIngestJobType, MAINT_COSMETIC_JOB_TYPES } from "./jobClass.js";
+import { isIngestJobType, jobNeedsHackersSet, MAINT_COSMETIC_JOB_TYPES } from "./jobClass.js";
 import { toClaimAgeBoost } from "./jobAge.js";
 import {
   jobClaimMeta,
@@ -280,7 +280,7 @@ export async function runReBackfillHackers(
   store: Store,
   opts?: { fresh?: boolean },
 ): Promise<number> {
-  const hackers = await store.listHackers();
+  const hackers = await store.listHackersCached();
   let delay = 0;
   let queued = 0;
   for (const h of hackers) {
@@ -714,7 +714,7 @@ export async function runReBackfillHackersWait(
   config: AppConfig,
   opts?: { fresh?: boolean },
 ): Promise<number> {
-  const hackers = await store.listHackers();
+  const hackers = await store.listHackersCached();
   let done = 0;
   for (const h of hackers) {
     if (!opts?.fresh) {
@@ -1647,13 +1647,13 @@ export async function processJobs(
     if (jobDetails) {
       logJobStart(job, { color: logColor, colorMode: logColorMode, claimMeta: jobClaimMeta(job, config, i) });
     }
-    if (isIngestJobType(job.type) && !cachedHackers) {
+    if (jobNeedsHackersSet(job.type) && !cachedHackers) {
       cachedHackers = await getHackerAddressSet(store);
     }
     const subreqBefore = budget?.used() ?? 0;
     const jobSubreq = createJobSubrequestBudget(config.maxSubrequestsPerJob, budget, subreqBefore);
     const cpuGuard = createCpuGuardFromConfig(config.jobCpuGuardMs);
-    const hackers = isIngestJobType(job.type) ? cachedHackers : undefined;
+    const hackers = jobNeedsHackersSet(job.type) ? cachedHackers : undefined;
     try {
       let runStats: JobRunStats | undefined;
       if (job.type === "sync_coldcardwatch") {

@@ -527,6 +527,7 @@ export * from "./schema.js";
 export * from "./store.js";
 export * from "./recentHackers.js";
 export * from "./readCache.js";
+export * from "./pollDueQuery.js";
 // D1 helper is also available via `@cointrace/db/d1` (avoids bundling better-sqlite3 in Workers).
 export { createD1Store, instrumentD1Binding, type D1Binding, type D1Db, type D1SubrequestSink } from "./d1.js";
 export {

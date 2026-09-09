@@ -836,5 +836,5 @@ export async function processTxForHackTrace(
 }
 
 export async function getHackerAddressSet(store: Store): Promise<Set<string>> {
-  return new Set((await store.listHackers()).map((h) => h.address));
+  return new Set((await store.listHackersCached()).map((h) => h.address));
 }

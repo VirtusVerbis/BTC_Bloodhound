@@ -1,6 +1,14 @@
 import type { Store } from "@cointrace/db";
 import type { Job } from "@cointrace/db";
-import { isCacheFresh, pollDueCacheTtlSec } from "@cointrace/db";
+import {
+  clampPollDueCount,
+  FLAGGED_HACKERS_CACHE_DEFAULT_TTL_SEC,
+  filterFlaggedHackersCache,
+  isCacheFresh,
+  parseFlaggedHackersCache,
+  pollDueCacheTtlSec,
+  pollDueCountSql,
+} from "@cointrace/db";
 import { D1WranglerClient, sqlString } from "./d1Wrangler.js";
 
 type Row = Record<string, unknown>;
@@ -154,6 +162,10 @@ export class RemoteReadStore {
         row.d1_read_retry_after_at != null ? str(row.d1_read_retry_after_at) : null,
       d1WriteRetryAfterAt:
         row.d1_write_retry_after_at != null ? str(row.d1_write_retry_after_at) : null,
+      flaggedHackersCacheJson:
+        row.flagged_hackers_cache_json != null ? str(row.flagged_hackers_cache_json) : null,
+      flaggedHackersCacheAt:
+        row.flagged_hackers_cache_at != null ? str(row.flagged_hackers_cache_at) : null,
     };
   }
 
@@ -200,17 +212,24 @@ export class RemoteReadStore {
       return num(state?.downstream_poll_due_count);
     }
 
-    const cutoff = sqlString(new Date(Date.now() - intervalSec * 1000).toISOString());
-    const row = this.client.query(`
-SELECT COUNT(*) AS count
-FROM addresses
-LEFT JOIN sync_state ON addresses.address = sync_state.address
-WHERE addresses.role = 'downstream'
-  AND (addresses.expand_status = 'expanded' OR addresses.expand_status = 'pending')
-  AND addresses.hop_from_hacker < ${depth}
-  AND (sync_state.last_polled_at IS NULL OR sync_state.last_polled_at <= ${cutoff});
-`)[0];
-    return num(row?.count);
+    const cutoffIso = new Date(Date.now() - intervalSec * 1000).toISOString();
+    const row = this.client.query(`${pollDueCountSql(depth, cutoffIso)};`)[0];
+    const count = clampPollDueCount(num(row?.count));
+    this.persistPollDueCache(count, depth, intervalSec);
+    return count;
+  }
+
+  private persistPollDueCache(count: number, maxDepth: number, minIntervalSec: number): void {
+    const at = sqlString(new Date().toISOString());
+    this.client.execute(`
+UPDATE scheduler_state SET
+  downstream_poll_due_count = ${count},
+  downstream_poll_due_at = ${at},
+  downstream_poll_max_depth = ${maxDepth},
+  downstream_poll_interval_sec = ${minIntervalSec},
+  monitor_snapshot_dirty = 0
+WHERE id = 1;
+`);
   }
 
   async getDownstreamMonitorStats(maxDepth: number, minIntervalSec: number) {
@@ -244,6 +263,19 @@ WHERE addresses.role = 'downstream'
 FROM addresses WHERE is_flagged_hacker = 1 ORDER BY total_received_sats DESC;`,
       )
       .map((row) => mapAddressRow(row)!);
+  }
+
+  async listHackersCached(opts?: { maxAgeSec?: number; activeOnly?: boolean; q?: string }) {
+    const maxAgeSec = opts?.maxAgeSec ?? FLAGGED_HACKERS_CACHE_DEFAULT_TTL_SEC;
+    const filterOpts = { activeOnly: opts?.activeOnly, q: opts?.q };
+    const state = await this.getSchedulerState();
+    if (isCacheFresh(state?.flaggedHackersCacheAt, maxAgeSec)) {
+      return filterFlaggedHackersCache(
+        parseFlaggedHackersCache(state?.flaggedHackersCacheJson),
+        filterOpts,
+      );
+    }
+    return filterFlaggedHackersCache(await this.listHackers(), filterOpts);
   }
 
   async getAddress(address: string) {

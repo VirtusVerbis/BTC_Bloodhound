@@ -31,6 +31,7 @@ import {
 import {
   FLAGGED_HACKERS_CACHE_DEFAULT_TTL_SEC,
   SYNC_SNAPSHOT_DEFAULT_TTL_SEC,
+  filterFlaggedHackersCache,
   isCacheFresh,
   pollDueCacheTtlSec,
   parseFlaggedHackersCache,
@@ -44,6 +45,7 @@ import {
   type SyncSnapshotStats,
   type SyncSnapshotV1,
 } from "./readCache.js";
+import { clampPollDueCount, pollDueCountSql } from "./pollDueQuery.js";
 
 const INGEST_JOB_TYPES = [
   "backfill_hacker_address",
@@ -124,23 +126,6 @@ function isDownstreamPollEligible(
     hop != null &&
     hop < maxDepth
   );
-}
-
-function monitorEligibilityChanged(
-  before: Address | undefined,
-  after: Address | undefined,
-  maxDepth: number,
-): boolean {
-  const wasPoll = before
-    ? isDownstreamPollEligible(before.role, before.expandStatus, before.hopFromHacker, maxDepth)
-    : false;
-  const isPoll = after
-    ? isDownstreamPollEligible(after.role, after.expandStatus, after.hopFromHacker, maxDepth)
-    : false;
-  if (wasPoll !== isPoll) return true;
-  const wasTree = before ? isDownstreamTreeNode(before.role, before.hopFromHacker, maxDepth) : false;
-  const isTree = after ? isDownstreamTreeNode(after.role, after.hopFromHacker, maxDepth) : false;
-  return wasTree !== isTree;
 }
 
 function isD1QuotaBlockedFromState(
@@ -667,7 +652,10 @@ export class Store {
         last_seen_at = ${ts}
     `);
     if (isFlaggedHackerProvided === 1) {
-      await this.invalidateFlaggedHackersCache();
+      const nextFlagged = isFlaggedHacker;
+      if ((existing?.isFlaggedHacker ?? false) !== nextFlagged) {
+        await this.invalidateFlaggedHackersCache();
+      }
     }
     const updated = await this.getAddress(data.address);
     if (updated) {
@@ -786,17 +774,19 @@ export class Store {
     return rows;
   }
 
-  async listHackersCached(opts?: { maxAgeSec?: number; activeOnly?: boolean }): Promise<FlaggedHackerCacheEntry[]> {
+  async listHackersCached(opts?: {
+    maxAgeSec?: number;
+    activeOnly?: boolean;
+    q?: string;
+  }): Promise<FlaggedHackerCacheEntry[]> {
     const maxAgeSec = opts?.maxAgeSec ?? FLAGGED_HACKERS_CACHE_DEFAULT_TTL_SEC;
+    const filterOpts = { activeOnly: opts?.activeOnly, q: opts?.q };
     const state = await this.getSchedulerState();
     if (isCacheFresh(state?.flaggedHackersCacheAt, maxAgeSec)) {
-      let rows = parseFlaggedHackersCache(state?.flaggedHackersCacheJson);
-      if (opts?.activeOnly) rows = rows.filter((row) => row.totalReceivedSats > 0);
-      return rows;
+      return filterFlaggedHackersCache(parseFlaggedHackersCache(state?.flaggedHackersCacheJson), filterOpts);
     }
     const rows = await this.refreshFlaggedHackersCache();
-    if (opts?.activeOnly) return rows.filter((row) => row.totalReceivedSats > 0);
-    return rows;
+    return filterFlaggedHackersCache(rows, filterOpts);
   }
 
   private async executeSqlBatch(statements: ReturnType<typeof sql>[]): Promise<void> {
@@ -852,7 +842,10 @@ export class Store {
         const labelProvided = data.label !== undefined ? 1 : 0;
         const sourceProvided = data.source !== undefined ? 1 : 0;
         const isFlaggedHackerProvided = data.isFlaggedHacker !== undefined ? 1 : 0;
-        if (isFlaggedHackerProvided === 1) flaggedCacheDirty = true;
+        if (isFlaggedHackerProvided === 1) {
+          const before = beforeByAddress.get(data.address);
+          if ((before?.isFlaggedHacker ?? false) !== isFlaggedHacker) flaggedCacheDirty = true;
+        }
         const hopProvided = data.hopFromHacker !== undefined ? 1 : 0;
         const expandStatusProvided = data.expandStatus !== undefined ? 1 : 0;
         const totalReceivedProvided = data.totalReceivedSats !== undefined ? 1 : 0;
@@ -901,10 +894,7 @@ export class Store {
       await this.invalidateFlaggedHackersCache();
     }
     const afterByAddress = await this.loadAddressesByList(rows.map((r) => r.address));
-    const scheduler = await this.getSchedulerState();
-    const maxDepth = scheduler?.downstreamTreeMaxDepth ?? 0;
     let crawlPendingDelta = 0;
-    let monitorDirty = false;
     const seen = new Set<string>();
     for (let i = rows.length - 1; i >= 0; i--) {
       const address = rows[i]!.address;
@@ -916,14 +906,9 @@ export class Store {
       const isPending = after ? isCrawlPendingEligible(after.role, after.expandStatus) : false;
       crawlPendingDelta += (isPending ? 1 : 0) - (wasPending ? 1 : 0);
       await this.applyAddressStatsDelta(before, after);
-      if (maxDepth > 0 && monitorEligibilityChanged(before, after, maxDepth)) {
-        monitorDirty = true;
-      }
+      await this.maybeMarkMonitorSnapshotDirty(before, after);
     }
     await this.adjustCrawlPendingCount(crawlPendingDelta);
-    if (monitorDirty) {
-      await this.markMonitorSnapshotDirty();
-    }
   }
 
   async upsertEdgesBatch(rows: EdgeUpsertData[]): Promise<void> {
@@ -1052,7 +1037,7 @@ export class Store {
   }
 
   async recalcAllTotalReceived() {
-    for (const hacker of await this.listHackers()) {
+    for (const hacker of await this.listHackersCached()) {
       await this.recalcTotalReceived(hacker.address);
     }
   }
@@ -3006,33 +2991,17 @@ export class Store {
   }
 
   async upsertSyncState(address: string, data: { lastSeenTxid?: string; lastBlockHeight?: number | null }) {
-    const existing = await this.getSyncState(address);
-    const ts = now();
-    if (existing) {
-      await this.db
-        .update(syncState)
-        .set({
-          lastSeenTxid: data.lastSeenTxid ?? existing.lastSeenTxid,
-          lastBlockHeight: data.lastBlockHeight ?? existing.lastBlockHeight,
-          lastPolledAt: ts,
-        })
-        .where(eq(syncState.address, address))
-        .run();
-    } else {
-      await this.db
-        .insert(syncState)
-        .values({
-          address,
-          lastSeenTxid: data.lastSeenTxid ?? null,
-          lastBlockHeight: data.lastBlockHeight ?? null,
-          lastPolledAt: ts,
-        })
-        .run();
-    }
-    await this.markMonitorSnapshotDirty();
+    await this.recordSyncPoll(address, data);
   }
 
   async touchSyncPoll(address: string) {
+    await this.recordSyncPoll(address);
+  }
+
+  private async recordSyncPoll(
+    address: string,
+    data?: { lastSeenTxid?: string; lastBlockHeight?: number | null },
+  ): Promise<void> {
     const addr = await this.getAddress(address);
     const existing = await this.getSyncState(address);
     const state = await this.getSchedulerState();
@@ -3049,9 +3018,29 @@ export class Store {
 
     const ts = now();
     if (existing) {
-      await this.db.update(syncState).set({ lastPolledAt: ts }).where(eq(syncState.address, address)).run();
+      await this.db
+        .update(syncState)
+        .set(
+          data
+            ? {
+                lastSeenTxid: data.lastSeenTxid ?? existing.lastSeenTxid,
+                lastBlockHeight: data.lastBlockHeight ?? existing.lastBlockHeight,
+                lastPolledAt: ts,
+              }
+            : { lastPolledAt: ts },
+        )
+        .where(eq(syncState.address, address))
+        .run();
     } else {
-      await this.db.insert(syncState).values({ address, lastPolledAt: ts }).run();
+      await this.db
+        .insert(syncState)
+        .values({
+          address,
+          lastSeenTxid: data?.lastSeenTxid ?? null,
+          lastBlockHeight: data?.lastBlockHeight ?? null,
+          lastPolledAt: ts,
+        })
+        .run();
     }
 
     if (wasDue) {
@@ -3734,21 +3723,10 @@ export class Store {
   }
 
   async countDownstreamPollDue(maxDepth: number, minIntervalSec: number) {
+    const depth = Math.floor(maxDepth);
     const cutoff = new Date(Date.now() - minIntervalSec * 1000).toISOString();
-    const row = await this.db
-      .select({ count: sql<number>`count(*)` })
-      .from(addresses)
-      .leftJoin(syncState, eq(addresses.address, syncState.address))
-      .where(
-        and(
-          eq(addresses.role, "downstream"),
-          or(eq(addresses.expandStatus, "expanded"), eq(addresses.expandStatus, "pending")),
-          sql`${addresses.hopFromHacker} < ${maxDepth}`,
-          or(isNull(syncState.lastPolledAt), sql`${syncState.lastPolledAt} <= ${cutoff}`),
-        ),
-      )
-      .get();
-    return row?.count ?? 0;
+    const rows = (await this.db.all(sql.raw(pollDueCountSql(depth, cutoff)))) as Array<{ count: number }>;
+    return clampPollDueCount(rows[0]?.count ?? 0);
   }
 
   async getDownstreamMonitorStatsCached(

@@ -208,9 +208,10 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
 
   app.get("/api/hackers", async (c) => {
     const q = c.req.query("q");
-    const hackers = q?.trim()
-      ? await store.listHackers(q, true)
-      : await store.listHackersCached({ activeOnly: true });
+    const hackers = await store.listHackersCached({
+      q: q?.trim() || undefined,
+      activeOnly: true,
+    });
     const recentHackers = await store.getRecentHackersActivity();
     const recentByAddress = new Map(recentHackers.map((entry) => [entry.address, entry]));
     return c.json({

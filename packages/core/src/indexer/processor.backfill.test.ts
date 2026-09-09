@@ -236,7 +236,7 @@ describe("runReBackfillHackers", () => {
 
   it("skips backfill_complete hackers when not --fresh", async () => {
     const store = {
-      listHackers: vi.fn().mockResolvedValue([
+      listHackersCached: vi.fn().mockResolvedValue([
         { address: completeAddr },
         { address: pendingAddr },
       ]),
@@ -263,7 +263,7 @@ describe("runReBackfillHackers", () => {
 
   it("resumes without reset when chainCursor is saved", async () => {
     const store = {
-      listHackers: vi.fn().mockResolvedValue([{ address: resumableAddr }]),
+      listHackersCached: vi.fn().mockResolvedValue([{ address: resumableAddr }]),
       getBackfillState: vi.fn().mockResolvedValue({
         payload: { chainCursor: "cursor-abc" },
         backfillComplete: false,
@@ -288,7 +288,7 @@ describe("runReBackfillHackers", () => {
 
   it("resets all hackers when --fresh", async () => {
     const store = {
-      listHackers: vi.fn().mockResolvedValue([
+      listHackersCached: vi.fn().mockResolvedValue([
         { address: completeAddr },
         { address: resumableAddr },
       ]),
@@ -319,7 +319,7 @@ describe("runReBackfillHackersWait", () => {
   it("skips complete hackers and waits on incomplete ones", async () => {
     let backfillComplete = false;
     const store = {
-      listHackers: vi.fn().mockResolvedValue([
+      listHackersCached: vi.fn().mockResolvedValue([
         { address: completeAddr },
         { address: incompleteAddr },
       ]),
