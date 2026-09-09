@@ -50,4 +50,21 @@ describe("loadEnvFile via loadConfig", () => {
     const config = loadConfig({} as Record<string, string | undefined>);
     expect(config.chainPrimaryProvider).toBe("esplora");
   });
+
+  it("resolves CF tier quota presets through loadConfig", () => {
+    const free = loadConfig({ CF_WORKERS_TIER: "free" });
+    expect(free.cfWorkersTier).toBe("free");
+    expect(free.cronQuotaUtilizationPct).toBe(80);
+    expect(free.d1WriteDailyLimit).toBe(100_000);
+    expect(free.subrequestLimitPerInvocation).toBe(50);
+
+    const paid = loadConfig({
+      CF_WORKERS_TIER: "paid",
+      CRON_QUOTA_UTILIZATION_PCT_PAID: "100",
+    });
+    expect(paid.cfWorkersTier).toBe("paid");
+    expect(paid.cronQuotaUtilizationPct).toBe(100);
+    expect(paid.d1WriteDailyLimit).toBe(1_666_666);
+    expect(paid.subrequestLimitPerInvocation).toBe(1000);
+  });
 });

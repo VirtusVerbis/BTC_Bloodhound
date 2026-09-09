@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import dotenv from "dotenv";
 import type { IndexerLogColorMode } from "./indexer/logColor.js";
+import { resolveCfTierQuotaConfig, type CfWorkersTier } from "./quota/cfTier.js";
 
 export const JOB_PRIORITY = {
   PROCESS_TX_REBUILD: 11,
@@ -160,6 +161,8 @@ export interface AppConfig {
   syncAddressesPerJob: number;
   /** Cumulative sync-CPU budget per job (ms); 0 = disabled. */
   jobCpuGuardMs: number;
+  /** Cloudflare Workers billing tier for quota pacing presets. */
+  cfWorkersTier: CfWorkersTier;
   /** Max share of daily D1/request quota cron may consume (0–100). */
   cronQuotaUtilizationPct: number;
   d1ReadDailyLimit: number;
@@ -244,6 +247,8 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     ? corsRaw.split(",").map((s) => s.trim()).filter(Boolean)
     : ["http://localhost:5173", "http://127.0.0.1:5173"];
 
+  const tierQuota = resolveCfTierQuotaConfig(env);
+
   return {
     databaseUrl: env.DATABASE_URL ?? "file:./data/cointrace.db",
     esploraBase: (env.ESPLORA_BASE ?? "https://blockstream.info/api").replace(/\/$/, ""),
@@ -324,7 +329,7 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     sidecarHeartbeatSec: Math.max(5, Number(env.SIDECAR_HEARTBEAT_SEC ?? 30)),
     jobDeferAfterAttempts: Number(env.JOB_DEFER_AFTER_ATTEMPTS ?? 20),
     jobDeferSec: Number(env.JOB_DEFER_SEC ?? 86400),
-    subrequestLimitPerInvocation: Number(env.SUBREQUEST_LIMIT_PER_INVOCATION ?? 0),
+    subrequestLimitPerInvocation: tierQuota.subrequestLimitPerInvocation,
     scheduleSubrequestReserve: Number(env.SCHEDULE_SUBREQUEST_RESERVE ?? 38),
     scheduleReserveMaintExtra: Number(env.SCHEDULE_RESERVE_MAINT_EXTRA ?? 10),
     maxSubrequestsPerJob: Number(env.MAX_SUBREQUESTS_PER_JOB ?? 0),
@@ -345,13 +350,11 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     d1BatchSize: Number(env.D1_BATCH_SIZE ?? 8),
     syncAddressesPerJob: Number(env.SYNC_ADDRESSES_PER_JOB ?? 5),
     jobCpuGuardMs: Number(env.JOB_CPU_GUARD_MS ?? 0),
-    cronQuotaUtilizationPct: Math.min(
-      100,
-      Math.max(0, Number(env.CRON_QUOTA_UTILIZATION_PCT ?? 100)),
-    ),
-    d1ReadDailyLimit: Math.max(1, Number(env.D1_READ_DAILY_LIMIT ?? 5_000_000)),
-    d1WriteDailyLimit: Math.max(1, Number(env.D1_WRITE_DAILY_LIMIT ?? 100_000)),
-    workersRequestDailyLimit: Math.max(1, Number(env.WORKERS_REQUEST_DAILY_LIMIT ?? 100_000)),
+    cfWorkersTier: tierQuota.tier,
+    cronQuotaUtilizationPct: tierQuota.cronQuotaUtilizationPct,
+    d1ReadDailyLimit: tierQuota.d1ReadDailyLimit,
+    d1WriteDailyLimit: tierQuota.d1WriteDailyLimit,
+    workersRequestDailyLimit: tierQuota.workersRequestDailyLimit,
     maxPendingExpandPerAddress: Math.max(1, Number(env.MAX_PENDING_EXPAND_PER_ADDRESS ?? 2)),
     maxPendingExpandGlobal: Math.max(1, Number(env.MAX_PENDING_EXPAND_GLOBAL ?? 40)),
     pollSliceEveryNCrons: Math.max(1, Number(env.POLL_SLICE_EVERY_N_CRONS ?? 4)),

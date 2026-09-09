@@ -479,6 +479,7 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
     }
 
     return c.json({
+      cfWorkersTier: config.cfWorkersTier,
       queueDepth,
       pendingQueueDepthAll,
       d1Quota,

@@ -1,3 +1,4 @@
+import { resolveCfTierQuotaConfig } from "@cointrace/core";
 import { nextUtcMidnightIso, type D1RowMeter } from "@cointrace/db";
 
 export type SidecarD1QuotaLimits = {
@@ -7,9 +8,10 @@ export type SidecarD1QuotaLimits = {
 };
 
 export function parseSidecarD1QuotaLimits(env: NodeJS.ProcessEnv = process.env): SidecarD1QuotaLimits {
+  const tierQuota = resolveCfTierQuotaConfig(env);
   return {
-    readDailyLimit: parsePositiveInt(env.D1_READ_DAILY_LIMIT, 5_000_000),
-    writeDailyLimit: parsePositiveInt(env.D1_WRITE_DAILY_LIMIT, 100_000),
+    readDailyLimit: tierQuota.d1ReadDailyLimit,
+    writeDailyLimit: tierQuota.d1WriteDailyLimit,
     writeWarnPct: parsePositiveInt(env.D1_WRITE_WARN_PCT, 90),
   };
 }
