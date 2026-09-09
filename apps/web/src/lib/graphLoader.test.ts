@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { computeLoadPercent, mergeGraphPages } from "./graphLoader";
+import {
+  computeLoadPercent,
+  mergeGraphPages,
+  shouldResumeL1,
+  shouldReexpandL2,
+} from "./graphLoader";
 
 describe("mergeGraphPages", () => {
   it("dedupes nodes and edges by id", () => {
@@ -18,6 +23,32 @@ describe("mergeGraphPages", () => {
     ]);
     expect(merged.nodes).toHaveLength(3);
     expect(merged.edges).toHaveLength(2);
+  });
+});
+
+describe("shouldResumeL1", () => {
+  it("resumes when capped with cursor and higher max downstream", () => {
+    expect(
+      shouldResumeL1({ loadedL1: 1000, nextCursor: "abc", done: true, loadId: "id" }, 5000),
+    ).toBe(true);
+  });
+
+  it("does not resume when done with no cursor", () => {
+    expect(shouldResumeL1({ loadedL1: 1000, nextCursor: null, done: true }, 5000)).toBe(false);
+  });
+});
+
+describe("shouldReexpandL2", () => {
+  it("re-expands completed sessions when max downstream increases", () => {
+    expect(
+      shouldReexpandL2({ l2Token: "t", loadedL2: 10, nextCursor: null, done: true }, 1000, 5000),
+    ).toBe(true);
+  });
+
+  it("does not re-expand when max downstream unchanged", () => {
+    expect(
+      shouldReexpandL2({ l2Token: "t", loadedL2: 10, nextCursor: null, done: true }, 1000, 1000),
+    ).toBe(false);
   });
 });
 

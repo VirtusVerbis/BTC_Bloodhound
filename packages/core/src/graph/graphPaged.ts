@@ -267,14 +267,14 @@ export async function buildGraphL1Page(
   const naturalDone = outEdges.length < fetchLimit || fetchLimit === 0;
   const capDone = loadedL1 >= options.maxDownstream;
   const done = naturalDone || capDone;
+  const hasMoreEdges = outEdges.length > 0 && !naturalDone;
 
-  const nextCursor =
-    !done && outEdges.length > 0
-      ? encodeL1Cursor({
-          amountSats: outEdges[outEdges.length - 1]!.amountSats,
-          toAddress: outEdges[outEdges.length - 1]!.toAddress,
-        })
-      : null;
+  const nextCursor = hasMoreEdges
+    ? encodeL1Cursor({
+        amountSats: outEdges[outEdges.length - 1]!.amountSats,
+        toAddress: outEdges[outEdges.length - 1]!.toAddress,
+      })
+    : null;
 
   let l2Token: string | null = null;
   if (level1Ids.length > 0 && maxGraphDepth > 1) {
@@ -315,6 +315,7 @@ export async function buildGraphL2Page(
     limit: number;
     cursor?: string | null;
     loadedL2?: number;
+    maxDownstreamOverride?: number;
   },
 ): Promise<GraphL2PageResult> {
   const nodes: GraphNode[] = [];
@@ -322,6 +323,10 @@ export async function buildGraphL2Page(
   const seen = new Set<string>();
   const token = decodeL2Token(l2TokenRaw);
   if (!token) throw new Error("invalid l2_token");
+  const maxPerParent =
+    options.maxDownstreamOverride != null
+      ? Math.max(1, Math.floor(options.maxDownstreamOverride))
+      : token.maxPerParent;
 
   const l2Cursor = options.cursor ? decodeL2Cursor(options.cursor) : null;
   if (options.cursor && !l2Cursor) throw new Error("invalid cursor");
@@ -350,7 +355,7 @@ export async function buildGraphL2Page(
     const childEdges = filterDownstreamEdgesExcludingVictims(
       await store.getOutEdgesFromAddress(parentId, {
         minEdgeSats: token.minEdgeSats,
-        limit: Math.min(token.maxPerParent, remaining),
+        limit: Math.min(maxPerParent, remaining),
         after: edgeAfter,
       }),
       victimSet,
@@ -382,7 +387,7 @@ export async function buildGraphL2Page(
 
     if (addedThisPage >= options.limit) {
       const lastRaw = childEdges[childEdges.length - 1]!;
-      const hitParentCap = childEdges.length >= Math.min(token.maxPerParent, remaining);
+      const hitParentCap = childEdges.length >= Math.min(maxPerParent, remaining);
       if (hitParentCap) {
         nextCursor = encodeL2Cursor({
           parentIndex,
@@ -399,7 +404,7 @@ export async function buildGraphL2Page(
       break;
     }
 
-    if (childEdges.length >= Math.min(token.maxPerParent, remaining)) {
+    if (childEdges.length >= Math.min(maxPerParent, remaining)) {
       const last = childEdges[childEdges.length - 1]!;
       nextCursor = encodeL2Cursor({
         parentIndex,

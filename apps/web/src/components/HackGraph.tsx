@@ -15,12 +15,20 @@ import {
 import { api, satsToBtc, txUrl, ApiError } from "../lib/api";
 import {
   fetchGraphDeduped,
-  getCachedGraph,
+  findRelatedGraphLoadState,
+  getCachedGraphLoadState,
   graphCacheKey,
-  setCachedGraph,
+  setCachedGraphLoadState,
 } from "../lib/graphCache";
 import {
+  canResumeDownstream,
+  canTrimLocally,
+  filterGraphByLimits,
+  type GraphLoadParams,
+} from "../lib/graphFilter";
+import {
   loadHackerGraphPaginated,
+  loadHackerGraphPaginatedResume,
   type ApiGraphEdge,
   type ApiGraphNode,
   type ApiGraphResponse,
@@ -176,6 +184,7 @@ export function HackGraph({
   const positionsRef = useRef<Record<string, { x: number; y: number }>>({});
   const loadGenerationRef = useRef(0);
   const lastGraphKeyRef = useRef<string | null>(null);
+  const lastLoadedParamsRef = useRef<GraphLoadParams | null>(null);
   const prevExpandRef = useRef(expandVictims);
   const pendingFitRef = useRef(false);
   const graphDataRef = useRef<{
@@ -221,10 +230,11 @@ export function HackGraph({
   useEffect(() => {
     positionsRef.current = {};
     graphDataRef.current = null;
+    lastLoadedParamsRef.current = null;
     setVictimSort("btc-desc");
     victimSortRef.current = "btc-desc";
     pendingFitRef.current = true;
-  }, [hacker, victimSearch, minEdgeSats, expandVictims, maxVictimNodes, maxDownstreamNodes]);
+  }, [hacker, victimSearch, expandVictims]);
 
   useEffect(() => {
     if (expandVictims && !prevExpandRef.current) {
@@ -321,69 +331,110 @@ export function HackGraph({
       const generation = ++loadGenerationRef.current;
       setGraphError(null);
 
+      const loadParams: GraphLoadParams = {
+        hacker,
+        minEdgeSats,
+        maxVictims: maxVictimNodes,
+        maxDownstream: maxDownstreamNodes,
+        expandVictims: expanded,
+      };
+
       const keyChanged = key !== lastGraphKeyRef.current;
       const needsClear = keyChanged || opts?.skipCache === true;
 
-      const params = new URLSearchParams({
+      const searchParams = new URLSearchParams({
         min_edge_sats: String(minEdgeSats),
         max_victims: String(maxVictimNodes),
         max_downstream: String(maxDownstreamNodes),
       });
 
       if (victimSearch) {
-        params.set("victim", victimSearch);
-        params.set("depth", "2");
+        searchParams.set("victim", victimSearch);
+        searchParams.set("depth", "2");
       } else {
-        params.set("hacker", hacker);
-        if (expanded) params.set("expand_victims", "1");
+        searchParams.set("hacker", hacker);
+        if (expanded) searchParams.set("expand_victims", "1");
       }
 
       if (!opts?.skipCache) {
-        const cached = getCachedGraph<ApiGraphResponse>(key);
-        if (cached && generation === loadGenerationRef.current) {
+        const cachedState = getCachedGraphLoadState(key);
+        if (cachedState && generation === loadGenerationRef.current) {
           if (needsClear || graphDataRef.current === null) {
-            applyApiGraph(cached);
+            applyApiGraph(cachedState.response);
             lastGraphKeyRef.current = key;
+            lastLoadedParamsRef.current = cachedState.params;
           }
           setGraphLoading(false);
           setGraphLoadProgress(null);
           return;
+        }
+
+        if (!victimSearch) {
+          const related = findRelatedGraphLoadState(loadParams, victimSearch);
+          if (related && canTrimLocally(related.params, loadParams)) {
+            const filtered = filterGraphByLimits(related.response, loadParams);
+            const trimmedState = { ...related, response: filtered, params: loadParams };
+            setCachedGraphLoadState(key, trimmedState);
+            applyApiGraph(filtered);
+            lastGraphKeyRef.current = key;
+            lastLoadedParamsRef.current = loadParams;
+            setGraphLoading(false);
+            setGraphLoadProgress(null);
+            return;
+          }
         }
       }
 
       setGraphLoading(true);
       setGraphLoadProgress({ phase: "l1", loaded: 0, total: null, percent: 0, message: "Loading" });
 
+      const loaderOpts = {
+        onProgress: (progress: GraphLoadProgress) => {
+          if (generation === loadGenerationRef.current) {
+            setGraphLoadProgress(progress);
+          }
+        },
+        signal: {
+          generation,
+          current: () => loadGenerationRef.current,
+        },
+      };
+
+      const paginatedParams = {
+        hacker,
+        minEdgeSats,
+        maxDownstream: maxDownstreamNodes,
+        maxVictims: maxVictimNodes,
+        expandVictims: expanded,
+        pageSize: graphPageSize,
+      };
+
       let graph: ApiGraphResponse;
       try {
         if (victimSearch) {
           graph = await fetchGraphDeduped(
             key,
-            () => api<ApiGraphResponse>(`/api/graph?${params}`),
+            () => api<ApiGraphResponse>(`/api/graph?${searchParams}`),
             { force: opts?.skipCache === true },
           );
+        } else if (!opts?.skipCache) {
+          const related = findRelatedGraphLoadState(loadParams, victimSearch);
+          if (related && canResumeDownstream(related.params, loadParams)) {
+            const result = await loadHackerGraphPaginatedResume(related, paginatedParams, loaderOpts);
+            graph = result.graph;
+            setCachedGraphLoadState(key, result.state);
+            lastLoadedParamsRef.current = result.state.params;
+          } else {
+            const result = await loadHackerGraphPaginated(paginatedParams, loaderOpts);
+            graph = result.graph;
+            setCachedGraphLoadState(key, result.state);
+            lastLoadedParamsRef.current = result.state.params;
+          }
         } else {
-          graph = await loadHackerGraphPaginated(
-            {
-              hacker,
-              minEdgeSats,
-              maxDownstream: maxDownstreamNodes,
-              maxVictims: maxVictimNodes,
-              expandVictims: expanded,
-              pageSize: graphPageSize,
-            },
-            {
-              onProgress: (progress) => {
-                if (generation === loadGenerationRef.current) {
-                  setGraphLoadProgress(progress);
-                }
-              },
-              signal: {
-                generation,
-                current: () => loadGenerationRef.current,
-              },
-            },
-          );
+          const result = await loadHackerGraphPaginated(paginatedParams, loaderOpts);
+          graph = result.graph;
+          setCachedGraphLoadState(key, result.state);
+          lastLoadedParamsRef.current = result.state.params;
         }
       } catch (e) {
         if (generation !== loadGenerationRef.current) return;
@@ -407,7 +458,14 @@ export function HackGraph({
 
       if (generation !== loadGenerationRef.current) return;
 
-      setCachedGraph(key, graph);
+      if (victimSearch) {
+        setCachedGraphLoadState(key, {
+          response: graph,
+          params: loadParams,
+          l1: { loadedL1: 0, nextCursor: null, done: true },
+          l2Sessions: [],
+        });
+      }
       applyApiGraph(graph);
       lastGraphKeyRef.current = key;
       setGraphLoading(false);

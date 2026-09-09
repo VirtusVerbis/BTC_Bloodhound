@@ -428,6 +428,10 @@ export function runMigrations(sqlite: Database.Database): void {
       ON sync_state(last_polled_at, address);
   `);
   sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_sync_state_polled_addr
+      ON sync_state(address) WHERE last_polled_at IS NOT NULL;
+  `);
+  sqlite.exec(`
     CREATE INDEX IF NOT EXISTS idx_addresses_downstream_hop
       ON addresses(hop_from_hacker)
       WHERE role = 'downstream';

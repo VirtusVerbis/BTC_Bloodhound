@@ -47,6 +47,11 @@ import {
 } from "./readCache.js";
 import { clampPollDueCount, pollDueCountSql } from "./pollDueQuery.js";
 
+const neverPolledForPollSql = sql.raw(`NOT EXISTS (
+  SELECT 1 FROM sync_state s
+  WHERE s.address = addresses.address AND s.last_polled_at IS NOT NULL
+)`);
+
 const INGEST_JOB_TYPES = [
   "backfill_hacker_address",
   "audit_hacker_backfill",
@@ -3697,21 +3702,43 @@ export class Store {
 
   async listDownstreamForPoll(limit: number, maxDepth: number, minIntervalSec: number) {
     const cutoff = new Date(Date.now() - minIntervalSec * 1000).toISOString();
-    return await this.db
+    const cap = Math.max(0, Math.floor(limit));
+    if (cap === 0) return [];
+
+    const neverPolled = await this.db
       .select({ address: addresses.address })
       .from(addresses)
-      .leftJoin(syncState, eq(addresses.address, syncState.address))
       .where(
         and(
           eq(addresses.role, "downstream"),
           or(eq(addresses.expandStatus, "expanded"), eq(addresses.expandStatus, "pending")),
           sql`${addresses.hopFromHacker} < ${maxDepth}`,
-          or(isNull(syncState.lastPolledAt), sql`${syncState.lastPolledAt} <= ${cutoff}`),
+          neverPolledForPollSql,
+        ),
+      )
+      .orderBy(asc(addresses.hopFromHacker))
+      .limit(cap)
+      .all();
+
+    if (neverPolled.length >= cap) return neverPolled;
+
+    const stale = await this.db
+      .select({ address: addresses.address })
+      .from(syncState)
+      .innerJoin(addresses, eq(syncState.address, addresses.address))
+      .where(
+        and(
+          sql`${syncState.lastPolledAt} <= ${cutoff}`,
+          eq(addresses.role, "downstream"),
+          or(eq(addresses.expandStatus, "expanded"), eq(addresses.expandStatus, "pending")),
+          sql`${addresses.hopFromHacker} < ${maxDepth}`,
         ),
       )
       .orderBy(asc(syncState.lastPolledAt), asc(addresses.hopFromHacker))
-      .limit(limit)
+      .limit(cap - neverPolled.length)
       .all();
+
+    return [...neverPolled, ...stale];
   }
 
   async countDownstreamTreeNodes(maxDepth: number) {

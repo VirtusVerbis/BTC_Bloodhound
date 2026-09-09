@@ -304,12 +304,18 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
           loadedL2Raw != null && Number.isFinite(Number(loadedL2Raw))
             ? Math.max(0, Math.floor(Number(loadedL2Raw)))
             : 0;
+        const maxDownstreamOverrideRaw = c.req.query("max_downstream");
+        const maxDownstreamOverride =
+          maxDownstreamOverrideRaw != null && Number.isFinite(Number(maxDownstreamOverrideRaw))
+            ? clampInt(Number(maxDownstreamOverrideRaw), 1, config.maxGraphDownstream)
+            : undefined;
         try {
           return c.json(
             await buildGraphL2Page(store, l2Token, {
               limit,
               cursor,
               loadedL2,
+              maxDownstreamOverride,
             }),
           );
         } catch (err) {

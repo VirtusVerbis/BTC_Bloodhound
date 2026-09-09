@@ -5,6 +5,8 @@ import {
   FLAGGED_HACKERS_CACHE_DEFAULT_TTL_SEC,
   filterFlaggedHackersCache,
   isCacheFresh,
+  listDownstreamNeverPolledSql,
+  listDownstreamStalePolledSql,
   parseFlaggedHackersCache,
   pollDueCacheTtlSec,
   pollDueCountSql,
@@ -337,20 +339,22 @@ LIMIT ${Math.max(0, Math.floor(limit))};
   }
 
   async listDownstreamForPoll(limit: number, maxDepth: number, minIntervalSec: number) {
-    const cutoff = sqlString(new Date(Date.now() - minIntervalSec * 1000).toISOString());
-    return this.client
-      .query(`
-SELECT addresses.address AS address
-FROM addresses
-LEFT JOIN sync_state ON addresses.address = sync_state.address
-WHERE addresses.role = 'downstream'
-  AND (addresses.expand_status = 'expanded' OR addresses.expand_status = 'pending')
-  AND addresses.hop_from_hacker < ${Math.floor(maxDepth)}
-  AND (sync_state.last_polled_at IS NULL OR sync_state.last_polled_at <= ${cutoff})
-ORDER BY sync_state.last_polled_at ASC, addresses.hop_from_hacker ASC
-LIMIT ${Math.max(0, Math.floor(limit))};
-`)
+    const depth = Math.floor(maxDepth);
+    const cap = Math.max(0, Math.floor(limit));
+    if (cap === 0) return [];
+
+    const cutoffIso = new Date(Date.now() - minIntervalSec * 1000).toISOString();
+    const neverPolled = this.client
+      .query(`${listDownstreamNeverPolledSql(depth, cap)};`)
       .map((row) => ({ address: str(row.address) }));
+
+    if (neverPolled.length >= cap) return neverPolled;
+
+    const stale = this.client
+      .query(`${listDownstreamStalePolledSql(depth, cutoffIso, cap - neverPolled.length)};`)
+      .map((row) => ({ address: str(row.address) }));
+
+    return [...neverPolled, ...stale];
   }
 }
 
