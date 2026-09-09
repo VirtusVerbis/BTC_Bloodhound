@@ -108,7 +108,7 @@ async function appendVictimsSection(
     minEdgeSats?: number;
   },
 ): Promise<void> {
-  const minEdgeSats = options.minEdgeSats ?? 1000;
+  const minEdgeSats = options.minEdgeSats ?? 100_000;
   const victimStats = await store.getVictimStats(hacker, minEdgeSats);
 
   if (!options.expandVictims) {
@@ -186,7 +186,7 @@ export async function buildGraphL1Page(
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
   const seen = new Set<string>();
-  const minEdgeSats = options.minEdgeSats ?? 1000;
+  const minEdgeSats = options.minEdgeSats ?? 100_000;
   const graphBundleMinEdges = options.graphBundleMinEdges ?? 2;
   const maxGraphDepth = options.maxGraphDepth ?? 2;
   const loadedBefore = options.loadedL1 ?? 0;

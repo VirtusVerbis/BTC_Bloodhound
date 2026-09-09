@@ -40,6 +40,7 @@ function baseConfig(): AppConfig {
     maxCrawlDepth: 5,
     maxGraphDepth: 2,
     minEdgeSats: 1000,
+    minExpandSats: 1000,
     balanceRefreshIntervalSec: 300,
     btcUsdPriceRefreshIntervalSec: 60,
     coldcardwatchSyncIntervalSec: 3600,
@@ -482,7 +483,7 @@ describe("scheduleDownstreamCrawl", () => {
     expect(stats.throttled).toBe(false);
     expect(stats.crawlEnqueued).toBe(1);
     expect(stats.pollEnqueued).toBe(1);
-    expect(store.getCrawlEnqueueCandidates).toHaveBeenCalledWith("bc1qh1", 5, 5);
+    expect(store.getCrawlEnqueueCandidates).toHaveBeenCalledWith("bc1qh1", 5, 5, 1000);
     expect(store.listDownstreamForPoll).toHaveBeenCalled();
   });
 

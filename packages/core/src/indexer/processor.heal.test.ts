@@ -23,6 +23,7 @@ function baseConfig(): AppConfig {
     maxCrawlDepth: 5,
     maxGraphDepth: 2,
     minEdgeSats: 1000,
+    minExpandSats: 1000,
     balanceRefreshIntervalSec: 300,
     btcUsdPriceRefreshIntervalSec: 60,
     coldcardwatchSyncIntervalSec: 3600,
@@ -84,6 +85,7 @@ describe("audit_hacker_backfill", () => {
       upsertBackfillState: vi.fn(),
       getBackfillState: vi.fn().mockResolvedValue({ payload: null, backfillComplete: true }),
       enqueueJob: vi.fn(),
+      flushRecentHackerActivity: vi.fn(),
     } as unknown as Store;
 
     const router = {
@@ -128,6 +130,7 @@ describe("audit_hacker_backfill", () => {
       upsertBackfillState: vi.fn(),
       getBackfillState: vi.fn(),
       enqueueJob: vi.fn(),
+      flushRecentHackerActivity: vi.fn(),
     } as unknown as Store;
 
     const router = {

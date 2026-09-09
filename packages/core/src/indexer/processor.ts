@@ -1424,6 +1424,7 @@ export async function processJob(
         await processTxForHackTrace(store, router, payload.txid as string, hackers, {
           maxGraphEdgesPerTx: config.maxGraphEdgesPerTx > 0 ? config.maxGraphEdgesPerTx : undefined,
           maxEdgesPerJob: config.maxEdgesPerJob > 0 ? config.maxEdgesPerJob : undefined,
+          minExpandSats: config.minExpandSats,
           cpuGuard: opts?.cpuGuard,
         });
         break;

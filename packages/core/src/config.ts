@@ -53,6 +53,8 @@ export interface AppConfig {
   maxCrawlDepth: number;
   maxGraphDepth: number;
   minEdgeSats: number;
+  /** Crawl/expand floor for downstream only; victims are never gated by this. */
+  minExpandSats: number;
   balanceRefreshIntervalSec: number;
   btcUsdPriceRefreshIntervalSec: number;
   coldcardwatchSyncIntervalSec: number;
@@ -267,7 +269,8 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     downstreamPollEnqueuePerCron: Number(env.DOWNSTREAM_POLL_ENQUEUE_PER_CRON ?? 2),
     maxCrawlDepth: Number(env.MAX_CRAWL_DEPTH ?? 5),
     maxGraphDepth: Number(env.MAX_GRAPH_DEPTH ?? 2),
-    minEdgeSats: Number(env.MIN_EDGE_SATS ?? 1000),
+    minEdgeSats: Number(env.MIN_EDGE_SATS ?? 100_000),
+    minExpandSats: Number(env.MIN_EXPAND_SATS ?? 100_000),
     balanceRefreshIntervalSec: Number(env.BALANCE_REFRESH_INTERVAL_SEC ?? 300),
     btcUsdPriceRefreshIntervalSec: Number(env.BTC_USD_PRICE_REFRESH_INTERVAL_SEC ?? 900),
     coldcardwatchSyncIntervalSec: Number(env.COLDCARDWATCH_SYNC_INTERVAL_SEC ?? 3600),

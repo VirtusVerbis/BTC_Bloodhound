@@ -2,7 +2,7 @@ import { btcToSats, satsToBtcNumber } from "./api";
 
 export const DEFAULT_MAX_VICTIM_NODES = 100;
 export const DEFAULT_MAX_DOWNSTREAM_NODES = 100;
-export const DEFAULT_MIN_EDGE_SATS = 1000;
+export const DEFAULT_MIN_EDGE_SATS = 100_000;
 /** Fallback when /api/config has not loaded yet. */
 export const DEFAULT_MAX_GRAPH_NODE_CAP = 10000;
 export const MIN_SATS_INPUT_MAX_LENGTH = 16;

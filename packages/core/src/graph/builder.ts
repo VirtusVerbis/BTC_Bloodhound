@@ -1,5 +1,4 @@
 import type { Store } from "@cointrace/db";
-import type { AppConfig } from "../config.js";
 import { blockTimeIso } from "../chain/esplora.js";
 import type { ChainRouter } from "../chain/router.js";
 import type { ChainTxDetail } from "../chain/types.js";
@@ -8,12 +7,14 @@ import { captureOpReturnForTx, type CaptureOpReturnOpts } from "../indexer/opRet
 import { bundleParallelEdges, mapDbEdgeToGraph, type EdgeKind } from "./graphEdges.js";
 import { enrichNodesWithOpReturn } from "./graphOpReturn.js";
 import { filterDownstreamEdgesExcludingVictims } from "./graphVictims.js";
+import { DEFAULT_MIN_EXPAND_SATS, expandStatusToWrite } from "./expandSkip.js";
 
 export interface HackTraceOptions {
   tx?: ChainTxDetail;
   spendingAddress?: string;
   spendingHop?: number;
   captureOpReturn?: CaptureOpReturnOpts;
+  minExpandSats?: number;
 }
 
 export type { EdgeKind } from "./graphEdges.js";
@@ -99,7 +100,7 @@ export async function buildGraph(
   const depth = options.depth ?? 1;
   const maxOutputs = options.maxOutputs ?? 100;
   const maxVictims = options.maxVictims ?? 100;
-  const minEdgeSats = options.minEdgeSats ?? 1000;
+  const minEdgeSats = options.minEdgeSats ?? 100_000;
   const victimFilter = options.victimFilter?.trim().toLowerCase();
   const graphBundleMinEdges = options.graphBundleMinEdges ?? 2;
   const nodes: GraphNode[] = [];
@@ -556,6 +557,7 @@ export interface HackTraceApplyChunkOptions {
   maxEdges?: number;
   cpuGuard?: CpuGuard;
   flaggedHackers?: Set<string>;
+  minExpandSats?: number;
 }
 
 export interface HackTraceApplyChunkResult {
@@ -634,7 +636,7 @@ export async function applyHackTraceEdgesChunk(
     role: string;
     source: string;
     hopFromHacker: number;
-    expandStatus: string;
+    expandStatus?: string;
   }> = [];
   const edgeRows: Array<{
     fromAddress: string;
@@ -647,16 +649,30 @@ export async function applyHackTraceEdgesChunk(
     edgeKind?: string | null;
   }> = [];
 
+  const minExpandSats = opts?.minExpandSats ?? DEFAULT_MIN_EXPAND_SATS;
+  const sliceInbound = new Map<string, number>();
   for (const edge of slice) {
     const isVictimDust =
       edge.direction === "out_from_hacker" && victimTargets.has(edge.toAddress);
     if (edge.direction === "out_from_hacker" && !isVictimDust) {
+      sliceInbound.set(edge.toAddress, (sliceInbound.get(edge.toAddress) ?? 0) + edge.amountSats);
+    }
+  }
+  const expandCtx = await store.getDownstreamExpandContext([...sliceInbound.keys()]);
+
+  for (const edge of slice) {
+    const isVictimDust =
+      edge.direction === "out_from_hacker" && victimTargets.has(edge.toAddress);
+    if (edge.direction === "out_from_hacker" && !isVictimDust) {
+      const existing = expandCtx.get(edge.toAddress);
+      const inboundSats = (existing?.inboundSats ?? 0) + (sliceInbound.get(edge.toAddress) ?? 0);
+      const expandStatus = expandStatusToWrite(existing?.expandStatus, inboundSats, minExpandSats);
       downstreamRows.push({
         address: edge.toAddress,
         role: "downstream",
         source: "derived",
         hopFromHacker: edge.hopFromHacker,
-        expandStatus: "pending",
+        ...(expandStatus != null ? { expandStatus } : {}),
       });
     }
     edgeRows.push({
@@ -810,6 +826,7 @@ export async function processTxForHackTrace(
       maxEdges: maxEdgesPerJob,
       cpuGuard,
       flaggedHackers: hackerAddresses,
+      minExpandSats: options.minExpandSats ?? DEFAULT_MIN_EXPAND_SATS,
     },
   );
 

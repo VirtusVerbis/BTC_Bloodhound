@@ -341,20 +341,26 @@ LIMIT ${Math.max(0, Math.floor(limit))};
       .map((row) => ({ address: str(row.address) }));
   }
 
-  async listDownstreamForPoll(limit: number, maxDepth: number, minIntervalSec: number) {
+  async listDownstreamForPoll(
+    limit: number,
+    maxDepth: number,
+    minIntervalSec: number,
+    minExpandSats = 0,
+  ) {
     const depth = Math.floor(maxDepth);
     const cap = Math.max(0, Math.floor(limit));
     if (cap === 0) return [];
 
     const cutoffIso = new Date(Date.now() - minIntervalSec * 1000).toISOString();
+    const floor = Math.max(0, Math.floor(minExpandSats));
     const neverPolled = this.client
-      .query(`${listDownstreamNeverPolledSql(depth, cap)};`)
+      .query(`${listDownstreamNeverPolledSql(depth, cap, floor)};`)
       .map((row) => ({ address: str(row.address) }));
 
     if (neverPolled.length >= cap) return neverPolled;
 
     const stale = this.client
-      .query(`${listDownstreamStalePolledSql(depth, cutoffIso, cap - neverPolled.length)};`)
+      .query(`${listDownstreamStalePolledSql(depth, cutoffIso, cap - neverPolled.length, floor)};`)
       .map((row) => ({ address: str(row.address) }));
 
     return [...neverPolled, ...stale];

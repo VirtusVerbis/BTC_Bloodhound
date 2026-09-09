@@ -244,6 +244,7 @@ export async function scheduleDownstreamCrawl(
       hackersForCrawl[idx]!.address,
       config.crawlEnqueuePerCron,
       config.maxCrawlDepth,
+      config.minExpandSats,
     );
     for (const row of frontier) {
       const jobId = await store.enqueueJobIfAbsent(
@@ -264,6 +265,7 @@ export async function scheduleDownstreamCrawl(
     config.downstreamPollEnqueuePerCron,
     config.maxCrawlDepth,
     config.downstreamPollIntervalSec,
+    config.minExpandSats,
   );
   for (const row of pollCandidates) {
     const jobId = await store.enqueueJobIfAbsent(

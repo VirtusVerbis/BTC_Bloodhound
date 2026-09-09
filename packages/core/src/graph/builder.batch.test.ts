@@ -170,4 +170,168 @@ describe("applyHackTraceEdgesChunk", () => {
       .get() as { c: number };
     expect(edgeCount.c).toBeGreaterThan(0);
   });
+
+  it("marks new sub-threshold downstream as skipped_min and still stores the edge", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    await store.upsertAddress({
+      address: "bc1qhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+    });
+
+    const computed: HackTraceEdges = {
+      inToHacker: [],
+      outFromHacker: [
+        {
+          fromAddress: "bc1qhacker",
+          toAddress: "bc1qsmall",
+          amountSats: 50_000,
+          hopFromHacker: 1,
+          direction: "out_from_hacker",
+        },
+      ],
+      victimAddresses: [],
+    };
+
+    await applyHackTraceEdgesChunk(
+      store,
+      { txid: "tx_small", blockTime: "2024-01-01T00:00:00.000Z" },
+      computed,
+      { minExpandSats: 100_000 },
+    );
+
+    const row = await store.getAddress("bc1qsmall");
+    expect(row?.role).toBe("downstream");
+    expect(row?.expandStatus).toBe("skipped_min");
+    const edges = await store.getEdgesFromAddress("bc1qhacker");
+    expect(edges.some((e) => e.toAddress === "bc1qsmall" && e.amountSats === 50_000)).toBe(true);
+  });
+
+  it("promotes skipped_min to pending when cumulative inbound clears the floor", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    await store.upsertAddress({
+      address: "bc1qhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+    });
+    await store.upsertAddress({
+      address: "bc1qaccum",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "skipped_min",
+    });
+    await store.upsertEdge({
+      fromAddress: "bc1qhacker",
+      toAddress: "bc1qaccum",
+      txid: "tx_first",
+      amountSats: 50_000,
+      direction: "out_from_hacker",
+      hopFromHacker: 1,
+    });
+
+    const computed: HackTraceEdges = {
+      inToHacker: [],
+      outFromHacker: [
+        {
+          fromAddress: "bc1qhacker",
+          toAddress: "bc1qaccum",
+          amountSats: 60_000,
+          hopFromHacker: 1,
+          direction: "out_from_hacker",
+        },
+      ],
+      victimAddresses: [],
+    };
+
+    await applyHackTraceEdgesChunk(
+      store,
+      { txid: "tx_second", blockTime: "2024-01-02T00:00:00.000Z" },
+      computed,
+      { minExpandSats: 100_000 },
+    );
+
+    expect((await store.getAddress("bc1qaccum"))?.expandStatus).toBe("pending");
+  });
+
+  it("does not clobber expanded expand_status", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    await store.upsertAddress({
+      address: "bc1qhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+    });
+    await store.upsertAddress({
+      address: "bc1qdone",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "expanded",
+    });
+
+    const computed: HackTraceEdges = {
+      inToHacker: [],
+      outFromHacker: [
+        {
+          fromAddress: "bc1qhacker",
+          toAddress: "bc1qdone",
+          amountSats: 50_000,
+          hopFromHacker: 1,
+          direction: "out_from_hacker",
+        },
+      ],
+      victimAddresses: [],
+    };
+
+    await applyHackTraceEdgesChunk(
+      store,
+      { txid: "tx_more", blockTime: "2024-01-03T00:00:00.000Z" },
+      computed,
+      { minExpandSats: 100_000 },
+    );
+
+    expect((await store.getAddress("bc1qdone"))?.expandStatus).toBe("expanded");
+  });
+
+  it("still captures a sub-threshold victim", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    await store.upsertAddress({
+      address: "bc1qhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+    });
+
+    const computed: HackTraceEdges = {
+      inToHacker: [
+        {
+          fromAddress: "bc1qtinyv",
+          toAddress: "bc1qhacker",
+          amountSats: 500,
+          hopFromHacker: 0,
+          direction: "in_to_hacker",
+        },
+      ],
+      outFromHacker: [],
+      victimAddresses: ["bc1qtinyv"],
+    };
+
+    await applyHackTraceEdgesChunk(
+      store,
+      { txid: "tx_victim", blockTime: "2024-01-04T00:00:00.000Z" },
+      computed,
+      { minExpandSats: 100_000 },
+    );
+
+    const victim = await store.getAddress("bc1qtinyv");
+    expect(victim?.role).toBe("victim");
+    expect(victim?.expandStatus).not.toBe("skipped_min");
+    const edges = await store.getEdgesToAddress("bc1qhacker");
+    expect(edges.some((e) => e.fromAddress === "bc1qtinyv" && e.amountSats === 500)).toBe(true);
+  });
 });

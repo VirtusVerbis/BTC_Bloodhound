@@ -68,5 +68,6 @@ describe("commitMinAmountDraft", () => {
     commitMinAmountDraft("", "sats", DEFAULT_MIN_EDGE_SATS, (n) => (committed = n), (s) => (draft = s));
     expect(committed).toBe(DEFAULT_MIN_EDGE_SATS);
     expect(draft).toBe(String(DEFAULT_MIN_EDGE_SATS));
+    expect(DEFAULT_MIN_EDGE_SATS).toBe(100_000);
   });
 });

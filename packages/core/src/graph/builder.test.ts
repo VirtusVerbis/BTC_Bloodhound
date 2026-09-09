@@ -167,6 +167,7 @@ describe("processTxForHackTrace", () => {
       tx,
       spendingAddress: "down1",
       spendingHop: 1,
+      minExpandSats: 0,
     });
 
     const child = await store.getAddress("child2");

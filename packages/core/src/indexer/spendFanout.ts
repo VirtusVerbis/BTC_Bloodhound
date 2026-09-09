@@ -1,7 +1,7 @@
 import type { Store } from "@cointrace/db";
 import { blockTimeIso } from "../chain/esplora.js";
 import type { ChainTxDetail } from "../chain/types.js";
-import type { AppConfig } from "../config.js";
+import { DEFAULT_MIN_EXPAND_SATS, expandStatusToWrite } from "../graph/expandSkip.js";
 import { pageEntryToChainTxDetail, uniqueOutputAddresses, type PendingTxRuntime } from "./txPage.js";
 
 export interface FanoutOutput {
@@ -18,6 +18,7 @@ export interface FanoutMeta {
 
 export interface SpendFanoutConfig {
   spendFanoutTopK: number;
+  minExpandSats?: number;
 }
 
 export function aggregateFanoutOutputs(
@@ -80,6 +81,12 @@ export async function applySpendFanoutSummary(
     feeSats: tx.fee ?? null,
   });
 
+  const minExpandSats = config.minExpandSats ?? DEFAULT_MIN_EXPAND_SATS;
+  const ctx = await store.getDownstreamExpandContext([primary.address]);
+  const existing = ctx.get(primary.address);
+  const inboundSats = (existing?.inboundSats ?? 0) + meta.totalOutSats;
+  const expandStatus = expandStatusToWrite(existing?.expandStatus, inboundSats, minExpandSats);
+
   await store.upsertEdge({
     fromAddress: spender,
     toAddress: primary.address,
@@ -97,7 +104,7 @@ export async function applySpendFanoutSummary(
     role: "downstream",
     source: "derived",
     hopFromHacker: hop + 1,
-    expandStatus: "pending",
+    ...(expandStatus != null ? { expandStatus } : {}),
   });
 
   await store.setExpandProfile(spender, "spend_fanout", { fanoutMetaJson: JSON.stringify(meta) });

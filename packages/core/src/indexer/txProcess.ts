@@ -55,6 +55,7 @@ function traceOptions(
     traceEdgesFlat: traceActive ? state.traceEdgesFlat : undefined,
     maxGraphEdgesPerTx: config.maxGraphEdgesPerTx > 0 ? config.maxGraphEdgesPerTx : undefined,
     maxEdgesPerJob: config.maxEdgesPerJob > 0 ? config.maxEdgesPerJob : undefined,
+    minExpandSats: config.minExpandSats,
     cpuGuard: opts?.cpuGuard,
   };
 }

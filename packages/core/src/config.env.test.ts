@@ -51,6 +51,12 @@ describe("loadEnvFile via loadConfig", () => {
     expect(config.chainPrimaryProvider).toBe("esplora");
   });
 
+  it("defaults minEdgeSats and minExpandSats to 100000", () => {
+    const config = loadConfig({} as Record<string, string | undefined>);
+    expect(config.minEdgeSats).toBe(100_000);
+    expect(config.minExpandSats).toBe(100_000);
+  });
+
   it("resolves CF tier quota presets through loadConfig", () => {
     const free = loadConfig({ CF_WORKERS_TIER: "free" });
     expect(free.cfWorkersTier).toBe("free");

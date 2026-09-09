@@ -45,12 +45,13 @@ import {
   type SyncSnapshotStats,
   type SyncSnapshotV1,
 } from "./readCache.js";
-import { clampPollDueCount, pollDueCountSql } from "./pollDueQuery.js";
-
-const neverPolledForPollSql = sql.raw(`NOT EXISTS (
-  SELECT 1 FROM sync_state s
-  WHERE s.address = addresses.address AND s.last_polled_at IS NOT NULL
-)`);
+import {
+  clampPollDueCount,
+  listDownstreamNeverPolledSql,
+  listDownstreamStalePolledSql,
+  pollDueCountSql,
+  sqlStringLiteral,
+} from "./pollDueQuery.js";
 
 const INGEST_JOB_TYPES = [
   "backfill_hacker_address",
@@ -3694,7 +3695,12 @@ export class Store {
   }
 
   /** Pending expand candidates for one flagged hacker (self + hop-1 downstream). */
-  async getCrawlEnqueueCandidates(hacker: string, limit: number, maxDepth: number) {
+  async getCrawlEnqueueCandidates(
+    hacker: string,
+    limit: number,
+    maxDepth: number,
+    minExpandSats = 0,
+  ) {
     if (limit <= 0) return [];
     const out: { address: string }[] = [];
     const seen = new Set<string>();
@@ -3709,27 +3715,30 @@ export class Store {
     }
 
     if (out.length < limit && maxDepth > 1) {
-      const hop1 = await this.db
-        .select({ address: addresses.address })
-        .from(addresses)
-        .innerJoin(
-          edges,
-          and(
-            eq(edges.fromAddress, hacker),
-            eq(edges.toAddress, addresses.address),
-            eq(edges.direction, "out_from_hacker"),
-          ),
-        )
-        .where(
-          and(
-            eq(addresses.expandStatus, "pending"),
-            eq(addresses.hopFromHacker, 1),
-            sql`${addresses.hopFromHacker} < ${maxDepth}`,
-          ),
-        )
-        .orderBy(asc(addresses.lastSeenAt))
-        .limit(limit - out.length)
-        .all();
+      const remaining = limit - out.length;
+      const floor = Math.max(0, Math.floor(minExpandSats));
+      const depth = Math.floor(maxDepth);
+      const hop1 = (await this.db.all(sql.raw(`
+SELECT a.address
+FROM addresses a
+INNER JOIN edges e
+  ON e.from_address = ${sqlStringLiteral(hacker)}
+ AND e.to_address = a.address
+ AND e.direction = 'out_from_hacker'
+WHERE a.expand_status = 'pending'
+  AND a.hop_from_hacker = 1
+  AND a.hop_from_hacker < ${depth}
+GROUP BY a.address
+HAVING COALESCE((
+  SELECT SUM(e2.amount_sats) FROM edges e2
+  WHERE e2.to_address = a.address AND e2.direction = 'out_from_hacker'
+), 0) >= ${floor}
+ORDER BY COALESCE((
+  SELECT SUM(e2.amount_sats) FROM edges e2
+  WHERE e2.to_address = a.address AND e2.direction = 'out_from_hacker'
+), 0) DESC
+LIMIT ${remaining}
+`))) as Array<{ address: string }>;
       for (const row of hop1) {
         if (!seen.has(row.address)) {
           out.push(row);
@@ -3741,43 +3750,28 @@ export class Store {
     return out;
   }
 
-  async listDownstreamForPoll(limit: number, maxDepth: number, minIntervalSec: number) {
+  async listDownstreamForPoll(
+    limit: number,
+    maxDepth: number,
+    minIntervalSec: number,
+    minExpandSats = 0,
+  ) {
     const cutoff = new Date(Date.now() - minIntervalSec * 1000).toISOString();
     const cap = Math.max(0, Math.floor(limit));
     if (cap === 0) return [];
+    const floor = Math.max(0, Math.floor(minExpandSats));
 
-    const neverPolled = await this.db
-      .select({ address: addresses.address })
-      .from(addresses)
-      .where(
-        and(
-          eq(addresses.role, "downstream"),
-          or(eq(addresses.expandStatus, "expanded"), eq(addresses.expandStatus, "pending")),
-          sql`${addresses.hopFromHacker} < ${maxDepth}`,
-          neverPolledForPollSql,
-        ),
-      )
-      .orderBy(asc(addresses.hopFromHacker))
-      .limit(cap)
-      .all();
+    const neverPolled = (await this.db.all(
+      sql.raw(`${listDownstreamNeverPolledSql(maxDepth, cap, floor)};`),
+    )) as Array<{ address: string }>;
 
     if (neverPolled.length >= cap) return neverPolled;
 
-    const stale = await this.db
-      .select({ address: addresses.address })
-      .from(syncState)
-      .innerJoin(addresses, eq(syncState.address, addresses.address))
-      .where(
-        and(
-          sql`${syncState.lastPolledAt} <= ${cutoff}`,
-          eq(addresses.role, "downstream"),
-          or(eq(addresses.expandStatus, "expanded"), eq(addresses.expandStatus, "pending")),
-          sql`${addresses.hopFromHacker} < ${maxDepth}`,
-        ),
-      )
-      .orderBy(asc(syncState.lastPolledAt), asc(addresses.hopFromHacker))
-      .limit(cap - neverPolled.length)
-      .all();
+    const stale = (await this.db.all(
+      sql.raw(
+        `${listDownstreamStalePolledSql(maxDepth, cutoff, cap - neverPolled.length, floor)};`,
+      ),
+    )) as Array<{ address: string }>;
 
     return [...neverPolled, ...stale];
   }
@@ -4073,6 +4067,42 @@ export class Store {
       for (const row of rows) existing.add(row.address);
     }
     return existing;
+  }
+
+  async getDownstreamExpandContext(
+    addressList: string[],
+  ): Promise<Map<string, { expandStatus?: string; inboundSats: number }>> {
+    const unique = [...new Set(addressList)].filter(Boolean);
+    const result = new Map<string, { expandStatus?: string; inboundSats: number }>();
+    if (unique.length === 0) return result;
+
+    for (const chunk of chunkArray(unique, D1_IN_CLAUSE_CHUNK_SIZE)) {
+      const addrRows = await this.db
+        .select({ address: addresses.address, expandStatus: addresses.expandStatus })
+        .from(addresses)
+        .where(inArray(addresses.address, chunk))
+        .all();
+      for (const row of addrRows) {
+        result.set(row.address, { expandStatus: row.expandStatus, inboundSats: 0 });
+      }
+      const inboundRows = await this.db
+        .select({
+          address: edges.toAddress,
+          inboundSats: sql<number>`coalesce(sum(${edges.amountSats}), 0)`,
+        })
+        .from(edges)
+        .where(and(eq(edges.direction, "out_from_hacker"), inArray(edges.toAddress, chunk)))
+        .groupBy(edges.toAddress)
+        .all();
+      for (const row of inboundRows) {
+        const prev = result.get(row.address) ?? { inboundSats: 0 };
+        result.set(row.address, {
+          expandStatus: prev.expandStatus,
+          inboundSats: Number(row.inboundSats ?? 0),
+        });
+      }
+    }
+    return result;
   }
 
   /** Walk backward along out_from_hacker edges to root flagged hackers. */

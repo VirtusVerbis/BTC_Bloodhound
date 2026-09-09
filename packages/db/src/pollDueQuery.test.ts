@@ -13,11 +13,11 @@ describe("pollDueQuery", () => {
     expect(sqlStringLiteral("a'b")).toBe("'a''b'");
   });
 
-  it("downstreamPollEligibleWhereSql includes role, expand_status, and hop", () => {
-    const where = downstreamPollEligibleWhereSql("a", 5);
-    expect(where).toContain("a.role = 'downstream'");
-    expect(where).toContain("expand_status IN ('expanded', 'pending')");
-    expect(where).toContain("hop_from_hacker < 5");
+  it("includes amount filter for pending when minExpandSats is set", () => {
+    const where = downstreamPollEligibleWhereSql("a", 5, 100_000);
+    expect(where).toContain("a.expand_status = 'expanded'");
+    expect(where).toContain(">= 100000");
+    expect(where).toContain("out_from_hacker");
   });
 
   it("pollDueCountSql subtracts recently polled from eligible", () => {

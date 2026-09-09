@@ -360,6 +360,7 @@ export async function previewNextCronEnqueue(store: Store, config: AppConfig): P
     config.downstreamPollEnqueuePerCron,
     config.maxCrawlDepth,
     config.downstreamPollIntervalSec,
+    config.minExpandSats,
   );
   const pollDownstream: NextCronPreview["pollDownstream"] = [];
   for (const row of pollCandidates) {
