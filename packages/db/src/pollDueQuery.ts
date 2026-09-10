@@ -15,16 +15,10 @@ export function downstreamPollEligibleWhereSql(
     floor <= 0
       ? ""
       : `
-    AND (
-      ${tableAlias}.expand_status = 'expanded'
-      OR (
-        ${tableAlias}.expand_status = 'pending'
-        AND COALESCE((
-          SELECT SUM(e.amount_sats) FROM edges e
-          WHERE e.to_address = ${tableAlias}.address AND e.direction = 'out_from_hacker'
-        ), 0) >= ${floor}
-      )
-    )`;
+    AND COALESCE((
+      SELECT SUM(e.amount_sats) FROM edges e
+      WHERE e.to_address = ${tableAlias}.address AND e.direction = 'out_from_hacker'
+    ), 0) >= ${floor}`;
   return `${tableAlias}.role = 'downstream'
     AND ${tableAlias}.expand_status IN ('expanded', 'pending')
     AND ${tableAlias}.hop_from_hacker < ${depth}${amountClause}`;

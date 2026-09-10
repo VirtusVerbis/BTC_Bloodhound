@@ -382,6 +382,7 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
     const snapshotParams = {
       maxCrawlDepth: config.maxCrawlDepth,
       downstreamPollIntervalSec: config.downstreamPollIntervalSec,
+      minExpandSats: config.minExpandSats,
     };
 
     let scheduler: Awaited<ReturnType<Store["getSchedulerState"]>>;
@@ -414,6 +415,7 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
         monitor = await store.getDownstreamMonitorStatsCached(
           config.maxCrawlDepth,
           config.downstreamPollIntervalSec,
+          { minExpandSats: config.minExpandSats },
         );
       } catch (err) {
         console.error("sync/status getDownstreamMonitorStatsCached failed", err);

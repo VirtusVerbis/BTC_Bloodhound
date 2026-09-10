@@ -410,12 +410,15 @@ export async function listQueue(store: Store, config: AppConfig, opts: ListQueue
   const snapshotParams = {
     maxCrawlDepth: config.maxCrawlDepth,
     downstreamPollIntervalSec: config.downstreamPollIntervalSec,
+    minExpandSats: config.minExpandSats,
   };
   const snapshot = await store.getSyncSnapshot(snapshotParams);
   const crawl = snapshot?.crawl ?? await store.getCrawlStats();
   const monitor =
     snapshot?.monitor ??
-    await store.getDownstreamMonitorStatsCached(config.maxCrawlDepth, config.downstreamPollIntervalSec);
+    await store.getDownstreamMonitorStatsCached(config.maxCrawlDepth, config.downstreamPollIntervalSec, {
+      minExpandSats: config.minExpandSats,
+    });
   const scheduler = await store.getSchedulerState();
 
   const result: ListQueueResult = {

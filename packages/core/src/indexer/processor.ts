@@ -7,6 +7,7 @@ import { JOB_PRIORITY } from "../config.js";
 import { ChainRouter, RateLimitNotReadyError } from "../chain/router.js";
 import { isRateLimitError, isTransientFetchError } from "../chain/esplora.js";
 import { getHackerAddressSet, processTxForHackTrace } from "../graph/builder.js";
+import { qualifiesForExpand } from "../graph/expandSkip.js";
 import { applyColdcardWatchSync, applyColdcardWatchSyncBatch, enqueueColdcardWatchBatchJobs, fetchColdcardWatch } from "../sources/coldcardwatch.js";
 import {
   applyColdcardHackTrackerSync,
@@ -911,6 +912,11 @@ async function pollDownstream(
 ): Promise<void> {
   const payload = parsePollPayload(rawPayload);
   const address = payload.address;
+  const expandCtx = (await store.getDownstreamExpandContext([address])).get(address);
+  if (!qualifiesForExpand(expandCtx?.inboundSats ?? 0, config.minExpandSats)) {
+    return;
+  }
+
   let pending = readPendingRuntime(payload as unknown as Record<string, unknown>).pending;
   let processedIndex = payload.processedIndex ?? 0;
   let pollFetched = payload.pollFetched ?? false;
@@ -1275,7 +1281,7 @@ async function syncColdcardwatch(
     await applyColdcardWatchSyncBatch(
       store,
       payload as unknown as Parameters<typeof applyColdcardWatchSyncBatch>[1],
-      { jobSubreq: opts?.jobSubreq },
+      { jobSubreq: opts?.jobSubreq, minExpandSats: config.minExpandSats },
     );
     return;
   }
@@ -1414,7 +1420,7 @@ export async function processJob(
         result = await backfillOpReturn(store, router, config, jobOpts);
         break;
       case "sync_coldcardwatch":
-        await syncColdcardwatch(store, config, payload);
+        await syncColdcardwatch(store, config, payload, jobOpts);
         break;
       case "sync_vercel_trackers":
         await syncVercelTrackers(store, config, payload);

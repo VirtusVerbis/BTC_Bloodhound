@@ -199,7 +199,7 @@ export class RemoteReadStore {
     return num(row?.count);
   }
 
-  async countDownstreamPollDue(maxDepth: number, minIntervalSec: number) {
+  async countDownstreamPollDue(maxDepth: number, minIntervalSec: number, minExpandSats = 0) {
     const depth = Math.floor(maxDepth);
     const intervalSec = Math.floor(minIntervalSec);
     const state = this.client.query(
@@ -218,7 +218,7 @@ export class RemoteReadStore {
     }
 
     const cutoffIso = new Date(Date.now() - intervalSec * 1000).toISOString();
-    const row = this.client.query(`${pollDueCountSql(depth, cutoffIso)};`)[0];
+    const row = this.client.query(`${pollDueCountSql(depth, cutoffIso, minExpandSats)};`)[0];
     const count = clampPollDueCount(num(row?.count));
     this.persistPollDueCache(count, depth, intervalSec);
     return count;
@@ -237,10 +237,10 @@ WHERE id = 1;
 `);
   }
 
-  async getDownstreamMonitorStats(maxDepth: number, minIntervalSec: number) {
+  async getDownstreamMonitorStats(maxDepth: number, minIntervalSec: number, minExpandSats = 0) {
     return {
       treeNodeCount: await this.countDownstreamTreeNodes(maxDepth),
-      downstreamPollDueCount: await this.countDownstreamPollDue(maxDepth, minIntervalSec),
+      downstreamPollDueCount: await this.countDownstreamPollDue(maxDepth, minIntervalSec, minExpandSats),
     };
   }
 

@@ -10,6 +10,7 @@ export function pollDueCacheTtlSec(downstreamPollIntervalSec: number): number {
 export type SyncSnapshotParams = {
   maxCrawlDepth: number;
   downstreamPollIntervalSec: number;
+  minExpandSats?: number;
 };
 
 export type SyncSnapshotCrawl = {

@@ -3603,7 +3603,10 @@ export class Store {
     const monitor = await this.getDownstreamMonitorStatsCached(
       params.maxCrawlDepth,
       params.downstreamPollIntervalSec,
-      { forceRefresh: (state?.monitorSnapshotDirty ?? 0) !== 0 },
+      {
+        forceRefresh: (state?.monitorSnapshotDirty ?? 0) !== 0,
+        minExpandSats: params.minExpandSats,
+      },
     );
     const lastCompletedJob =
       jobDirty || !parsed
@@ -3784,17 +3787,19 @@ LIMIT ${remaining}
     return await this.reconcileDownstreamTreeCount(maxDepth);
   }
 
-  async countDownstreamPollDue(maxDepth: number, minIntervalSec: number) {
+  async countDownstreamPollDue(maxDepth: number, minIntervalSec: number, minExpandSats = 0) {
     const depth = Math.floor(maxDepth);
     const cutoff = new Date(Date.now() - minIntervalSec * 1000).toISOString();
-    const rows = (await this.db.all(sql.raw(pollDueCountSql(depth, cutoff)))) as Array<{ count: number }>;
+    const rows = (await this.db.all(
+      sql.raw(pollDueCountSql(depth, cutoff, minExpandSats)),
+    )) as Array<{ count: number }>;
     return clampPollDueCount(rows[0]?.count ?? 0);
   }
 
   async getDownstreamMonitorStatsCached(
     maxDepth: number,
     minIntervalSec: number,
-    opts?: { forceRefresh?: boolean },
+    opts?: { forceRefresh?: boolean; minExpandSats?: number },
   ) {
     const treeNodeCount = await this.countDownstreamTreeNodes(maxDepth);
     const state = await this.getSchedulerState();
@@ -3815,7 +3820,11 @@ LIMIT ${remaining}
       };
     }
 
-    const downstreamPollDueCount = await this.countDownstreamPollDue(maxDepth, minIntervalSec);
+    const downstreamPollDueCount = await this.countDownstreamPollDue(
+      maxDepth,
+      minIntervalSec,
+      opts?.minExpandSats ?? 0,
+    );
     const at = now();
     await this.updateSchedulerState({
       downstreamPollDueCount,
@@ -3827,8 +3836,9 @@ LIMIT ${remaining}
     return { treeNodeCount, downstreamPollDueCount };
   }
 
-  async getDownstreamMonitorStats(maxDepth: number, minIntervalSec: number) {
+  async getDownstreamMonitorStats(maxDepth: number, minIntervalSec: number, minExpandSats = 0) {
     return await this.getDownstreamMonitorStatsCached(maxDepth, minIntervalSec, {
+      minExpandSats,
       forceRefresh: true,
     });
   }

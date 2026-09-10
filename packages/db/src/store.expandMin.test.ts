@@ -59,7 +59,7 @@ describe("getCrawlEnqueueCandidates min expand", () => {
 });
 
 describe("listDownstreamForPoll min expand", () => {
-  it("skips pending below the floor and still includes expanded", async () => {
+  it("skips pending and expanded below the floor", async () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);
     const store = new Store(db);
@@ -78,6 +78,12 @@ describe("listDownstreamForPoll min expand", () => {
     });
     await store.upsertAddress({
       address: "expanded-small",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "expanded",
+    });
+    await store.upsertAddress({
+      address: "expanded-big",
       role: "downstream",
       hopFromHacker: 1,
       expandStatus: "expanded",
@@ -103,8 +109,16 @@ describe("listDownstreamForPoll min expand", () => {
       amountSats: 1_000,
       direction: "out_from_hacker",
     });
+    await store.upsertEdge({
+      fromAddress: "hack1",
+      toAddress: "expanded-big",
+      txid: "txeb",
+      amountSats: 200_000,
+      direction: "out_from_hacker",
+    });
 
     const due = await store.listDownstreamForPoll(10, 5, 600, 100_000);
-    expect(due.map((r) => r.address).sort()).toEqual(["expanded-small", "pending-big"]);
+    expect(due.map((r) => r.address).sort()).toEqual(["expanded-big", "pending-big"]);
+    expect(await store.countDownstreamPollDue(5, 600, 100_000)).toBe(2);
   });
 });

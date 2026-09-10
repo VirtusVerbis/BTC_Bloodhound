@@ -1,5 +1,6 @@
 import type { Store } from "@cointrace/db";
 import { JOB_PRIORITY } from "../config.js";
+import { DEFAULT_MIN_EXPAND_SATS, expandStatusToWrite } from "../graph/expandSkip.js";
 import { sha256Hex } from "../util/hash.js";
 import { normalizeBitcoinAddress } from "../util/address.js";
 import { instrumentedFetch, type SubrequestSink } from "../subrequest/instrumentedFetch.js";
@@ -128,10 +129,14 @@ export async function enqueueColdcardWatchBatchJobs(
   }
 }
 
+function expandStatusForNewDownstream(minExpandSats: number): string {
+  return expandStatusToWrite(undefined, 0, minExpandSats) ?? "pending";
+}
+
 export async function applyColdcardWatchSyncBatch(
   store: Store,
   payload: ColdcardWatchBatchPayload,
-  opts?: { jobSubreq?: JobSubrequestBudget },
+  opts?: { jobSubreq?: JobSubrequestBudget; minExpandSats?: number },
 ): Promise<void> {
   const collectors = payload.collectors ?? [];
   for (let i = 0; i < collectors.length; i++) {
@@ -234,21 +239,12 @@ export async function applyColdcardWatchSyncBatch(
       return;
     }
     const address = downstream[i]!;
-    const inserted = await store.insertAddressIfMissing({
+    await store.insertAddressIfMissing({
       address,
       role: "downstream",
       source: "coldcardwatch",
-      expandStatus: "pending",
+      expandStatus: expandStatusForNewDownstream(opts?.minExpandSats ?? DEFAULT_MIN_EXPAND_SATS),
     });
-    if (inserted) {
-      await store.enqueueJobIfAbsent(
-        "expand_downstream",
-        { address, cron: true },
-        JOB_PRIORITY.CRON_EXPAND,
-        undefined,
-        { address },
-      );
-    }
   }
 
   if (payload.finalize) {
@@ -259,7 +255,11 @@ export async function applyColdcardWatchSyncBatch(
   }
 }
 
-export async function applyColdcardWatchSync(store: Store, data: ColdcardWatchData): Promise<void> {
+export async function applyColdcardWatchSync(
+  store: Store,
+  data: ColdcardWatchData,
+  minExpandSats = DEFAULT_MIN_EXPAND_SATS,
+): Promise<void> {
   for (const address of data.collectors) {
     const inserted = await store.insertAddressIfMissing({
       address,
@@ -302,21 +302,12 @@ export async function applyColdcardWatchSync(store: Store, data: ColdcardWatchDa
   }
 
   for (const address of data.downstream) {
-    const inserted = await store.insertAddressIfMissing({
+    await store.insertAddressIfMissing({
       address,
       role: "downstream",
       source: "coldcardwatch",
-      expandStatus: "pending",
+      expandStatus: expandStatusForNewDownstream(minExpandSats),
     });
-    if (inserted) {
-      await store.enqueueJobIfAbsent(
-        "expand_downstream",
-        { address, cron: true },
-        JOB_PRIORITY.CRON_EXPAND,
-        undefined,
-        { address },
-      );
-    }
   }
 
   await store.upsertSourceSync("coldcardwatch", {

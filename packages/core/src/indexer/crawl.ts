@@ -306,6 +306,7 @@ export async function scheduleDownstreamCrawl(
       .maybeRefreshSyncSnapshot({
         maxCrawlDepth: config.maxCrawlDepth,
         downstreamPollIntervalSec: config.downstreamPollIntervalSec,
+        minExpandSats: config.minExpandSats,
       })
       .catch((err: unknown) => {
         console.error("refreshSyncSnapshot failed", err);
