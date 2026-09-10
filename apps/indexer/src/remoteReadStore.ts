@@ -10,6 +10,7 @@ import {
   parseFlaggedHackersCache,
   pollDueCacheTtlSec,
   pollDueCountSql,
+  type SyncSnapshotParams,
 } from "@cointrace/db";
 import { D1WranglerClient, sqlString } from "./d1Wrangler.js";
 
@@ -242,6 +243,18 @@ WHERE id = 1;
       treeNodeCount: await this.countDownstreamTreeNodes(maxDepth),
       downstreamPollDueCount: await this.countDownstreamPollDue(maxDepth, minIntervalSec, minExpandSats),
     };
+  }
+
+  async getDownstreamMonitorStatsCached(
+    maxDepth: number,
+    minIntervalSec: number,
+    opts?: { forceRefresh?: boolean; minExpandSats?: number },
+  ) {
+    return this.getDownstreamMonitorStats(maxDepth, minIntervalSec, opts?.minExpandSats ?? 0);
+  }
+
+  async getSyncSnapshot(_params: SyncSnapshotParams, _opts?: { maxAgeSec?: number }) {
+    return null;
   }
 
   async getSourceSync(source: string) {

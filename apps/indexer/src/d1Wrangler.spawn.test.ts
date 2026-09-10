@@ -62,6 +62,30 @@ describe("D1WranglerClient spawn", () => {
     expect(normalizeWindowsCommandSql("SELECT 1;;  ")).toBe("SELECT 1");
   });
 
+  it("collapses newlines so Windows --command SQL stays one complete statement", () => {
+    expect(normalizeWindowsCommandSql("SELECT MAX(0, (\n  1\n));")).toBe("SELECT MAX(0, ( 1 ))");
+  });
+
+  it("passes multi-line SQL as a single-line --command on Windows", () => {
+    const client = new D1WranglerClient({ remote: true });
+    const sql = `SELECT MAX(0, (
+    (SELECT COUNT(*) FROM addresses)
+  )) AS count;`;
+
+    client.execute(sql);
+
+    expect(spawnSyncMock).toHaveBeenCalledOnce();
+    if (process.platform === "win32") {
+      const [command] = spawnSyncMock.mock.calls[0] as [string];
+      expect(command).not.toMatch(/\n/);
+      expect(command).toContain("SELECT MAX(0, ( (SELECT COUNT(*) FROM addresses) )) AS count");
+    } else {
+      const args = spawnSyncMock.mock.calls[0]![1] as string[];
+      const commandIdx = args.indexOf("--command");
+      expect(args[commandIdx + 1]).toBe(sql);
+    }
+  });
+
   it("quotes Windows args with spaces for shell command lines", () => {
     expect(quoteWindowsArg("plain")).toBe("plain");
     expect(quoteWindowsArg("has space")).toBe('"has space"');

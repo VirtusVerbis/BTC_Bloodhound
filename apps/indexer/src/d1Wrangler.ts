@@ -65,9 +65,18 @@ function spawnWrangler(args: string[]) {
   });
 }
 
-/** Strip trailing semicolons so Windows cmd does not treat them as command separators. */
+/**
+ * Prepare SQL for wrangler --command on Windows cmd:
+ * - collapse newlines (and adjacent indent) so cmd does not truncate at the first line
+ *   (SQLITE incomplete input)
+ * - strip trailing semicolons so cmd does not treat them as command separators
+ */
 export function normalizeWindowsCommandSql(sql: string): string {
-  return sql.trim().replace(/;+\s*$/g, "");
+  return sql
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]*\n+[ \t]*/g, " ")
+    .trim()
+    .replace(/;+\s*$/g, "");
 }
 
 function parseWranglerStdout(out: string): unknown {
