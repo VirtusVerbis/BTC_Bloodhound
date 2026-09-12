@@ -924,10 +924,13 @@ export class Store {
     let totalOutDelta = 0;
     for (let i = 0; i < rows.length; i += this.d1BatchSize) {
       const chunk = rows.slice(i, i + this.d1BatchSize);
-      const inToHackerRows = chunk.filter((row) => row.direction === "in_to_hacker");
+      const trackedRows = chunk.filter(
+        (row) => row.direction === "in_to_hacker" || row.direction === "out_from_hacker",
+      );
       const oldEdgeByKey = new Map<string, { amountSats: number; direction: string }>();
-      if (inToHackerRows.length > 0) {
-        const txids = [...new Set(inToHackerRows.map((row) => row.txid))];
+      if (trackedRows.length > 0) {
+        const txids = [...new Set(trackedRows.map((row) => row.txid))];
+        const directions = [...new Set(trackedRows.map((row) => row.direction))];
         for (const txidChunk of chunkArray(txids, D1_IN_CLAUSE_CHUNK_SIZE)) {
           const existing = await this.db
             .select({
@@ -938,7 +941,7 @@ export class Store {
               direction: edges.direction,
             })
             .from(edges)
-            .where(and(inArray(edges.txid, txidChunk), eq(edges.direction, "in_to_hacker")))
+            .where(and(inArray(edges.txid, txidChunk), inArray(edges.direction, directions)))
             .all();
           for (const row of existing) {
             oldEdgeByKey.set(`${row.fromAddress}|${row.toAddress}|${row.txid}`, {
@@ -971,26 +974,44 @@ export class Store {
       await this.executeSqlBatch(statements);
 
       const deltaByHacker = new Map<string, number>();
+      const deltaByInbound = new Map<string, number>();
       for (const row of chunk) {
         const key = `${row.fromAddress}|${row.toAddress}|${row.txid}`;
         const old = oldEdgeByKey.get(key);
         const oldAmount = old?.amountSats ?? 0;
         if (row.direction === "in_to_hacker") {
           totalInDelta += row.amountSats - oldAmount;
+          const delta = row.amountSats - oldAmount;
+          if (delta !== 0) {
+            deltaByHacker.set(row.toAddress, (deltaByHacker.get(row.toAddress) ?? 0) + delta);
+          }
         } else if (row.direction === "out_from_hacker") {
           totalOutDelta += row.amountSats;
+          const delta = row.amountSats - oldAmount;
+          if (delta !== 0) {
+            deltaByInbound.set(row.toAddress, (deltaByInbound.get(row.toAddress) ?? 0) + delta);
+          }
         }
-
-        if (row.direction !== "in_to_hacker") continue;
-        const delta = row.amountSats - oldAmount;
-        if (delta === 0) continue;
-        deltaByHacker.set(row.toAddress, (deltaByHacker.get(row.toAddress) ?? 0) + delta);
       }
       for (const [hackerAddress, delta] of deltaByHacker) {
         await this.applyTotalReceivedDelta(hackerAddress, delta);
       }
+      for (const [toAddress, delta] of deltaByInbound) {
+        await this.applyInboundSatsDelta(toAddress, delta);
+      }
     }
     await this.adjustEdgeTotalsCounters(totalInDelta, totalOutDelta);
+  }
+
+  private async applyInboundSatsDelta(toAddress: string, deltaSats: number): Promise<void> {
+    if (deltaSats === 0) return;
+    await this.db
+      .update(addresses)
+      .set({
+        inboundSats: sql`${addresses.inboundSats} + ${deltaSats}`,
+      })
+      .where(eq(addresses.address, toAddress))
+      .run();
   }
 
   private async applyTotalReceivedDelta(hackerAddress: string, deltaSats: number): Promise<void> {
@@ -1043,6 +1064,26 @@ export class Store {
       .run();
   }
 
+  async recalcInboundSatsFor(toAddresses: string[]): Promise<void> {
+    const unique = [...new Set(toAddresses)].filter(Boolean);
+    for (const toAddress of unique) {
+      await this.recalcInboundSats(toAddress);
+    }
+  }
+
+  async recalcInboundSats(toAddress: string): Promise<void> {
+    const row = await this.db
+      .select({ total: sql<number>`coalesce(sum(${edges.amountSats}), 0)` })
+      .from(edges)
+      .where(and(eq(edges.toAddress, toAddress), eq(edges.direction, "out_from_hacker")))
+      .get();
+    await this.db
+      .update(addresses)
+      .set({ inboundSats: row?.total ?? 0 })
+      .where(eq(addresses.address, toAddress))
+      .run();
+  }
+
   async recalcAllTotalReceived() {
     for (const hacker of await this.listHackersCached()) {
       await this.recalcTotalReceived(hacker.address);
@@ -1054,6 +1095,7 @@ export class Store {
       .delete(edges)
       .where(or(eq(edges.direction, "in_to_hacker"), eq(edges.direction, "out_from_hacker")))
       .run();
+    await this.db.run(sql`UPDATE addresses SET inbound_sats = 0`);
   }
 
   async listIndexedTxids() {
@@ -3731,15 +3773,9 @@ INNER JOIN edges e
 WHERE a.expand_status = 'pending'
   AND a.hop_from_hacker = 1
   AND a.hop_from_hacker < ${depth}
+  AND a.inbound_sats >= ${floor}
 GROUP BY a.address
-HAVING COALESCE((
-  SELECT SUM(e2.amount_sats) FROM edges e2
-  WHERE e2.to_address = a.address AND e2.direction = 'out_from_hacker'
-), 0) >= ${floor}
-ORDER BY COALESCE((
-  SELECT SUM(e2.amount_sats) FROM edges e2
-  WHERE e2.to_address = a.address AND e2.direction = 'out_from_hacker'
-), 0) DESC
+ORDER BY a.inbound_sats DESC
 LIMIT ${remaining}
 `))) as Array<{ address: string }>;
       for (const row of hop1) {
@@ -4088,26 +4124,17 @@ LIMIT ${remaining}
 
     for (const chunk of chunkArray(unique, D1_IN_CLAUSE_CHUNK_SIZE)) {
       const addrRows = await this.db
-        .select({ address: addresses.address, expandStatus: addresses.expandStatus })
+        .select({
+          address: addresses.address,
+          expandStatus: addresses.expandStatus,
+          inboundSats: addresses.inboundSats,
+        })
         .from(addresses)
         .where(inArray(addresses.address, chunk))
         .all();
       for (const row of addrRows) {
-        result.set(row.address, { expandStatus: row.expandStatus, inboundSats: 0 });
-      }
-      const inboundRows = await this.db
-        .select({
-          address: edges.toAddress,
-          inboundSats: sql<number>`coalesce(sum(${edges.amountSats}), 0)`,
-        })
-        .from(edges)
-        .where(and(eq(edges.direction, "out_from_hacker"), inArray(edges.toAddress, chunk)))
-        .groupBy(edges.toAddress)
-        .all();
-      for (const row of inboundRows) {
-        const prev = result.get(row.address) ?? { inboundSats: 0 };
         result.set(row.address, {
-          expandStatus: prev.expandStatus,
+          expandStatus: row.expandStatus,
           inboundSats: Number(row.inboundSats ?? 0),
         });
       }
@@ -4378,10 +4405,21 @@ LIMIT ${remaining}
   }
 
   async deleteEdgesTouchingAddress(address: string): Promise<number> {
+    const inboundTargets = await this.db
+      .select({ toAddress: edges.toAddress })
+      .from(edges)
+      .where(
+        and(
+          eq(edges.direction, "out_from_hacker"),
+          or(eq(edges.fromAddress, address), eq(edges.toAddress, address)),
+        ),
+      )
+      .all();
     const result = await this.db
       .delete(edges)
       .where(or(eq(edges.fromAddress, address), eq(edges.toAddress, address)))
       .run();
+    await this.recalcInboundSatsFor(inboundTargets.map((row) => row.toAddress));
     return changesCount(result as { changes?: number; meta?: { changes?: number } });
   }
 

@@ -16,16 +16,18 @@ describe("pollDueQuery", () => {
   it("includes amount filter for pending and expanded when minExpandSats is set", () => {
     const where = downstreamPollEligibleWhereSql("a", 5, 100_000);
     expect(where).toContain("a.expand_status IN ('expanded', 'pending')");
-    expect(where).toContain(">= 100000");
-    expect(where).toContain("out_from_hacker");
+    expect(where).toContain("a.inbound_sats >= 100000");
+    expect(where).not.toContain("out_from_hacker");
     expect(where).not.toContain("a.expand_status = 'expanded'");
   });
 
-  it("pollDueCountSql subtracts recently polled from eligible", () => {
+  it("pollDueCountSql excludes recently polled via NOT EXISTS", () => {
     const sql = pollDueCountSql(5, "2020-01-01T00:00:00.000Z");
-    expect(sql).toContain("SELECT MAX(0,");
+    expect(sql).toContain("SELECT COUNT(*) AS count");
+    expect(sql).toContain("NOT EXISTS");
     expect(sql).toContain("last_polled_at > '2020-01-01T00:00:00.000Z'");
     expect(sql).not.toContain("LEFT JOIN");
+    expect(sql).not.toContain("SELECT MAX(0,");
   });
 
   it("listDownstreamNeverPolledSql uses NOT EXISTS and hop order", () => {

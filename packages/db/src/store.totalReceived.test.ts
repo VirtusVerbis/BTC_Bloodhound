@@ -93,6 +93,97 @@ describe("incremental total_received_sats", () => {
   });
 });
 
+describe("incremental inbound_sats", () => {
+  function openStore() {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    return { sqlite, store: new Store(db) };
+  }
+
+  it("increments inbound on new out_from_hacker edge", async () => {
+    const { sqlite, store } = openStore();
+    await store.upsertAddress({
+      address: "bc1qdown",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "expanded",
+    });
+
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "bc1qhacker",
+        toAddress: "bc1qdown",
+        txid: "txout",
+        amountSats: 500,
+        direction: "out_from_hacker",
+      },
+    ]);
+
+    const row = sqlite
+      .prepare(`SELECT inbound_sats FROM addresses WHERE address = 'bc1qdown'`)
+      .get() as { inbound_sats: number };
+    expect(row.inbound_sats).toBe(500);
+  });
+
+  it("applies delta when out_from_hacker edge amount changes on conflict", async () => {
+    const { sqlite, store } = openStore();
+    await store.upsertAddress({
+      address: "bc1qdown",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "expanded",
+    });
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "bc1qhacker",
+        toAddress: "bc1qdown",
+        txid: "txout",
+        amountSats: 100,
+        direction: "out_from_hacker",
+      },
+    ]);
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "bc1qhacker",
+        toAddress: "bc1qdown",
+        txid: "txout",
+        amountSats: 300,
+        direction: "out_from_hacker",
+      },
+    ]);
+
+    const row = sqlite
+      .prepare(`SELECT inbound_sats FROM addresses WHERE address = 'bc1qdown'`)
+      .get() as { inbound_sats: number };
+    expect(row.inbound_sats).toBe(300);
+  });
+
+  it("does not change inbound for in_to_hacker edges", async () => {
+    const { sqlite, store } = openStore();
+    await store.upsertAddress({
+      address: "bc1qhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+      expandStatus: "expanded",
+    });
+
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "bc1qvictim",
+        toAddress: "bc1qhacker",
+        txid: "tx1",
+        amountSats: 500,
+        direction: "in_to_hacker",
+      },
+    ]);
+
+    const row = sqlite
+      .prepare(`SELECT inbound_sats FROM addresses WHERE address = 'bc1qhacker'`)
+      .get() as { inbound_sats: number };
+    expect(row.inbound_sats).toBe(0);
+  });
+});
+
 describe("D1 quota pause", () => {
   it("tracks read and write retry windows", async () => {
     const { sqlite, db } = openDatabase(":memory:");

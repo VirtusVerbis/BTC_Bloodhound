@@ -15,28 +15,23 @@ export function downstreamPollEligibleWhereSql(
     floor <= 0
       ? ""
       : `
-    AND COALESCE((
-      SELECT SUM(e.amount_sats) FROM edges e
-      WHERE e.to_address = ${tableAlias}.address AND e.direction = 'out_from_hacker'
-    ), 0) >= ${floor}`;
+    AND ${tableAlias}.inbound_sats >= ${floor}`;
   return `${tableAlias}.role = 'downstream'
     AND ${tableAlias}.expand_status IN ('expanded', 'pending')
     AND ${tableAlias}.hop_from_hacker < ${depth}${amountClause}`;
 }
 
-/** Full scalar query: eligible count minus recently-polled count. */
+/** Eligible downstream addresses that have not been polled after cutoff. */
 export function pollDueCountSql(maxDepth: number, cutoffIso: string, minExpandSats = 0): string {
   const depth = Math.floor(maxDepth);
   const cutoff = sqlStringLiteral(cutoffIso);
-  return `SELECT MAX(0, (
-    (SELECT COUNT(*) FROM addresses
-     WHERE ${downstreamPollEligibleWhereSql("addresses", depth, minExpandSats)})
-    -
-    (SELECT COUNT(*) FROM addresses a
-     INNER JOIN sync_state s ON s.address = a.address
-     WHERE ${downstreamPollEligibleWhereSql("a", depth, minExpandSats)}
-       AND s.last_polled_at > ${cutoff})
-  )) AS count`;
+  return `SELECT COUNT(*) AS count
+FROM addresses a
+WHERE ${downstreamPollEligibleWhereSql("a", depth, minExpandSats)}
+  AND NOT EXISTS (
+    SELECT 1 FROM sync_state s
+    WHERE s.address = a.address AND s.last_polled_at > ${cutoff}
+  )`;
 }
 
 /** Never-polled downstream addresses (no sync_state row or last_polled_at IS NULL). */

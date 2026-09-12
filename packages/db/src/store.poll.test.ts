@@ -91,6 +91,60 @@ describe("listDownstreamForPoll", () => {
     expect(await store.countDownstreamPollDue(5, 600)).toBe(2);
   });
 
+  it("countDownstreamPollDue matches list for minExpandSats with mixed inbound and recent poll", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.upsertAddress({
+      address: "under",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "pending",
+    });
+    await store.upsertAddress({
+      address: "over",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "expanded",
+    });
+    await store.upsertAddress({
+      address: "recent-over",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "expanded",
+    });
+    await store.upsertEdge({
+      fromAddress: "hack1",
+      toAddress: "under",
+      txid: "txu",
+      amountSats: 50_000,
+      direction: "out_from_hacker",
+    });
+    await store.upsertEdge({
+      fromAddress: "hack1",
+      toAddress: "over",
+      txid: "txo",
+      amountSats: 150_000,
+      direction: "out_from_hacker",
+    });
+    await store.upsertEdge({
+      fromAddress: "hack1",
+      toAddress: "recent-over",
+      txid: "txr",
+      amountSats: 200_000,
+      direction: "out_from_hacker",
+    });
+    await store.upsertSyncState("recent-over", { lastSeenTxid: "tx1" });
+    sqlite
+      .prepare("UPDATE sync_state SET last_polled_at = ? WHERE address = ?")
+      .run(new Date().toISOString(), "recent-over");
+
+    const listed = await store.listDownstreamForPoll(10, 5, 600, 100_000);
+    expect(listed.map((r) => r.address)).toEqual(["over"]);
+    expect(await store.countDownstreamPollDue(5, 600, 100_000)).toBe(1);
+  });
+
   it("excludes nodes at max crawl depth", async () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);

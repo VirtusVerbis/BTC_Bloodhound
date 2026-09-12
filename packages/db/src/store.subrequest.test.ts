@@ -32,8 +32,13 @@ function createSqliteD1(sqlite: Database.Database): D1Binding {
               const row = bound.get();
               return { success: true, results: row != null ? [row] : [] };
             },
-            raw: async (pluralizeColumns?: unknown) =>
-              bound.raw(typeof pluralizeColumns === "boolean" ? pluralizeColumns : false),
+            raw: async () => {
+              try {
+                return bound.raw(true).all();
+              } finally {
+                bound.raw(false);
+              }
+            },
           };
         },
       };

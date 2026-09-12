@@ -122,3 +122,28 @@ describe("listDownstreamForPoll min expand", () => {
     expect(await store.countDownstreamPollDue(5, 600, 100_000)).toBe(2);
   });
 });
+
+describe("getDownstreamExpandContext", () => {
+  it("returns stored inbound_sats after an out_from_hacker upsert", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.upsertAddress({
+      address: "bc1qdown",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "pending",
+    });
+    await store.upsertEdge({
+      fromAddress: "hack1",
+      toAddress: "bc1qdown",
+      txid: "tx1",
+      amountSats: 125_000,
+      direction: "out_from_hacker",
+    });
+
+    const ctx = await store.getDownstreamExpandContext(["bc1qdown"]);
+    expect(ctx.get("bc1qdown")).toEqual({ expandStatus: "pending", inboundSats: 125_000 });
+  });
+});
