@@ -112,7 +112,7 @@ function monitoringTooltip(sync: MonitoringSyncStatus) {
   ];
   if (sync.apiThresholdExceeded) {
     lines.push(
-      `API threshold hit: ${formatLocal(sync.lastApiThresholdAt)} (${sync.apiThresholdCount ?? 0} total)`,
+      `API threshold hit: ${formatLocal(sync.lastApiThresholdAt)} (${sync.apiThresholdCount ?? 0} today)`,
     );
     for (const api of sync.chainApis ?? []) {
       if (api.thresholdExceeded) {
@@ -161,7 +161,7 @@ export function MonitoringIndicator({
         {thresholdExceeded && (
           <span
             className="monitoring-threshold-warning"
-            title={`Last hit: ${formatLocal(sync?.lastApiThresholdAt)} · ${sync?.apiThresholdCount ?? 0} total`}
+            title={`Last hit: ${formatLocal(sync?.lastApiThresholdAt)} · ${sync?.apiThresholdCount ?? 0} today`}
           >
             API Thresholds Exceeded!
             {showThresholdCountdown && ` (clears in ${formatCountdown(thresholdCountdown)})`}

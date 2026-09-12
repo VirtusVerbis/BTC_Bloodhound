@@ -89,6 +89,7 @@ export const schedulerState = sqliteTable("scheduler_state", {
   lastProviderSuccessAt: text("last_provider_success_at"),
   lastApiThresholdAt: text("last_api_threshold_at"),
   apiThresholdCount: integer("api_threshold_count").notNull().default(0),
+  apiThresholdDayUtc: text("api_threshold_day_utc"),
   lastEsploraThresholdAt: text("last_esplora_threshold_at"),
   lastMempoolThresholdAt: text("last_mempool_threshold_at"),
   esploraThresholdCount: integer("esplora_threshold_count").notNull().default(0),

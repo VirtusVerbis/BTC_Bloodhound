@@ -2753,6 +2753,7 @@ export class Store {
     lastProviderSuccessAt?: string;
     lastApiThresholdAt?: string;
     apiThresholdCount?: number;
+    apiThresholdDayUtc?: string | null;
     lastEsploraThresholdAt?: string;
     lastMempoolThresholdAt?: string;
     esploraThresholdCount?: number;
@@ -2996,11 +2997,34 @@ export class Store {
     return { usd: state.btcUsdPrice, at: state.btcUsdPriceAt };
   }
 
+  /** Zero daily 429 counters on UTC day change. Leaves strikes, retry-after, and last-hit timestamps. */
+  async ensureApiThresholdDay(
+    preloaded?: SchedulerStateRow | null,
+  ): Promise<SchedulerStateRow | undefined> {
+    const today = todayUtcDate();
+    const state = preloaded !== undefined ? (preloaded ?? undefined) : await this.getSchedulerState();
+    if (!state) return undefined;
+    if (state.apiThresholdDayUtc === today) return state;
+    await this.updateSchedulerState({
+      apiThresholdDayUtc: today,
+      apiThresholdCount: 0,
+      esploraThresholdCount: 0,
+      mempoolThresholdCount: 0,
+    });
+    return {
+      ...state,
+      apiThresholdDayUtc: today,
+      apiThresholdCount: 0,
+      esploraThresholdCount: 0,
+      mempoolThresholdCount: 0,
+    };
+  }
+
   async recordApiThreshold(
     provider: ChainApiProviderId,
     opts: { retryAfterAt: string; strikeCount: number },
   ): Promise<void> {
-    const state = await this.getSchedulerState();
+    const state = await this.ensureApiThresholdDay();
     const ts = now();
     const esploraCount = state?.esploraThresholdCount ?? 0;
     const mempoolCount = state?.mempoolThresholdCount ?? 0;
@@ -3943,7 +3967,7 @@ LIMIT ${remaining}
       lastCompletedJob?: SyncSnapshotLastCompletedJob;
     },
   ) {
-    const scheduler = preloaded?.scheduler ?? await this.getSchedulerState();
+    const scheduler = await this.ensureApiThresholdDay(preloaded?.scheduler);
     const lastCompleted =
       preloaded?.lastCompletedJob ?? await this.getLastCompletedJobSummary();
     const lastChainApiAt = scheduler?.lastProviderSuccessAt ?? null;

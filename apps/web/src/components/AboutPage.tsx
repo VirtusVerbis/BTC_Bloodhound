@@ -189,7 +189,7 @@ export function AboutPage({ sync }: AboutPageProps) {
                       {api.thresholdCount > 0 && (
                         <span className="about-link-desc">
                           {" "}
-                          ({api.thresholdCount} threshold hit{api.thresholdCount === 1 ? "" : "s"} total)
+                          ({api.thresholdCount} threshold hit{api.thresholdCount === 1 ? "" : "s"} today)
                         </span>
                       )}
                     </li>

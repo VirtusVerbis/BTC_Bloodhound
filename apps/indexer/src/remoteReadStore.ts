@@ -146,6 +146,7 @@ export class RemoteReadStore {
         row.last_provider_success_at != null ? str(row.last_provider_success_at) : null,
       lastApiThresholdAt: row.last_api_threshold_at != null ? str(row.last_api_threshold_at) : null,
       apiThresholdCount: num(row.api_threshold_count),
+      apiThresholdDayUtc: row.api_threshold_day_utc != null ? str(row.api_threshold_day_utc) : null,
       lastEsploraThresholdAt:
         row.last_esplora_threshold_at != null ? str(row.last_esplora_threshold_at) : null,
       lastMempoolThresholdAt:

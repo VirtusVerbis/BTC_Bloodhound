@@ -241,6 +241,9 @@ export function runMigrations(sqlite: Database.Database): void {
   if (!schedulerCols.some((c) => c.name === "quota_day_utc")) {
     sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN quota_day_utc TEXT`);
   }
+  if (!schedulerCols.some((c) => c.name === "api_threshold_day_utc")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN api_threshold_day_utc TEXT`);
+  }
   if (!schedulerCols.some((c) => c.name === "d1_rows_read_total")) {
     sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN d1_rows_read_total INTEGER NOT NULL DEFAULT 0`);
   }
