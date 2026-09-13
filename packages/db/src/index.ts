@@ -458,6 +458,26 @@ export function runMigrations(sqlite: Database.Database): void {
       ON addresses(hop_from_hacker, inbound_sats)
       WHERE role = 'downstream' AND expand_status IN ('pending', 'expanded');
   `);
+  sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_jobs_pending_type_due
+      ON jobs(type, priority DESC, run_after, created_at)
+      WHERE status = 'pending';
+  `);
+  sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_jobs_pending_due
+      ON jobs(priority DESC, run_after, created_at, type, id)
+      WHERE status = 'pending';
+  `);
+  sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_jobs_active_type
+      ON jobs(type)
+      WHERE status IN ('pending', 'running');
+  `);
+  sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_jobs_active_type_addr
+      ON jobs(type, json_extract(payload_json, '$.address'))
+      WHERE status IN ('pending', 'running');
+  `);
 
   if (!schedulerCols.some((c) => c.name === "sync_snapshot_dirty")) {
     sqlite.exec(

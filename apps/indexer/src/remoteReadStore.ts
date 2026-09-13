@@ -126,6 +126,13 @@ export class RemoteReadStore {
     return num(row?.count);
   }
 
+  async hasActiveJob(type: string) {
+    const row = this.client.query(
+      `SELECT 1 AS ok FROM jobs WHERE type = ${sqlString(type)} AND status IN ('pending', 'running') LIMIT 1;`,
+    )[0];
+    return row != null;
+  }
+
   async hasPendingJob(type: string, address?: string) {
     let sql = `SELECT 1 AS ok FROM jobs WHERE type = ${sqlString(type)} AND status IN ('pending', 'running')`;
     if (address) {

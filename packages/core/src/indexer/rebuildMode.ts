@@ -8,8 +8,8 @@ export async function isRebuildActive(
   processTxCount?: number,
 ): Promise<boolean> {
   if (config.indexerRebuildMode) return true;
-  const count = processTxCount ?? (await store.countActiveJobs("process_tx"));
-  return count > 0;
+  if (processTxCount != null) return processTxCount > 0;
+  return await store.hasActiveJob("process_tx");
 }
 
 export async function processTxPriority(store: Store, config: AppConfig): Promise<number> {

@@ -151,6 +151,7 @@ function mockStore(overrides: Partial<Store> = {}): Store {
     ensureDownstreamTreeDepth: vi.fn().mockResolvedValue(undefined),
     hasPendingJob: vi.fn().mockResolvedValue(false),
     countActiveJobs: vi.fn().mockResolvedValue(0),
+    hasActiveJob: vi.fn().mockResolvedValue(false),
     getAddress: vi.fn(),
     getBackfillState: vi.fn(),
     getSyncState: vi.fn(),
@@ -286,7 +287,7 @@ describe("maintainOneHacker", () => {
 describe("scheduleDownstreamCrawl", () => {
   it("skips all cron enqueue when rebuild is active", async () => {
     const store = mockStore({
-      countActiveJobs: vi.fn().mockResolvedValue(5),
+      hasActiveJob: vi.fn().mockResolvedValue(true),
       listHackersCached: vi.fn().mockResolvedValue([{ address: "bc1qhack", liveBalanceAt: null }]),
       getSourceSync: vi.fn().mockResolvedValue(null),
       getCrawlEnqueueCandidates: vi.fn().mockResolvedValue([{ address: "bc1qdown" }]),

@@ -155,7 +155,11 @@ describe("runIndexerTick ordering", () => {
     });
 
     const store = tickStoreMock({
-      hasPendingIngestContinuation: vi.fn().mockResolvedValue(true),
+      listPendingIngestCandidates: vi.fn().mockResolvedValue([
+        {
+          payloadJson: JSON.stringify({ address: "bc1qbackfill", chainCursor: "abc" }),
+        },
+      ]),
     });
     const router = {} as ChainRouter;
 
@@ -164,6 +168,18 @@ describe("runIndexerTick ordering", () => {
     expect(order[0]).toBe("jobs");
     expect(order).toContain("schedule-btc");
     expect(order.indexOf("jobs")).toBeLessThan(order.indexOf("schedule-btc"));
+    expect(processJobsMock).toHaveBeenCalledWith(
+      store,
+      router,
+      expect.anything(),
+      expect.objectContaining({
+        ingestCandidates: [
+          expect.objectContaining({
+            payloadJson: JSON.stringify({ address: "bc1qbackfill", chainCursor: "abc" }),
+          }),
+        ],
+      }),
+    );
   });
 
   it("runs schedule before jobs when queue is empty and no continuation", async () => {
@@ -193,6 +209,12 @@ describe("runIndexerTick ordering", () => {
 
     expect(order[0]).toBe("schedule-btc");
     expect(order.indexOf("schedule-btc")).toBeLessThan(order.indexOf("jobs"));
+    expect(processJobsMock).toHaveBeenCalledWith(
+      store,
+      router,
+      expect.anything(),
+      expect.not.objectContaining({ ingestCandidates: expect.anything() }),
+    );
   });
 
   it("runs jobs before schedule when queue depth meets drain threshold", async () => {

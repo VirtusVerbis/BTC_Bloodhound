@@ -4,6 +4,7 @@ import type { ChainRouter } from "../chain/router.js";
 import { scheduleBtcUsdPriceRefresh, scheduleDownstreamCrawl } from "./crawl.js";
 import { logCronDetail } from "./jobLog.js";
 import type { IndexerLogColorMode } from "./logColor.js";
+import { isIngestContinuation } from "./jobClass.js";
 import { processJobs } from "./processor.js";
 import {
   createSubrequestBudget,
@@ -107,13 +108,14 @@ export async function runIndexerTick(
   logCronDetail(jobDetails, "[cron] tick start", logColor, logColorMode);
   try {
     const queueDepth = await store.getPendingQueueDepthAll();
-    const continuationPending = schedule ? await store.hasPendingIngestContinuation() : false;
+    const ingestCandidates = await store.listPendingIngestCandidates(32);
+    const continuationPending =
+      schedule && ingestCandidates.some((j) => isIngestContinuation(j.payloadJson));
     drainFirst = shouldDrainBeforeSchedule({
       continuationPending,
       queueDepth,
       queueDrainFirstDepth: config.queueDrainFirstDepth,
     });
-    const ingestCandidates = await store.listPendingIngestCandidates(32);
     const tickPlan = planTickJobs(config, queueDepth, ingestCandidates, budget);
     jobsCap = tickPlan.jobsCap;
     jobsCapReason = tickPlan.reason;
@@ -140,7 +142,10 @@ export async function runIndexerTick(
     };
 
     if (drainFirst) {
-      const jobResult = await processJobs(store, router, config, jobOpts);
+      const jobResult = await processJobs(store, router, config, {
+        ...jobOpts,
+        ingestCandidates,
+      });
       jobsProcessed = jobResult.processed;
       tickStop = jobResult.stopReason;
 

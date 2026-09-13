@@ -1598,6 +1598,22 @@ async function isPacingBlocked(store: Store, deadlineMs?: number): Promise<boole
 
 type ClaimSlotResult = Job | null | "pair_wait";
 
+type IngestCandidateCache = {
+  rows: Job[] | null;
+};
+
+async function ingestCandidatesForPick(
+  store: Store,
+  cache: IngestCandidateCache,
+  claimedIds: number[],
+): Promise<Job[]> {
+  const usable = (cache.rows ?? []).filter((j) => !claimedIds.includes(j.id));
+  if (usable.length > 0) return usable;
+  if (cache.rows != null && claimedIds.length === 0) return [];
+  cache.rows = await store.listPendingIngestCandidates(32);
+  return cache.rows.filter((j) => !claimedIds.includes(j.id));
+}
+
 async function claimJobForSlot(
   store: Store,
   config: AppConfig,
@@ -1607,9 +1623,9 @@ async function claimJobForSlot(
     pacingBlocked: boolean;
     claimedIds: number[];
     budget?: SubrequestBudget;
+    candidateCache: IngestCandidateCache;
   },
 ): Promise<ClaimSlotResult> {
-  const candidates = await store.listPendingIngestCandidates(32);
   const maxEstimatedSubreq =
     ctx.budget && ctx.budget.limit() > 0
       ? ctx.budget.remaining() - config.scheduleSubrequestReserve - 2
@@ -1618,6 +1634,8 @@ async function claimJobForSlot(
     excludeIds: ctx.claimedIds,
     maxEstimatedSubreq,
   };
+
+  const loadCandidates = () => ingestCandidatesForPick(store, ctx.candidateCache, ctx.claimedIds);
 
   if (slot === 0) {
     const schedState = await store.getSchedulerState();
@@ -1637,7 +1655,7 @@ async function claimJobForSlot(
     const pollSlice =
       config.pollSliceEveryNCrons > 0 && maintCounter % config.pollSliceEveryNCrons === 0;
     if (!pollSlice) {
-      const pick = pickIngestCandidate(candidates, config, {
+      const pick = pickIngestCandidate(await loadCandidates(), config, {
         ...pickOpts,
         preferContinuation: true,
       });
@@ -1647,7 +1665,7 @@ async function claimJobForSlot(
   }
 
   if (ctx.chainSlotUsed || ctx.pacingBlocked) {
-    const pick = pickIngestCandidate(candidates, config, {
+    const pick = pickIngestCandidate(await loadCandidates(), config, {
       ...pickOpts,
       requireNoChainAtStart: true,
       preferProcessOnly: true,
@@ -1656,7 +1674,7 @@ async function claimJobForSlot(
     return await store.claimIngestJobById(pick.id);
   }
 
-  const pick = pickIngestCandidate(candidates, config, {
+  const pick = pickIngestCandidate(await loadCandidates(), config, {
     ...pickOpts,
     preferProcessOnly: true,
   });
@@ -1730,6 +1748,7 @@ export async function processJobs(
     logColorMode?: IndexerLogColorMode;
     subrequestBudget?: SubrequestBudget;
     jobsPerTick?: number;
+    ingestCandidates?: Job[];
   },
 ): Promise<ProcessJobsResult> {
   const jobDetails = opts?.jobDetails ?? false;
@@ -1742,6 +1761,9 @@ export async function processJobs(
   let cachedHackers: Set<string> | undefined;
   let chainSlotUsed = await isPacingBlocked(store, opts?.deadlineMs);
   const claimedIds: number[] = [];
+  const candidateCache: IngestCandidateCache = {
+    rows: opts?.ingestCandidates !== undefined ? opts.ingestCandidates : null,
+  };
   for (let i = 0; i < jobsPerTick; i++) {
     if (opts?.deadlineMs != null && Date.now() >= opts.deadlineMs) {
       stopReason = "deadline";
@@ -1764,6 +1786,7 @@ export async function processJobs(
       pacingBlocked,
       claimedIds,
       budget,
+      candidateCache,
     });
     if (claimResult === "pair_wait") {
       stopReason = "pair_wait";

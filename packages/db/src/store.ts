@@ -53,6 +53,8 @@ import {
   sqlStringLiteral,
 } from "./pollDueQuery.js";
 
+const ACTIVE_JOB_STATUSES = ["pending", "running"] as const;
+
 const INGEST_JOB_TYPES = [
   "backfill_hacker_address",
   "audit_hacker_backfill",
@@ -1952,18 +1954,19 @@ export class Store {
     const runAt = runAfter ?? now();
     const createdAt = now();
     const typeList = sql.join(dedupeTypes.map((t) => sql`${t}`), sql`, `);
+    const existsPred = address
+      ? sql`type IN (${typeList})
+          AND status IN ('pending', 'running')
+          AND json_extract(payload_json, '$.address') = ${address}`
+      : sql`type IN (${typeList})
+          AND status IN ('pending', 'running')`;
 
     const result = await this.db.run(sql`
       INSERT INTO jobs (type, payload_json, status, priority, run_after, created_at)
       SELECT ${type}, ${payloadJson}, 'pending', ${priority}, ${runAt}, ${createdAt}
       WHERE NOT EXISTS (
         SELECT 1 FROM jobs
-        WHERE type IN (${typeList})
-          AND status IN ('pending', 'running')
-          AND (
-            ${address ?? null} IS NULL
-            OR json_extract(payload_json, '$.address') = ${address ?? null}
-          )
+        WHERE ${existsPred}
       )
     `);
 
@@ -1981,11 +1984,26 @@ export class Store {
       .where(
         and(
           eq(jobs.type, type),
-          or(eq(jobs.status, "pending"), eq(jobs.status, "running")),
+          inArray(jobs.status, [...ACTIVE_JOB_STATUSES]),
         ),
       )
       .get();
     return row?.count ?? 0;
+  }
+
+  async hasActiveJob(type: string): Promise<boolean> {
+    const row = await this.db
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.type, type),
+          inArray(jobs.status, [...ACTIVE_JOB_STATUSES]),
+        ),
+      )
+      .limit(1)
+      .get();
+    return row != null;
   }
 
   async countActiveJobsForAddress(type: string, address: string): Promise<number> {
@@ -1995,7 +2013,7 @@ export class Store {
       .where(
         and(
           eq(jobs.type, type),
-          or(eq(jobs.status, "pending"), eq(jobs.status, "running")),
+          inArray(jobs.status, [...ACTIVE_JOB_STATUSES]),
           jobPayloadAddressEq(address),
         ),
       )
@@ -2008,7 +2026,7 @@ export class Store {
       return !!(await this.db
         .select()
         .from(jobs)
-        .where(and(eq(jobs.type, type), or(eq(jobs.status, "pending"), eq(jobs.status, "running"))))
+        .where(and(eq(jobs.type, type), inArray(jobs.status, [...ACTIVE_JOB_STATUSES])))
         .get());
     }
     // Address must be pre-validated by API; bind as parameter (no raw SQL concat of user input).
@@ -2018,7 +2036,7 @@ export class Store {
       .where(
         and(
           eq(jobs.type, type),
-          or(eq(jobs.status, "pending"), eq(jobs.status, "running")),
+          inArray(jobs.status, [...ACTIVE_JOB_STATUSES]),
           jobPayloadAddressEq(address),
         ),
       )
@@ -2114,27 +2132,38 @@ export class Store {
     return { allowed: false, retryAfterSec };
   }
 
-  async claimNextJob(ageBoost?: ClaimAgeBoost) {
-    const ts = now();
-    const job = await this.db
-      .select()
-      .from(jobs)
-      .where(and(eq(jobs.status, "pending"), lte(jobs.runAfter, ts)))
-      .orderBy(...jobClaimOrderBy(ageBoost, ts))
-      .limit(1)
-      .get();
-    if (!job) return null;
-    // Claim only if still pending (avoids double-claim under overlapping cron ticks).
+  private async markJobRunning(id: number, ts: string): Promise<Job | null> {
     const claimed = await this.db
       .update(jobs)
       .set({ status: "running", startedAt: ts, completedAt: null })
-      .where(and(eq(jobs.id, job.id), eq(jobs.status, "pending")))
+      .where(and(eq(jobs.id, id), eq(jobs.status, "pending")))
       .run();
     if (changesCount(claimed as { changes?: number; meta?: { changes?: number } }) === 0) {
       return null;
     }
     await this.adjustPendingJobCount(-1);
+    const job = await this.getJob(id);
+    if (!job) return null;
     return { ...job, status: "running" as const, startedAt: ts, completedAt: null };
+  }
+
+  async claimNextJob(ageBoost?: ClaimAgeBoost) {
+    const ts = now();
+    const head = await this.db
+      .select({
+        id: jobs.id,
+        type: jobs.type,
+        priority: jobs.priority,
+        runAfter: jobs.runAfter,
+        createdAt: jobs.createdAt,
+      })
+      .from(jobs)
+      .where(and(eq(jobs.status, "pending"), lte(jobs.runAfter, ts)))
+      .orderBy(...jobClaimOrderBy(ageBoost, ts))
+      .limit(1)
+      .get();
+    if (!head) return null;
+    return await this.markJobRunning(head.id, ts);
   }
 
   /** Force-claim oldest maint/cosmetic job that has waited at least minWaitSec. */
@@ -2155,24 +2184,15 @@ export class Store {
     if (excludeIds.length > 0) {
       conditions.push(notInArray(jobs.id, excludeIds));
     }
-    const job = await this.db
-      .select()
+    const head = await this.db
+      .select({ id: jobs.id })
       .from(jobs)
       .where(and(...conditions))
       .orderBy(asc(jobs.createdAt))
       .limit(1)
       .get();
-    if (!job) return null;
-    const claimed = await this.db
-      .update(jobs)
-      .set({ status: "running", startedAt: ts, completedAt: null })
-      .where(and(eq(jobs.id, job.id), eq(jobs.status, "pending")))
-      .run();
-    if (changesCount(claimed as { changes?: number; meta?: { changes?: number } }) === 0) {
-      return null;
-    }
-    await this.adjustPendingJobCount(-1);
-    return { ...job, status: "running" as const, startedAt: ts, completedAt: null };
+    if (!head) return null;
+    return await this.markJobRunning(head.id, ts);
   }
 
   /** Runnable pending ingest jobs in priority order (read-only peek for tick planning). */
@@ -2196,8 +2216,8 @@ export class Store {
   /** Claim a specific ingest job by id (atomic pending → running). */
   async claimIngestJobById(id: number): Promise<Job | null> {
     const ts = now();
-    const job = await this.db
-      .select()
+    const head = await this.db
+      .select({ id: jobs.id })
       .from(jobs)
       .where(
         and(
@@ -2208,17 +2228,8 @@ export class Store {
         ),
       )
       .get();
-    if (!job) return null;
-    const claimed = await this.db
-      .update(jobs)
-      .set({ status: "running", startedAt: ts, completedAt: null })
-      .where(and(eq(jobs.id, id), eq(jobs.status, "pending")))
-      .run();
-    if (changesCount(claimed as { changes?: number; meta?: { changes?: number } }) === 0) {
-      return null;
-    }
-    await this.adjustPendingJobCount(-1);
-    return { ...job, status: "running" as const, startedAt: ts, completedAt: null };
+    if (!head) return null;
+    return await this.markJobRunning(head.id, ts);
   }
 
   async claimNextIngestJob(opts?: { preferContinuation?: boolean }): Promise<Job | null> {
@@ -2242,33 +2253,12 @@ export class Store {
       if (alt) pick = alt;
     }
 
-    const claimed = await this.db
-      .update(jobs)
-      .set({ status: "running", startedAt: ts, completedAt: null })
-      .where(and(eq(jobs.id, pick.id), eq(jobs.status, "pending")))
-      .run();
-    if (changesCount(claimed as { changes?: number; meta?: { changes?: number } }) === 0) {
-      return null;
-    }
-    await this.adjustPendingJobCount(-1);
-    return { ...pick, status: "running" as const, startedAt: ts, completedAt: null };
+    return await this.markJobRunning(pick.id, ts);
   }
 
   /** True when a runnable pending ingest job has saved continuation state. */
   async hasPendingIngestContinuation(): Promise<boolean> {
-    const ts = now();
-    const rows = await this.db
-      .select({ payloadJson: jobs.payloadJson })
-      .from(jobs)
-      .where(
-        and(
-          eq(jobs.status, "pending"),
-          lte(jobs.runAfter, ts),
-          inArray(jobs.type, [...INGEST_JOB_TYPES]),
-        ),
-      )
-      .limit(32)
-      .all();
+    const rows = await this.listPendingIngestCandidates(32);
     return rows.some((row) => isIngestContinuation(row.payloadJson));
   }
 
@@ -4692,7 +4682,7 @@ LIMIT ${remaining}
       .delete(jobs)
       .where(
         and(
-          or(eq(jobs.status, "pending"), eq(jobs.status, "running")),
+          inArray(jobs.status, [...ACTIVE_JOB_STATUSES]),
           jobPayloadAddressEq(address),
         ),
       )
@@ -4716,7 +4706,7 @@ LIMIT ${remaining}
     const running = runningRow?.count ?? 0;
     await this.db
       .delete(jobs)
-      .where(or(eq(jobs.status, "pending"), eq(jobs.status, "running")))
+      .where(inArray(jobs.status, [...ACTIVE_JOB_STATUSES]))
       .run();
     await this.updateSchedulerState({ pendingJobCount: 0 });
     return { deleted: pending + running, pending, running };

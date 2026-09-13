@@ -405,6 +405,57 @@ describe("enqueueJobIfAbsent", () => {
     expect(first).toBeGreaterThan(0);
     expect(second).toBeNull();
   });
+
+  it("does not treat a singleton as colliding with an address-keyed job of another type", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const pollId = await store.enqueueJobIfAbsent(
+      "poll_hacker_address",
+      { address: ADDR_A },
+      1,
+      undefined,
+      { address: ADDR_A },
+    );
+    const syncId = await store.enqueueJobIfAbsent("sync_coldcardwatch", {}, 5);
+
+    expect(pollId).toBeGreaterThan(0);
+    expect(syncId).toBeGreaterThan(0);
+    expect(syncId).not.toBe(pollId);
+  });
+});
+
+describe("jobs hot indexes", () => {
+  it("creates pending and active job indexes after runMigrations", () => {
+    const { sqlite } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const indexes = sqlite.prepare("PRAGMA index_list(jobs)").all() as Array<{ name: string }>;
+    const names = new Set(indexes.map((i) => i.name));
+    expect(names.has("idx_jobs_pending_type_due")).toBe(true);
+    expect(names.has("idx_jobs_pending_due")).toBe(true);
+    expect(names.has("idx_jobs_active_type")).toBe(true);
+    expect(names.has("idx_jobs_active_type_addr")).toBe(true);
+  });
+});
+
+describe("hasActiveJob", () => {
+  it("is true for pending or running jobs of that type only", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    expect(await store.hasActiveJob("process_tx")).toBe(false);
+    const id = await store.enqueueJob("process_tx", { txid: "abc" }, 1);
+    expect(await store.hasActiveJob("process_tx")).toBe(true);
+    expect(await store.hasActiveJob("expand_downstream")).toBe(false);
+
+    await store.claimNextJob();
+    expect(await store.hasActiveJob("process_tx")).toBe(true);
+
+    await store.completeJob(id);
+    expect(await store.hasActiveJob("process_tx")).toBe(false);
+  });
 });
 
 describe("insertAddressIfMissing", () => {
