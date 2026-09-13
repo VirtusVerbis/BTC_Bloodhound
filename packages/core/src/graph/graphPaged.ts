@@ -2,6 +2,7 @@ import type { Store } from "@cointrace/db";
 import { bundleParallelEdges, mapDbEdgeToGraph } from "./graphEdges.js";
 import type { GraphEdge, GraphNode, GraphResult } from "./builder.js";
 import { enrichNodesWithOpReturn } from "./graphOpReturn.js";
+import { appendVictimRefunds } from "./graphRefunds.js";
 import { filterDownstreamEdgesExcludingVictims } from "./graphVictims.js";
 import {
   decodeL1Cursor,
@@ -233,6 +234,11 @@ export async function buildGraphL1Page(
     await appendVictimsSection(store, hacker, hackerId, nodes, edges, seen, options);
   }
 
+  const victimSet = await store.getVictimAddressSetForHacker(
+    hacker,
+    Math.max(options.maxVictims ?? 100, 1000),
+  );
+
   const totalL1 = isFirstPage
     ? await store.countOutEdgesFromAddress(hacker, { minEdgeSats })
     : null;
@@ -247,6 +253,7 @@ export async function buildGraphL1Page(
           after: after ?? undefined,
         })
       : [];
+  outEdges = outEdges.filter((e) => !victimSet.has(e.toAddress));
 
   const hackerOutGraphEdges = outEdges.map((e) => mapDbEdgeToGraph(hackerId, e.toAddress, e));
   const bundledHackerOut = bundleParallelEdges(hackerOutGraphEdges, graphBundleMinEdges);
@@ -261,6 +268,13 @@ export async function buildGraphL1Page(
       seen.add(id);
     }
     edges.push(ge);
+  }
+
+  if (isFirstPage) {
+    await appendVictimRefunds(store, hacker, nodes, edges, seen, {
+      minEdgeSats,
+      victimAddresses: [...victimSet],
+    });
   }
 
   const loadedL1 = loadedBefore + outEdges.length;

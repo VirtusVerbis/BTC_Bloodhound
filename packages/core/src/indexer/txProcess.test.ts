@@ -207,4 +207,42 @@ describe("processClassifiedPendingTx", () => {
     );
     expect(processTxForHackTraceMock).not.toHaveBeenCalled();
   });
+
+  it("traces a sub-floor spend from the page without calling getTx", async () => {
+    const config = loadConfig({ MIN_EXPAND_SATS: "100000" });
+    const getTx = vi.fn();
+    const store = {
+      getTransaction: getTransactionMock.mockResolvedValue(null),
+    } as unknown as Store;
+    const router = {
+      withProvider: vi.fn(async (fn: (p: { getTx: typeof getTx }) => unknown) => fn({ getTx })),
+    } as unknown as ChainRouter;
+    const pageEntry = {
+      txid: "dust1",
+      vin: [{ prevout: { scriptpubkey_address: address, value: 50_000 } }],
+      vout: [{ scriptpubkey_address: victim, value: 49_000 }],
+    };
+
+    const result = await processClassifiedPendingTx(
+      store,
+      router,
+      config,
+      address,
+      1,
+      {
+        txid: "dust1",
+        isSpend: true,
+        voutCount: 1,
+        outputAddressCount: 1,
+        pageEntry,
+      },
+      hackers,
+      {},
+    );
+
+    expect(getTx).not.toHaveBeenCalled();
+    expect(router.withProvider).not.toHaveBeenCalled();
+    expect(processTxForHackTraceMock).toHaveBeenCalledTimes(1);
+    expect(result.chainCallsUsed).toBe(0);
+  });
 });

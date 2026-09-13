@@ -21,7 +21,7 @@ describe("receive deposit indexing", () => {
       hopFromHacker: 0,
     });
 
-    const config = loadConfig({ TRACE_FLAGGED_HACKER_RECEIVES: "1" });
+    const config = loadConfig({ TRACE_FLAGGED_HACKER_RECEIVES: "1", MIN_EXPAND_SATS: "0" });
     const tx = {
       txid: "deposit-tx-1",
       status: { block_height: 800_000, block_time: 1_700_000_000 },

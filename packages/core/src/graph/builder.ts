@@ -4,8 +4,9 @@ import type { ChainRouter } from "../chain/router.js";
 import type { ChainTxDetail } from "../chain/types.js";
 import type { CpuGuard } from "../indexer/cpuGuard.js";
 import { captureOpReturnForTx, type CaptureOpReturnOpts } from "../indexer/opReturnCapture.js";
-import { bundleParallelEdges, mapDbEdgeToGraph, type EdgeKind } from "./graphEdges.js";
+import { bundleParallelEdges, mapDbEdgeToGraph, victimReturnEdgeKind, type EdgeKind } from "./graphEdges.js";
 import { enrichNodesWithOpReturn } from "./graphOpReturn.js";
+import { appendVictimRefunds } from "./graphRefunds.js";
 import { filterDownstreamEdgesExcludingVictims } from "./graphVictims.js";
 import { DEFAULT_MIN_EXPAND_SATS, expandStatusToWrite } from "./expandSkip.js";
 
@@ -207,10 +208,12 @@ export async function buildGraph(
     }
   }
 
-  const outEdges = await store.getOutEdgesFromAddress(hacker, {
+  const victimSet = await store.getVictimAddressSetForHacker(hacker, Math.max(maxVictims, 1000));
+
+  const outEdges = (await store.getOutEdgesFromAddress(hacker, {
     minEdgeSats,
     limit: maxOutputs,
-  });
+  })).filter((e) => !victimSet.has(e.toAddress));
 
   const hackerOutGraphEdges = outEdges.map((e) =>
     mapDbEdgeToGraph(hackerId, e.toAddress, e),
@@ -225,7 +228,6 @@ export async function buildGraph(
   const addressLookupBudget = () => MAX_GRAPH_ADDRESS_LOOKUPS - level1Ids.length - level2Ids.length;
 
   if (depth > 1) {
-    const victimSet = await store.getVictimAddressSetForHacker(hacker, maxVictims);
     const expandableParents = level1Ids.filter((id) => {
       const row = level1AddrMap.get(id);
       return (row?.hopFromHacker ?? 1) < depth;
@@ -280,6 +282,11 @@ export async function buildGraph(
       }
     }
   }
+
+  await appendVictimRefunds(store, hacker, nodes, edges, seen, {
+    minEdgeSats,
+    victimAddresses: victimFilter ? [victimFilter] : [...victimSet],
+  });
 
   await enrichNodesWithOpReturn(store, nodes);
 
@@ -652,18 +659,19 @@ export async function applyHackTraceEdgesChunk(
   const minExpandSats = opts?.minExpandSats ?? DEFAULT_MIN_EXPAND_SATS;
   const sliceInbound = new Map<string, number>();
   for (const edge of slice) {
-    const isVictimDust =
+    const isVictimReturn =
       edge.direction === "out_from_hacker" && victimTargets.has(edge.toAddress);
-    if (edge.direction === "out_from_hacker" && !isVictimDust) {
+    if (edge.direction === "out_from_hacker" && !isVictimReturn) {
       sliceInbound.set(edge.toAddress, (sliceInbound.get(edge.toAddress) ?? 0) + edge.amountSats);
     }
   }
   const expandCtx = await store.getDownstreamExpandContext([...sliceInbound.keys()]);
 
+  const skippedInbound = new Map<string, number>();
   for (const edge of slice) {
-    const isVictimDust =
+    const isVictimReturn =
       edge.direction === "out_from_hacker" && victimTargets.has(edge.toAddress);
-    if (edge.direction === "out_from_hacker" && !isVictimDust) {
+    if (edge.direction === "out_from_hacker" && !isVictimReturn) {
       const existing = expandCtx.get(edge.toAddress);
       const inboundSats = (existing?.inboundSats ?? 0) + (sliceInbound.get(edge.toAddress) ?? 0);
       const expandStatus = expandStatusToWrite(existing?.expandStatus, inboundSats, minExpandSats);
@@ -675,6 +683,15 @@ export async function applyHackTraceEdgesChunk(
         ...(expandStatus != null ? { expandStatus } : {}),
       });
     }
+    if (edge.amountSats < minExpandSats) {
+      if (edge.direction === "out_from_hacker" && !isVictimReturn) {
+        skippedInbound.set(
+          edge.toAddress,
+          (skippedInbound.get(edge.toAddress) ?? 0) + edge.amountSats,
+        );
+      }
+      continue;
+    }
     edgeRows.push({
       fromAddress: edge.fromAddress,
       toAddress: edge.toAddress,
@@ -683,7 +700,7 @@ export async function applyHackTraceEdgesChunk(
       blockTime: meta.blockTime,
       hopFromHacker: edge.hopFromHacker,
       direction: edge.direction,
-      edgeKind: isVictimDust ? "victim_dust" : null,
+      edgeKind: isVictimReturn ? victimReturnEdgeKind(edge.amountSats, minExpandSats) : null,
     });
   }
 
@@ -705,18 +722,22 @@ export async function applyHackTraceEdgesChunk(
     );
   }
 
+  for (const [toAddress, delta] of skippedInbound) {
+    await store.addInboundSats(toAddress, delta);
+  }
+
   if (edgeRows.length > 0) {
     const inToHackerRows = edgeRows.filter((row) => row.direction === "in_to_hacker");
     const existingInToHackerKeys = await store.getExistingInToHackerEdgeKeys(inToHackerRows);
     await store.upsertEdgesBatch(edgeRows);
 
     const activityAt = meta.blockTime ?? new Date().toISOString();
-    for (const edge of slice) {
+    for (const edge of edgeRows) {
       if (edge.direction === "in_to_hacker" && newVictimAddresses.has(edge.fromAddress)) {
         store.recordRecentHackerActivity(edge.toAddress, { victims: 1, at: activityAt });
       }
     }
-    for (const edge of slice) {
+    for (const edge of edgeRows) {
       if (edge.direction !== "in_to_hacker" || newVictimAddresses.has(edge.fromAddress)) continue;
       const key = `${edge.fromAddress}|${edge.toAddress}|${meta.txid}`;
       if (!existingInToHackerKeys.has(key)) {

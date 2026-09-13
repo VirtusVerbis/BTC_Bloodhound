@@ -41,7 +41,7 @@ export interface ApiGraphEdge {
   txid: string;
   amount: number;
   time: string | null;
-  edgeKind?: "default" | "peel_relay" | "spend_fanout";
+  edgeKind?: "default" | "peel_relay" | "spend_fanout" | "victim_refund" | "victim_dust";
   bundled?: boolean;
   edgeCount?: number;
   txids?: string[];

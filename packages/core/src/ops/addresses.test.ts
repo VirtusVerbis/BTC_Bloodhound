@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { openDatabase, runMigrations, Store } from "@cointrace/db";
 import { JOB_PRIORITY } from "../config.js";
 import { invalidVectorByLabel, validVectorByLabel } from "../util/addressVectors.js";
-import { pruneInvalidAddresses } from "./addresses.js";
+import { pruneInvalidAddresses, repairDownstreamRole } from "./addresses.js";
 
 const VALID_HACKER = validVectorByLabel("P2WPKH bc1q").expected;
 const VALID_DOWNSTREAM = validVectorByLabel("P2TR bc1p prod downstream").expected;
@@ -89,5 +89,25 @@ describe("pruneInvalidAddresses", () => {
     expect(await store.getAddress(VALID_HACKER)).toBeTruthy();
     expect(await store.getAddress(VALID_DOWNSTREAM)).toBeTruthy();
     expect(await store.hasPendingJob("poll_hacker_address", VALID_HACKER)).toBe(true);
+  });
+});
+
+describe("repairDownstreamRole", () => {
+  it("restores hop-labelled victims without in_to_hacker", async () => {
+    const store = await freshStore();
+    await store.upsertAddress({
+      address: VALID_DOWNSTREAM,
+      role: "victim",
+      hopFromHacker: 1,
+      expandStatus: "expanded",
+    });
+
+    const dry = await repairDownstreamRole(store, { dryRun: true });
+    expect(dry.mislabelled).toEqual([VALID_DOWNSTREAM]);
+    expect(dry.repaired).toEqual([]);
+
+    const result = await repairDownstreamRole(store);
+    expect(result.repaired).toEqual([VALID_DOWNSTREAM]);
+    expect((await store.getAddress(VALID_DOWNSTREAM))?.role).toBe("downstream");
   });
 });

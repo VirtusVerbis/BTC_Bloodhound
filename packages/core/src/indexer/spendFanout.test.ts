@@ -25,7 +25,7 @@ describe("spendFanout", () => {
     expect(meta.topOutputs[0]!.address).toBe("bc1qa");
   });
 
-  it("marks a small fanout primary as skipped_min and still stores the edge", async () => {
+  it("marks a small fanout primary as skipped_min without storing the edge", async () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);
     const store = new Store(db);
@@ -48,10 +48,11 @@ describe("spendFanout", () => {
     });
 
     expect((await store.getAddress(primary))?.expandStatus).toBe("skipped_min");
+    expect((await store.getAddress(primary))?.inboundSats).toBe(70_000);
     const edge = sqlite
       .prepare(`SELECT amount_sats FROM edges WHERE txid = 'smallfan'`)
-      .get() as { amount_sats: number };
-    expect(edge.amount_sats).toBe(70_000);
+      .get() as { amount_sats: number } | undefined;
+    expect(edge).toBeUndefined();
   });
 
   it("marks a large fanout primary as pending", async () => {

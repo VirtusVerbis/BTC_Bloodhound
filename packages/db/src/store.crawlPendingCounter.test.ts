@@ -49,7 +49,7 @@ describe("crawl pending counter", () => {
   it("decrements when role leaves downstream/hacker", async () => {
     const { store } = await openStore();
     await store.upsertAddress({ address: "bc1qdown1", role: "downstream", expandStatus: "pending" });
-    await store.upsertAddress({ address: "bc1qdown1", role: "victim", expandStatus: "pending" });
+    await store.upsertAddress({ address: "bc1qdown1", role: "victim", expandStatus: "pending", forceRole: true });
     expect(await readCounter(store)).toBe(0);
   });
 

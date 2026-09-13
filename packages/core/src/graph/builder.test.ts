@@ -9,6 +9,7 @@ import {
 } from "./builder.js";
 import * as builderModule from "./builder.js";
 import { buildGraphL1Page, buildGraphL2Page } from "./graphPaged.js";
+import { decodeL2Token } from "./graphTokens.js";
 import type { ChainTxDetail } from "../chain/types.js";
 import type { ChainRouter } from "../chain/router.js";
 import { openDatabase, runMigrations, Store } from "@cointrace/db";
@@ -193,7 +194,7 @@ describe("processTxForHackTrace", () => {
     const router = { withProvider: vi.fn() } as unknown as ChainRouter;
     const hackers = new Set(["hack1"]);
 
-    await processTxForHackTrace(store, router, tx.txid, hackers, { tx });
+    await processTxForHackTrace(store, router, tx.txid, hackers, { tx, minExpandSats: 0 });
 
     const down = await store.getAddress("down1");
     expect(down?.hopFromHacker).toBe(1);
@@ -223,7 +224,7 @@ describe("processTxForHackTrace", () => {
     const router = { withProvider: vi.fn() } as unknown as ChainRouter;
     const hackers = new Set(["hack1"]);
 
-    await processTxForHackTrace(store, router, tx.txid, hackers, { tx });
+    await processTxForHackTrace(store, router, tx.txid, hackers, { tx, minExpandSats: 0 });
 
     expect((await store.getAddress("hack1"))?.totalReceivedSats).toBe(60_000);
     const inEdges = (await store.getEdgesToAddress("hack1")).filter((e) => e.direction === "in_to_hacker");
@@ -258,6 +259,7 @@ describe("processTxForHackTrace", () => {
       traceEdgeTotal: flat.length,
       traceEdgesFlat: flat,
       maxEdgesPerJob: 1,
+      minExpandSats: 0,
     });
 
     expect(spy).not.toHaveBeenCalled();
@@ -432,7 +434,7 @@ describe("victim search graph filters", () => {
     const graph = await buildGraph(store, "hack1", {
       depth: 2,
       expandVictims: true,
-      minEdgeSats: 100,
+      minEdgeSats: 100_000,
     });
 
     expect(graph.nodes.filter((n) => n.id === victim)).toHaveLength(1);
@@ -440,6 +442,109 @@ describe("victim search graph filters", () => {
     expect(graph.edges.some((e) => e.source === downstream && e.target === victim)).toBe(false);
     expect(graph.edges.some((e) => e.source === victim && e.target === "hack1")).toBe(true);
     expect(graph.edges.some((e) => e.source === "hack1" && e.target === downstream)).toBe(true);
+  });
+
+  it("buildGraph attaches ≥ minEdgeSats victim returns as victim_refund", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    const victim = "bc1qvictim_refund";
+    const downstream = "bc1qdownstream_refund";
+
+    await store.upsertAddressesBatch([
+      { address: "hack1", role: "hacker", source: "admin", isFlaggedHacker: true, hopFromHacker: 0 },
+      { address: victim, role: "victim", source: "derived" },
+      { address: downstream, role: "downstream", source: "derived", hopFromHacker: 1 },
+    ]);
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: victim,
+        toAddress: "hack1",
+        txid: "tx_theft",
+        amountSats: 4_000_000_000_000,
+        direction: "in_to_hacker",
+        blockTime: "2026-09-06T14:28:56.000Z",
+      },
+      {
+        fromAddress: "hack1",
+        toAddress: downstream,
+        txid: "tx_sweep",
+        amountSats: 399_599_999_857,
+        direction: "out_from_hacker",
+        blockTime: "2026-09-06T14:28:56.000Z",
+      },
+      {
+        fromAddress: downstream,
+        toAddress: victim,
+        txid: "tx_refund",
+        amountSats: 340_000_000_000,
+        direction: "out_from_hacker",
+        edgeKind: "victim_dust",
+        blockTime: "2026-09-07T12:00:00.000Z",
+      },
+    ]);
+
+    const graph = await buildGraph(store, "hack1", {
+      depth: 2,
+      expandVictims: true,
+      minEdgeSats: 100_000,
+    });
+
+    expect(graph.nodes.find((n) => n.id === victim)?.type).toBe("victim");
+    expect(graph.nodes.find((n) => n.id === victim)?.role).toBe("victim");
+    const refund = graph.edges.find((e) => e.source === downstream && e.target === victim);
+    expect(refund?.edgeKind).toBe("victim_refund");
+    expect(refund?.amount).toBe(340_000_000_000);
+  });
+
+  it("buildGraph attaches collapsed-cluster refunds to the cluster without promoting a Victim", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    const victim = "bc1qvictim_promote";
+    const downstream = "bc1qdownstream_promote";
+
+    await store.upsertAddressesBatch([
+      { address: "hack1", role: "hacker", source: "admin", isFlaggedHacker: true, hopFromHacker: 0 },
+      { address: victim, role: "victim", source: "derived" },
+      { address: downstream, role: "downstream", source: "derived", hopFromHacker: 1 },
+    ]);
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: victim,
+        toAddress: "hack1",
+        txid: "tx_theft",
+        amountSats: 2_000_000,
+        direction: "in_to_hacker",
+      },
+      {
+        fromAddress: "hack1",
+        toAddress: downstream,
+        txid: "tx_sweep",
+        amountSats: 1_500_000,
+        direction: "out_from_hacker",
+      },
+      {
+        fromAddress: downstream,
+        toAddress: victim,
+        txid: "tx_refund",
+        amountSats: 1_200_000,
+        direction: "out_from_hacker",
+        edgeKind: "victim_dust",
+      },
+    ]);
+
+    const graph = await buildGraph(store, "hack1", {
+      depth: 2,
+      expandVictims: false,
+      minEdgeSats: 100_000,
+    });
+
+    expect(graph.nodes.some((n) => n.type === "victimCluster")).toBe(true);
+    expect(graph.nodes.find((n) => n.id === victim)).toBeUndefined();
+    expect(
+      graph.edges.some((e) => e.edgeKind === "victim_refund" && e.target === "victims:hack1"),
+    ).toBe(true);
   });
 
   it("buildGraph caps level-2 address lookups under heavy fan-out", async () => {
@@ -583,6 +688,92 @@ describe("buildGraphL1Page pagination", () => {
     expect(l2.nodes.some((n) => n.id === "child1")).toBe(true);
     expect(l2.edges.some((e) => e.source === "down1" && e.target === "child1")).toBe(true);
   });
+
+  it("attaches victim_refund on the first L1 page and keeps victims off L2 parents", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    const victim = "bc1qvictim_l1";
+    const down1 = "bc1qdown_l1_a";
+    const down2 = "bc1qdown_l1_b";
+
+    await store.upsertAddressesBatch([
+      { address: "hack1", role: "hacker", isFlaggedHacker: true, hopFromHacker: 0 },
+      { address: victim, role: "victim", source: "derived" },
+      { address: down1, role: "downstream", source: "derived", hopFromHacker: 1 },
+      { address: down2, role: "downstream", source: "derived", hopFromHacker: 1 },
+    ]);
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: victim,
+        toAddress: "hack1",
+        txid: "tx_theft",
+        amountSats: 5_000_000,
+        direction: "in_to_hacker",
+      },
+      {
+        fromAddress: "hack1",
+        toAddress: down1,
+        txid: "tx_sweep1",
+        amountSats: 3_000_000,
+        direction: "out_from_hacker",
+      },
+      {
+        fromAddress: "hack1",
+        toAddress: down2,
+        txid: "tx_sweep2",
+        amountSats: 2_000_000,
+        direction: "out_from_hacker",
+      },
+      {
+        fromAddress: down1,
+        toAddress: victim,
+        txid: "tx_refund",
+        amountSats: 1_500_000,
+        direction: "out_from_hacker",
+        edgeKind: "victim_dust",
+      },
+      {
+        fromAddress: down1,
+        toAddress: victim,
+        txid: "tx_dust",
+        amountSats: 1_000,
+        direction: "out_from_hacker",
+        edgeKind: "victim_dust",
+      },
+    ]);
+
+    const page1 = await buildGraphL1Page(store, "hack1", {
+      limit: 1,
+      maxDownstream: 100,
+      minEdgeSats: 100_000,
+      maxGraphDepth: 2,
+      loadId: "refund-l1",
+    });
+    expect(page1.edges.some((e) => e.edgeKind === "victim_refund" && e.target === "victims:hack1")).toBe(
+      true,
+    );
+    expect(page1.edges.some((e) => e.txid === "tx_dust")).toBe(false);
+    expect(page1.nodes.some((n) => n.id === victim && n.type === "victim")).toBe(false);
+    expect(page1.nodes.some((n) => n.type === "victimCluster")).toBe(true);
+    const token = decodeL2Token(page1.l2Token!);
+    expect(token?.parents).toEqual([down1]);
+    expect(token?.parents).not.toContain(victim);
+
+    const page2 = await buildGraphL1Page(store, "hack1", {
+      limit: 1,
+      cursor: page1.page.nextCursor,
+      loadedL1: page1.page.loadedL1,
+      maxDownstream: 100,
+      minEdgeSats: 100_000,
+      maxGraphDepth: 2,
+    });
+    expect(page2.edges.some((e) => e.edgeKind === "victim_refund")).toBe(false);
+
+    const l2 = await buildGraphL2Page(store, page1.l2Token!, { limit: 50 });
+    expect(l2.edges.some((e) => e.target === victim)).toBe(false);
+    expect(l2.nodes.some((n) => n.id === victim)).toBe(false);
+  });
 });
 
 describe("applyHackTraceEdgesChunk graph activity", () => {
@@ -599,7 +790,9 @@ describe("applyHackTraceEdgesChunk graph activity", () => {
 
     const tx = makeTx([{ address: "v1", value: 10_000 }], [{ address: "hack1", value: 10_000 }]);
     const computed = computeHackTraceEdges(tx, new Set(["hack1"]));
-    await applyHackTraceEdgesChunk(store, { txid: tx.txid, blockTime: "2026-01-01T00:00:00.000Z" }, computed);
+    await applyHackTraceEdgesChunk(store, { txid: tx.txid, blockTime: "2026-01-01T00:00:00.000Z" }, computed, {
+      minExpandSats: 0,
+    });
     await store.flushRecentHackerActivity(5);
 
     const recent = await store.getRecentHackersActivity();
@@ -627,7 +820,9 @@ describe("applyHackTraceEdgesChunk graph activity", () => {
 
     const tx = makeTx([{ address: "v1", value: 10_000 }], [{ address: "hack1", value: 10_000 }]);
     const computed = computeHackTraceEdges(tx, new Set(["hack1"]));
-    await applyHackTraceEdgesChunk(store, { txid: tx.txid, blockTime: "2026-02-01T00:00:00.000Z" }, computed);
+    await applyHackTraceEdgesChunk(store, { txid: tx.txid, blockTime: "2026-02-01T00:00:00.000Z" }, computed, {
+      minExpandSats: 0,
+    });
     await store.flushRecentHackerActivity(5);
 
     const recent = await store.getRecentHackersActivity();

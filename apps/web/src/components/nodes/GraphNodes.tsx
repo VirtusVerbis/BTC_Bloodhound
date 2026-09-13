@@ -68,8 +68,9 @@ export function HackerNode({ data }: NodeProps) {
   const d = data as GraphNodeData;
   return (
     <div className="node-card hacker" title={nodeTitle(d)}>
-      <Handle type="target" position={Position.Left} style={handleStyle} />
-      <Handle type="source" position={Position.Right} style={handleStyle} />
+      <Handle type="target" id="target" position={Position.Left} style={handleStyle} />
+      <Handle type="source" id="source" position={Position.Right} style={handleStyle} />
+      <Handle type="source" id="refund-source" position={Position.Top} style={handleStyle} />
       <div className="node-badge">HACKER</div>
       {d.address && <AddressLine address={d.address} />}
       {d.label && <div>{d.label}</div>}
@@ -95,8 +96,9 @@ export function DownstreamNode({ data }: NodeProps) {
   const d = data as GraphNodeData;
   return (
     <div className="node-card default" title={nodeTitle(d)}>
-      <Handle type="target" position={Position.Left} style={handleStyle} />
-      <Handle type="source" position={Position.Right} style={handleStyle} />
+      <Handle type="target" id="target" position={Position.Left} style={handleStyle} />
+      <Handle type="source" id="source" position={Position.Right} style={handleStyle} />
+      <Handle type="source" id="refund-source" position={Position.Top} style={handleStyle} />
       {d.expandProfile === "sweep_relay" && <div className="node-badge">SWEEP RELAY</div>}
       {d.expandProfile === "spend_fanout" && <div className="node-badge">SPEND FANOUT</div>}
       <div>Downstream</div>
@@ -128,7 +130,8 @@ export function VictimClusterNode({ data }: NodeProps) {
   const d = data as GraphNodeData;
   return (
     <div className="node-card default">
-      <Handle type="source" position={Position.Right} style={handleStyle} />
+      <Handle type="source" id="source" position={Position.Right} style={handleStyle} />
+      <Handle type="target" id="refund-target" position={Position.Top} style={handleStyle} />
       <div>Victims</div>
       <div>
         {d.childCount ?? 0} addresses · {satsToBtc(d.totalSats ?? 0)} BTC
@@ -147,7 +150,8 @@ export function VictimNode({ data }: NodeProps) {
   const d = data as GraphNodeData;
   return (
     <div className="node-card default" title={nodeTitle(d)}>
-      <Handle type="source" position={Position.Right} style={handleStyle} />
+      <Handle type="source" id="source" position={Position.Right} style={handleStyle} />
+      <Handle type="target" id="refund-target" position={Position.Top} style={handleStyle} />
       <div>Victim</div>
       {d.address && <AddressLine address={d.address} />}
       {d.incomingSats != null && (

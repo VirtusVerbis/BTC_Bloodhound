@@ -39,6 +39,9 @@ function applyMaxVictims(graph: ApiGraphResponse, maxVictims: number, expandVict
     .filter((n) => n.type === "victim")
     .sort((a, b) => (b.incomingSats ?? 0) - (a.incomingSats ?? 0));
   const keepIds = new Set(victims.slice(0, maxVictims).map((n) => n.id));
+  for (const e of graph.edges) {
+    if (e.edgeKind === "victim_refund") keepIds.add(e.target);
+  }
 
   const nodes = graph.nodes.filter((n) => n.type !== "victim" || keepIds.has(n.id));
   const edges = graph.edges.filter((e) => {

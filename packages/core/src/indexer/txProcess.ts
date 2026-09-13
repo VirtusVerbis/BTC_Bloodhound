@@ -14,6 +14,7 @@ import {
   pageEntryToChainTxDetail,
   shouldSkipGetTx,
   shouldTraceHackerReceive,
+  txInvolvesSpendFromPage,
   uniqueOutputAddresses,
   type PendingTxRuntime,
 } from "./txPage.js";
@@ -142,6 +143,56 @@ export async function processClassifiedPendingTx(
   }
 
   if (shouldSkipGetTx(entry, address, config, skipOpts)) {
+    if (
+      entry.pageEntry &&
+      hasPageVinVout(entry.pageEntry) &&
+      (entry.isSpend === true || txInvolvesSpendFromPage(entry.pageEntry, address))
+    ) {
+      await patchOpReturnFromPageIfNeeded(store, router, txid, entry, opts);
+      const traceResult = await processTxForHackTrace(
+        store,
+        router,
+        txid,
+        hackers,
+        traceOptions(
+          config,
+          state,
+          txid,
+          {
+            tx: pageEntryToChainTxDetail(entry.pageEntry),
+            spendingAddress: address,
+            spendingHop: hop,
+            captureOpReturn: {
+              allowGetTx: false,
+              budget: opts?.captureOpReturn?.budget,
+              jobSubreq: opts?.captureOpReturn?.jobSubreq,
+              cpuGuard: opts?.cpuGuard,
+            },
+          },
+          { cpuGuard: opts?.cpuGuard },
+        ),
+      );
+      if (!traceResult.traceComplete) {
+        return {
+          traceState: {
+            traceTxid: txid,
+            traceEdgeIndex: traceResult.nextEdgeIndex,
+            traceEdgesPending: true,
+            traceEdgeTotal: traceResult.traceEdgeTotal,
+            traceEdgesFlat: traceResult.traceEdgesFlat,
+          },
+          continued: true,
+          chainCallsUsed: 0,
+          cpuGuardTripped: traceResult.cpuGuardTripped,
+        };
+      }
+      return {
+        traceState: nextState,
+        continued: false,
+        chainCallsUsed: 0,
+        cpuGuardTripped: traceResult.cpuGuardTripped,
+      };
+    }
     return { traceState: nextState, continued: false, chainCallsUsed: 0 };
   }
 

@@ -162,4 +162,28 @@ describe("txPage", () => {
     });
     expect(restored.vout[1]?.scriptpubkey_asm).toBe("OP_RETURN 48656c6c6f");
   });
+
+  it("skips getTx for a sub-floor spend when the page has vin/vout and no OP_RETURN", () => {
+    const tx = {
+      txid: "dustspend",
+      vin: [{ prevout: { scriptpubkey_address: ADDRESS, value: 50_000 } }],
+      vout: [{ scriptpubkey_address: OTHER, value: 49_000 }],
+    };
+    const classified = classifyPageTx(tx, ADDRESS);
+    expect(classified.isSpend).toBe(true);
+    expect(shouldSkipGetTx(classified, ADDRESS, config, { pageEntry: tx })).toBe(true);
+  });
+
+  it("does not skip getTx for a sub-floor spend that carries OP_RETURN", () => {
+    const tx = {
+      txid: "dustnote",
+      vin: [{ prevout: { scriptpubkey_address: ADDRESS, value: 1_000 } }],
+      vout: [
+        { scriptpubkey_address: OTHER, value: 500 },
+        { scriptpubkey_type: "op_return", scriptpubkey_asm: "OP_RETURN 41", value: 0 },
+      ],
+    };
+    const classified = classifyPageTx(tx, ADDRESS);
+    expect(shouldSkipGetTx(classified, ADDRESS, config, { pageEntry: tx })).toBe(false);
+  });
 });

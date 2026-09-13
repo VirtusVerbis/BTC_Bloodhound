@@ -9,6 +9,7 @@ import type {
   ReBackfillHackerResult,
   RemoveHackerResult,
   RepairVictimRolesResult,
+  RepairDownstreamRoleResult,
 } from "@cointrace/core";
 import type { AppConfig, ListQueueOptions, ListQueueResult } from "@cointrace/core";
 import { listQueue } from "@cointrace/core";
@@ -703,6 +704,56 @@ export async function repairVictimRolesRemote(
     polluted,
     repaired: polluted,
     jobsCancelled,
+  };
+}
+
+export async function repairDownstreamRoleRemote(
+  client: D1WranglerClient,
+  opts: { address?: string; dryRun?: boolean } = {},
+): Promise<RepairDownstreamRoleResult> {
+  const dryRun = opts.dryRun === true;
+  const addressFilter = opts.address ? ` AND address = ${sqlString(opts.address)}` : "";
+  const rows = client.query(
+    `SELECT address FROM addresses
+WHERE role = 'victim' AND hop_from_hacker IS NOT NULL${addressFilter}
+  AND address NOT IN (SELECT DISTINCT from_address FROM edges WHERE direction = 'in_to_hacker');`,
+  );
+  const mislabelled = rows.map((row) => String(row.address));
+
+  if (dryRun) {
+    return {
+      dryRun: true,
+      scanned: mislabelled.length,
+      mislabelled,
+      repaired: [],
+    };
+  }
+
+  if (mislabelled.length === 0) {
+    return { dryRun: false, scanned: 0, mislabelled: [], repaired: [] };
+  }
+
+  const statements: string[] = [];
+  for (const address of mislabelled) {
+    statements.push(
+      `UPDATE addresses SET role = 'downstream', last_seen_at = datetime('now') WHERE address = ${sqlString(address)};`,
+    );
+  }
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cointrace-ops-"));
+  try {
+    const filePath = path.join(tmpDir, "repair-downstream-role.sql");
+    fs.writeFileSync(filePath, statements.join("\n") + "\n", "utf8");
+    client.executeFile(filePath);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+
+  return {
+    dryRun: false,
+    scanned: mislabelled.length,
+    mislabelled,
+    repaired: mislabelled,
   };
 }
 

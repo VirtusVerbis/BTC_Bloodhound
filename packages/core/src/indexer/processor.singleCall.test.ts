@@ -409,7 +409,10 @@ describe("single chain call per job", () => {
   it("poll_hacker fetch then process across two invocations", async () => {
     const getAddressTxs = vi
       .fn()
-      .mockResolvedValue([{ txid: "tx-new", status: { block_height: 99 } }]);
+      .mockResolvedValue([
+        { txid: "tx-new", status: { block_height: 99 } },
+        { txid: "tx-old", status: { block_height: 98 } },
+      ]);
     const getTx = vi.fn().mockResolvedValue({
       txid: "tx-new",
       vin: [{ prevout: { scriptpubkey_address: ADDRESS, value: 1000 } }],

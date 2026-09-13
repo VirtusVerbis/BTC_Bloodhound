@@ -12,7 +12,7 @@ import {
   useReactFlow,
   MarkerType,
 } from "@xyflow/react";
-import { api, satsToBtc, txUrl, ApiError } from "../lib/api";
+import { api, txUrl, ApiError } from "../lib/api";
 import {
   fetchGraphDeduped,
   findRelatedGraphLoadState,
@@ -35,16 +35,26 @@ import {
   type GraphLoadProgress,
 } from "../lib/graphLoader";
 import { layoutGraph, type VictimSortOption } from "../lib/layoutGraph";
+import { RefundEdge } from "./edges/RefundEdge";
 import { nodeTypes, type GraphNodeData } from "./nodes/GraphNodes";
+import {
+  DEFAULT_EDGE_COLOR,
+  DEFAULT_SOURCE_HANDLE,
+  DEFAULT_TARGET_HANDLE,
+  graphEdgeColor,
+  graphEdgeHandles,
+  graphEdgeLabel,
+  graphEdgeType,
+} from "../lib/graphEdgeRender";
 
 type GraphMode = "hacker" | "victim-filtered" | "victim-centric";
 
-const PEEL_EDGE_COLOR = "#4caf50";
-const FANOUT_EDGE_COLOR = "#ff00ff";
-const DEFAULT_EDGE_COLOR = "#f7931a";
+const edgeTypes = { refund: RefundEdge };
 
 const defaultEdgeOptions = {
   type: "smoothstep" as const,
+  sourceHandle: DEFAULT_SOURCE_HANDLE,
+  targetHandle: DEFAULT_TARGET_HANDLE,
   markerEnd: { type: MarkerType.ArrowClosed, color: DEFAULT_EDGE_COLOR },
   style: { stroke: DEFAULT_EDGE_COLOR, strokeWidth: 2 },
 };
@@ -55,32 +65,20 @@ function edgeStrokeWidth(e: ApiGraphEdge): number {
   return 2;
 }
 
-function edgeColor(e: ApiGraphEdge): string {
-  if (e.edgeKind === "peel_relay") return PEEL_EDGE_COLOR;
-  if (e.edgeKind === "spend_fanout") return FANOUT_EDGE_COLOR;
-  return DEFAULT_EDGE_COLOR;
-}
-
-function formatEdgeLabel(e: ApiGraphEdge, show: boolean): string | undefined {
-  if (!show) return undefined;
-  if (e.edgeKind === "peel_relay") return "peel addresses";
-  if (e.edgeKind === "spend_fanout") return "input fan out";
-  if (e.txid) return `${satsToBtc(e.amount)} BTC`;
-  if (e.amount > 0) return `${satsToBtc(e.amount)} BTC`;
-  return undefined;
-}
-
 function mapApiEdges(apiEdges: ApiGraphEdge[], showEdgeLabels: boolean): Edge[] {
   return apiEdges.map((e) => {
-    const color = edgeColor(e);
+    const color = graphEdgeColor(e);
+    const handles = graphEdgeHandles(e);
     return {
       id: e.id,
       source: e.source,
       target: e.target,
-      type: "smoothstep",
+      sourceHandle: handles.sourceHandle,
+      targetHandle: handles.targetHandle,
+      type: graphEdgeType(e),
       markerEnd: { type: MarkerType.ArrowClosed, color },
       style: { stroke: color, strokeWidth: edgeStrokeWidth(e) },
-      label: formatEdgeLabel(e, showEdgeLabels),
+      label: graphEdgeLabel(e, showEdgeLabels),
       data: {
         txid: e.txid,
         time: e.time,
@@ -569,6 +567,7 @@ export function HackGraph({
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
           onNodeClick={onNodeClickHandler}
           onEdgeClick={onEdgeClick}
           onNodeDragStop={onNodeDragStop}

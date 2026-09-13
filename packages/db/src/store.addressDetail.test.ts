@@ -401,6 +401,45 @@ describe("getAddressDetail", () => {
     expect(incoming).not.toContain("tx_message");
   });
 
+  it("excludes victim_refund incoming from OP_RETURN lookup", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const hacker = "bc1qhacker_refund_note";
+    const victim = "bc1qvictim_refund_note";
+    const downstream = "bc1qdownstream_refund_note";
+
+    await store.upsertAddress({ address: hacker, role: "hacker", isFlaggedHacker: true });
+    await store.upsertAddress({ address: victim, role: "victim" });
+    await store.upsertAddress({ address: downstream, role: "downstream", hopFromHacker: 1 });
+
+    await store.upsertTransaction({
+      txid: "tx_refund_note",
+      blockHeight: 965950,
+      blockTime: "2026-09-07T12:00:00.000Z",
+      opReturnDisplay: "refund note should stay hidden",
+    });
+    await store.upsertEdge({
+      fromAddress: victim,
+      toAddress: hacker,
+      txid: "tx_hack",
+      amountSats: 1_000_000_000,
+      direction: "in_to_hacker",
+    });
+    await store.upsertEdge({
+      fromAddress: downstream,
+      toAddress: victim,
+      txid: "tx_refund_note",
+      amountSats: 340_000_000_000,
+      direction: "out_from_hacker",
+      edgeKind: "victim_refund",
+    });
+
+    const incoming = await store.listIncomingOutFromHackerTxids(victim);
+    expect(incoming).not.toContain("tx_refund_note");
+  });
+
   it("rolls up downstream spend OP_RETURN to flagged hacker root", async () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);

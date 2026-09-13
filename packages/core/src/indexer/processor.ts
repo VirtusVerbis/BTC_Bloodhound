@@ -52,6 +52,11 @@ import { detectSweepRelay } from "./sweepRelay.js";
 import { processClassifiedPendingTx, type TraceProcessState } from "./txProcess.js";
 import { captureOpReturnForTx } from "./opReturnCapture.js";
 import type { PendingTxRuntime } from "./txPage.js";
+import {
+  pendingGapFillTxs,
+  sliceNewerThanLastSeen,
+  spendGapExceedsFloor,
+} from "./pollGap.js";
 
 /** Thrown when continuation enqueue is blocked by expand caps or queue scheduling latch. */
 export class EnqueueBlockedError extends Error {
@@ -761,6 +766,13 @@ interface PollPayload extends PendingPayloadFields {
   pollFetched?: boolean;
   newestTxid?: string;
   newestBlockHeight?: number | null;
+  cursorMiss?: boolean;
+  gapChecked?: boolean;
+  gapFill?: boolean;
+  chainCursor?: string;
+  pagesExhausted?: boolean;
+  pagesFetched?: number;
+  fillUntilTxid?: string;
 }
 
 function parsePollPayload(raw: Record<string, unknown>): PollPayload {
@@ -771,6 +783,13 @@ function parsePollPayload(raw: Record<string, unknown>): PollPayload {
     pollFetched: raw.pollFetched as boolean | undefined,
     newestTxid: raw.newestTxid as string | undefined,
     newestBlockHeight: raw.newestBlockHeight as number | null | undefined,
+    cursorMiss: raw.cursorMiss === true,
+    gapChecked: raw.gapChecked === true,
+    gapFill: raw.gapFill === true,
+    chainCursor: typeof raw.chainCursor === "string" ? raw.chainCursor : undefined,
+    pagesExhausted: raw.pagesExhausted === true,
+    pagesFetched: typeof raw.pagesFetched === "number" ? raw.pagesFetched : undefined,
+    fillUntilTxid: typeof raw.fillUntilTxid === "string" ? raw.fillUntilTxid : undefined,
   };
 }
 
@@ -783,6 +802,13 @@ function toPollJobPayload(payload: PollPayload): Record<string, unknown> {
     pollFetched: payload.pollFetched,
     newestTxid: payload.newestTxid,
     newestBlockHeight: payload.newestBlockHeight,
+    ...(payload.cursorMiss ? { cursorMiss: true } : {}),
+    ...(payload.gapChecked ? { gapChecked: true } : {}),
+    ...(payload.gapFill ? { gapFill: true } : {}),
+    ...(payload.chainCursor ? { chainCursor: payload.chainCursor } : {}),
+    ...(payload.pagesExhausted ? { pagesExhausted: true } : {}),
+    ...(payload.pagesFetched != null ? { pagesFetched: payload.pagesFetched } : {}),
+    ...(payload.fillUntilTxid ? { fillUntilTxid: payload.fillUntilTxid } : {}),
   };
 }
 
@@ -800,6 +826,7 @@ async function pollHacker(
   let pollFetched = payload.pollFetched ?? false;
   let newestTxid = payload.newestTxid;
   let newestBlockHeight = payload.newestBlockHeight ?? null;
+  let cursorMiss = payload.cursorMiss === true;
 
   const budget = createChainCallBudget(config.maxChainCallsPerJob);
   const limited = config.maxChainCallsPerJob > 0;
@@ -808,17 +835,23 @@ async function pollHacker(
 
   if (!pollFetched && !needsProcess && budget.canCall()) {
     const sync = await store.getSyncState(address);
-    const txs = await router.withProvider((p) => p.getAddressTxs(address, sync?.lastSeenTxid ?? undefined));
+    const page = await router.withProvider((p) => p.getAddressTxs(address));
     budget.consume();
-    if (txs.length === 0) {
+    if (page.length === 0) {
       await store.touchSyncPoll(address);
       return;
     }
-    newestTxid = txs[0]!.txid;
-    newestBlockHeight = txs[0]!.status?.block_height ?? null;
-    pending = pendingFromPageTxs([...txs].reverse(), address);
+    const { newer, lastSeenFound } = sliceNewerThanLastSeen(page, sync?.lastSeenTxid);
+    newestTxid = page[0]!.txid;
+    newestBlockHeight = page[0]!.status?.block_height ?? null;
+    if (!lastSeenFound) {
+      await store.touchSyncPoll(address);
+      return;
+    }
+    pending = pendingFromPageTxs([...newer].reverse(), address);
     processedIndex = 0;
     pollFetched = true;
+    cursorMiss = false;
     if (limited && budget.exhausted()) {
       await store.enqueueJob("poll_hacker_address", toPollJobPayload({
         address,
@@ -893,7 +926,7 @@ async function pollHacker(
     return;
   }
 
-  if (pollFetched && newestTxid) {
+  if (pollFetched && newestTxid && !cursorMiss) {
     await store.upsertSyncState(address, {
       lastSeenTxid: newestTxid,
       lastBlockHeight: newestBlockHeight,
@@ -922,37 +955,138 @@ async function pollDownstream(
   let pollFetched = payload.pollFetched ?? false;
   let newestTxid = payload.newestTxid;
   let newestBlockHeight = payload.newestBlockHeight ?? null;
+  let cursorMiss = payload.cursorMiss === true;
+  let gapChecked = payload.gapChecked === true;
+  let gapFill = payload.gapFill === true;
+  let chainCursor = payload.chainCursor;
+  let pagesExhausted = payload.pagesExhausted === true;
+  let pagesFetched = payload.pagesFetched ?? 0;
+  let fillUntilTxid = payload.fillUntilTxid;
 
   const addr = await store.getAddress(address);
   const hop = addr?.hopFromHacker ?? 0;
   const expandProfile = addr?.expandProfile ?? null;
   const budget = createChainCallBudget(config.maxChainCallsPerJob);
   const limited = config.maxChainCallsPerJob > 0;
+  const maxPages = Math.max(1, Math.ceil(config.backfillMaxTxs / 25));
   const needsProcess = processedIndex < pending.length;
+
+  const pollFields = (idx: number): PollPayload => ({
+    address,
+    ...writePendingPayload(pending, idx, config),
+    pollFetched,
+    newestTxid,
+    newestBlockHeight,
+    cursorMiss,
+    gapChecked,
+    gapFill,
+    chainCursor,
+    pagesExhausted,
+    pagesFetched,
+    fillUntilTxid,
+  });
 
   if (!pollFetched && !needsProcess && budget.canCall()) {
     const sync = await store.getSyncState(address);
-    const txs = await router.withProvider((p) => p.getAddressTxs(address, sync?.lastSeenTxid ?? undefined));
+    const page = await router.withProvider((p) => p.getAddressTxs(address));
     budget.consume();
-    if (txs.length === 0) {
+    if (page.length === 0) {
       await store.touchSyncPoll(address);
       return;
     }
-    newestTxid = txs[0]!.txid;
-    newestBlockHeight = txs[0]!.status?.block_height ?? null;
-    pending = pendingFromPageTxs(txs, address);
-    processedIndex = 0;
+    newestTxid = page[0]!.txid;
+    newestBlockHeight = page[0]!.status?.block_height ?? null;
+    const { newer, lastSeenFound } = sliceNewerThanLastSeen(page, sync?.lastSeenTxid);
     pollFetched = true;
+    pagesFetched = 1;
+    processedIndex = 0;
+    if (lastSeenFound) {
+      pending = pendingFromPageTxs(newer, address);
+      cursorMiss = false;
+    } else {
+      cursorMiss = true;
+      fillUntilTxid = sync?.lastSeenTxid ?? undefined;
+      chainCursor = page[page.length - 1]!.txid;
+      pending = pendingGapFillTxs(page, address);
+    }
     if (limited && budget.exhausted()) {
-      await store.enqueueJob("poll_downstream_address", toPollJobPayload({
-        address,
-        ...writePendingPayload(pending, processedIndex),
-        pollFetched,
-        newestTxid,
-        newestBlockHeight,
-      }), JOB_PRIORITY.POLL_DOWNSTREAM);
+      await store.enqueueJob(
+        "poll_downstream_address",
+        toPollJobPayload(pollFields(processedIndex)),
+        JOB_PRIORITY.POLL_DOWNSTREAM,
+      );
       return;
     }
+  }
+
+  if (
+    pollFetched &&
+    cursorMiss &&
+    !gapChecked &&
+    !needsProcess &&
+    processedIndex >= pending.length &&
+    budget.canCall()
+  ) {
+    const stats = await router.withProvider((p) => p.getAddressStats(address));
+    budget.consume();
+    gapChecked = true;
+    const chainSpent =
+      stats.chain_stats.spent_txo_sum + (stats.mempool_stats?.spent_txo_sum ?? 0);
+    const indexedOut = await store.sumOutFromHacker(address);
+    if (!spendGapExceedsFloor(chainSpent, indexedOut, config.minExpandSats)) {
+      if (newestTxid) {
+        await store.upsertSyncState(address, {
+          lastSeenTxid: newestTxid,
+          lastBlockHeight: newestBlockHeight,
+        });
+      } else {
+        await store.touchSyncPoll(address);
+      }
+      return;
+    }
+    gapFill = true;
+    if (limited && budget.exhausted()) {
+      await store.enqueueJob(
+        "poll_downstream_address",
+        toPollJobPayload(pollFields(processedIndex)),
+        JOB_PRIORITY.POLL_DOWNSTREAM,
+      );
+      return;
+    }
+  }
+
+  if (
+    pollFetched &&
+    gapFill &&
+    !pagesExhausted &&
+    processedIndex >= pending.length &&
+    pagesFetched < maxPages &&
+    budget.canCall() &&
+    chainCursor
+  ) {
+    const { txs } = await router.fetchAddressTxPage(address, chainCursor);
+    budget.consume();
+    pagesFetched++;
+    processedIndex = 0;
+    if (txs.length === 0) {
+      pagesExhausted = true;
+      pending = [];
+    } else {
+      chainCursor = txs[txs.length - 1]!.txid;
+      const { newer, lastSeenFound } = sliceNewerThanLastSeen(txs, fillUntilTxid);
+      pending = pendingGapFillTxs(newer, address);
+      if (lastSeenFound || pagesFetched >= maxPages) pagesExhausted = true;
+    }
+    if (limited && budget.exhausted() && (processedIndex < pending.length || !pagesExhausted)) {
+      await store.enqueueJob(
+        "poll_downstream_address",
+        toPollJobPayload(pollFields(processedIndex)),
+        JOB_PRIORITY.POLL_DOWNSTREAM,
+      );
+      return;
+    }
+  } else if (gapFill && pagesFetched >= maxPages) {
+    pagesExhausted = true;
   }
 
   const hackers = options?.hackers ?? (await getHackerAddressSet(store));
@@ -979,13 +1113,7 @@ async function pollDownstream(
       () =>
         store.enqueueJob(
           "poll_downstream_address",
-          toPollJobPayload({
-            address,
-            ...writePendingPayload(pending, processedIndex),
-            pollFetched: true,
-            newestTxid,
-            newestBlockHeight,
-          }),
+          toPollJobPayload(pollFields(processedIndex)),
           JOB_PRIORITY.POLL_DOWNSTREAM,
         ),
       () =>
@@ -1008,22 +1136,18 @@ async function pollDownstream(
   }
 
   const hasPending = processedIndex < pending.length;
-  if (hasPending) {
+  const needsGapCheck = cursorMiss && !gapChecked && !hasPending;
+  const needsGapFill = gapFill && !pagesExhausted && !hasPending;
+  if (hasPending || needsGapCheck || needsGapFill) {
     await store.enqueueJob(
       "poll_downstream_address",
-      toPollJobPayload({
-        address,
-        ...writePendingPayload(pending, processedIndex),
-        pollFetched: true,
-        newestTxid,
-        newestBlockHeight,
-      }),
+      toPollJobPayload(pollFields(processedIndex)),
       JOB_PRIORITY.POLL_DOWNSTREAM,
     );
     return;
   }
 
-  if (pollFetched && newestTxid) {
+  if (pollFetched && newestTxid && (!cursorMiss || gapChecked)) {
     await store.upsertSyncState(address, {
       lastSeenTxid: newestTxid,
       lastBlockHeight: newestBlockHeight,

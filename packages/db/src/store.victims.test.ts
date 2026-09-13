@@ -98,4 +98,83 @@ describe("victim address helpers", () => {
     expect(getAddressesMap).toHaveBeenCalled();
     expect(getAddress).not.toHaveBeenCalled();
   });
+
+  it("listVictimRefundsForHacker returns large returns regardless of edge_kind and caps rows", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "victim_a",
+        toAddress: "hack1",
+        txid: "tx_theft",
+        amountSats: 4_000_000_000,
+        direction: "in_to_hacker",
+      },
+      {
+        fromAddress: "down1",
+        toAddress: "victim_a",
+        txid: "tx_refund",
+        amountSats: 3_400_000_000,
+        direction: "out_from_hacker",
+        edgeKind: "victim_dust",
+      },
+      {
+        fromAddress: "down1",
+        toAddress: "victim_a",
+        txid: "tx_dust",
+        amountSats: 546,
+        direction: "out_from_hacker",
+        edgeKind: "victim_dust",
+      },
+      {
+        fromAddress: "down1",
+        toAddress: "unrelated",
+        txid: "tx_other",
+        amountSats: 5_000_000,
+        direction: "out_from_hacker",
+      },
+    ]);
+
+    const refunds = await store.listVictimRefundsForHacker("hack1", { minEdgeSats: 100_000 });
+    expect(refunds).toHaveLength(1);
+    expect(refunds[0]!.txid).toBe("tx_refund");
+    expect(refunds[0]!.amountSats).toBe(3_400_000_000);
+
+    const viaSet = await store.listVictimRefundsForHacker("hack1", {
+      minEdgeSats: 100_000,
+      victimAddresses: ["victim_a"],
+    });
+    expect(viaSet.map((r) => r.txid)).toEqual(["tx_refund"]);
+
+    const capped = await store.listVictimRefundsForHacker("hack1", { minEdgeSats: 100_000, limit: 0 });
+    expect(capped).toEqual([]);
+  });
+
+  it("listVictimRefundsForHacker hard-caps at 32 rows", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.upsertEdge({
+      fromAddress: "victim_a",
+      toAddress: "hack1",
+      txid: "tx_theft",
+      amountSats: 10_000_000,
+      direction: "in_to_hacker",
+    });
+    await store.upsertEdgesBatch(
+      Array.from({ length: 40 }, (_, i) => ({
+        fromAddress: "down1",
+        toAddress: "victim_a",
+        txid: `tx_refund_${i}`,
+        amountSats: 200_000 + i,
+        direction: "out_from_hacker" as const,
+      })),
+    );
+
+    const refunds = await store.listVictimRefundsForHacker("hack1", { minEdgeSats: 100_000, limit: 100 });
+    expect(refunds).toHaveLength(32);
+  });
 });

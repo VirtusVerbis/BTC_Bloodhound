@@ -170,6 +170,8 @@ function targetAgeBoost(
 
 /** Cloudflare D1 allows max 100 bound params per query; reserve room for other binds. */
 const D1_IN_CLAUSE_CHUNK_SIZE = 80;
+/** Max refund edges returned per hacker graph page (D1-capped). */
+export const VICTIM_REFUND_GRAPH_LIMIT = 32;
 const ADDRESS_DETAIL_TX_LIMIT = 50;
 const OP_RETURN_SPEND_TX_LIMIT = 200;
 const OP_RETURN_GRAPH_LABEL_MAX_CHARS = 48;
@@ -330,6 +332,8 @@ export type AddressUpsertData = {
   totalReceivedSats?: number;
   liveBalanceSats?: number | null;
   liveBalanceAt?: string | null;
+  /** Bypass hacker/downstream protection against victim clobber (ops repair only). */
+  forceRole?: boolean;
 };
 
 export type EdgeUpsertData = {
@@ -621,6 +625,7 @@ export class Store {
     const totalReceivedProvided = data.totalReceivedSats !== undefined ? 1 : 0;
     const liveBalanceSatsProvided = data.liveBalanceSats !== undefined ? 1 : 0;
     const liveBalanceAtProvided = data.liveBalanceAt !== undefined ? 1 : 0;
+    const forceRole = data.forceRole === true ? 1 : 0;
 
     await this.db.run(sql`
       INSERT INTO addresses (
@@ -633,7 +638,7 @@ export class Store {
       )
       ON CONFLICT(address) DO UPDATE SET
         role = CASE
-          WHEN addresses.role = 'hacker' AND excluded.role = 'victim' THEN addresses.role
+          WHEN ${forceRole} = 0 AND addresses.role IN ('hacker', 'downstream') AND excluded.role = 'victim' THEN addresses.role
           WHEN ${roleProvided} = 1 THEN excluded.role
           ELSE addresses.role END,
         label = CASE WHEN ${labelProvided} = 1 THEN excluded.label ELSE addresses.label END,
@@ -642,6 +647,7 @@ export class Store {
           WHEN ${isFlaggedHackerProvided} = 1 THEN excluded.is_flagged_hacker
           ELSE addresses.is_flagged_hacker END,
         hop_from_hacker = CASE
+          WHEN ${forceRole} = 0 AND addresses.role IN ('hacker', 'downstream') AND excluded.role = 'victim' THEN addresses.hop_from_hacker
           WHEN ${hopProvided} = 1 THEN excluded.hop_from_hacker
           ELSE addresses.hop_from_hacker END,
         expand_status = CASE
@@ -858,6 +864,7 @@ export class Store {
         const totalReceivedProvided = data.totalReceivedSats !== undefined ? 1 : 0;
         const liveBalanceSatsProvided = data.liveBalanceSats !== undefined ? 1 : 0;
         const liveBalanceAtProvided = data.liveBalanceAt !== undefined ? 1 : 0;
+        const forceRole = data.forceRole === true ? 1 : 0;
         return sql`
           INSERT INTO addresses (
             address, role, label, source, is_flagged_hacker, created_at, first_seen_at, last_seen_at,
@@ -869,7 +876,7 @@ export class Store {
           )
           ON CONFLICT(address) DO UPDATE SET
             role = CASE
-              WHEN addresses.role = 'hacker' AND excluded.role = 'victim' THEN addresses.role
+              WHEN ${forceRole} = 0 AND addresses.role IN ('hacker', 'downstream') AND excluded.role = 'victim' THEN addresses.role
               WHEN ${roleProvided} = 1 THEN excluded.role
               ELSE addresses.role END,
             label = CASE WHEN ${labelProvided} = 1 THEN excluded.label ELSE addresses.label END,
@@ -878,6 +885,7 @@ export class Store {
               WHEN ${isFlaggedHackerProvided} = 1 THEN excluded.is_flagged_hacker
               ELSE addresses.is_flagged_hacker END,
             hop_from_hacker = CASE
+              WHEN ${forceRole} = 0 AND addresses.role IN ('hacker', 'downstream') AND excluded.role = 'victim' THEN addresses.hop_from_hacker
               WHEN ${hopProvided} = 1 THEN excluded.hop_from_hacker
               ELSE addresses.hop_from_hacker END,
             expand_status = CASE
@@ -1012,6 +1020,19 @@ export class Store {
       })
       .where(eq(addresses.address, toAddress))
       .run();
+  }
+
+  async addInboundSats(toAddress: string, deltaSats: number): Promise<void> {
+    await this.applyInboundSatsDelta(toAddress, deltaSats);
+  }
+
+  async sumOutFromHacker(address: string): Promise<number> {
+    const row = await this.db
+      .select({ total: sql<number>`coalesce(sum(${edges.amountSats}), 0)` })
+      .from(edges)
+      .where(and(eq(edges.fromAddress, address), eq(edges.direction, "out_from_hacker")))
+      .get();
+    return Number(row?.total ?? 0);
   }
 
   private async applyTotalReceivedDelta(hackerAddress: string, deltaSats: number): Promise<void> {
@@ -1362,6 +1383,78 @@ export class Store {
     return new Set(rows.map((row) => row.address));
   }
 
+  /**
+   * Payments back to this hacker's known victims at or above minEdgeSats.
+   * Looks up by destination+amount (uses idx_edges_to_out_amount), not edge_kind,
+   * so historical victim_dust refunds are included. Hard-capped for D1.
+   */
+  async listVictimRefundsForHacker(
+    hacker: string,
+    opts: { minEdgeSats?: number; limit?: number; victimAddresses?: readonly string[] } = {},
+  ): Promise<Edge[]> {
+    const floor = Math.max(0, Math.floor(opts.minEdgeSats ?? 0));
+    const cap = Math.min(
+      VICTIM_REFUND_GRAPH_LIMIT,
+      Math.max(0, Math.floor(opts.limit ?? VICTIM_REFUND_GRAPH_LIMIT)),
+    );
+    if (cap === 0) return [];
+
+    if (opts.victimAddresses) {
+      const unique = [...new Set(opts.victimAddresses)].filter(Boolean);
+      if (unique.length === 0) return [];
+      const collected: Edge[] = [];
+      for (const chunk of chunkArray(unique, D1_IN_CLAUSE_CHUNK_SIZE)) {
+        const rows = await this.db
+          .select()
+          .from(edges)
+          .where(
+            and(
+              inArray(edges.toAddress, chunk),
+              eq(edges.direction, "out_from_hacker"),
+              gte(edges.amountSats, floor),
+            ),
+          )
+          .orderBy(desc(edges.amountSats), asc(edges.toAddress), asc(edges.fromAddress))
+          .limit(cap)
+          .all();
+        collected.push(...rows);
+      }
+      collected.sort(
+        (a, b) =>
+          b.amountSats - a.amountSats ||
+          a.toAddress.localeCompare(b.toAddress) ||
+          a.fromAddress.localeCompare(b.fromAddress),
+      );
+      const seen = new Set<string>();
+      const out: Edge[] = [];
+      for (const row of collected) {
+        const key = `${row.fromAddress}|${row.toAddress}|${row.txid}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(row);
+        if (out.length >= cap) break;
+      }
+      return out;
+    }
+
+    return await this.db
+      .select()
+      .from(edges)
+      .where(
+        and(
+          eq(edges.direction, "out_from_hacker"),
+          gte(edges.amountSats, floor),
+          sql`${edges.toAddress} IN (
+            SELECT DISTINCT v.from_address FROM edges v
+            WHERE v.to_address = ${hacker} AND v.direction = 'in_to_hacker'
+          )`,
+        ),
+      )
+      .orderBy(desc(edges.amountSats), asc(edges.toAddress), asc(edges.fromAddress))
+      .limit(cap)
+      .all();
+  }
+
   /** True when address has any in_to_hacker edge (sent funds into a hacker). */
   async isKnownVictimAddress(address: string): Promise<boolean> {
     const row = await this.db
@@ -1610,7 +1703,10 @@ export class Store {
         and(
           eq(edges.toAddress, address),
           eq(edges.direction, "out_from_hacker"),
-          or(isNull(edges.edgeKind), ne(edges.edgeKind, "victim_dust")),
+          or(
+            isNull(edges.edgeKind),
+            and(ne(edges.edgeKind, "victim_dust"), ne(edges.edgeKind, "victim_refund")),
+          ),
         ),
       )
       .orderBy(
@@ -4496,6 +4592,50 @@ LIMIT ${remaining}
     await this.db.delete(addresses).where(eq(addresses.address, address)).run();
   }
 
+  /** Victims with a sweep hop and no in_to_hacker edge (downstream mislabelled as victim). */
+  async listMislabelledSweepHops(opts?: { address?: string }): Promise<string[]> {
+    const conditions = [eq(addresses.role, "victim"), isNotNull(addresses.hopFromHacker)];
+    if (opts?.address) {
+      conditions.push(eq(addresses.address, opts.address));
+    }
+    const victimRows = await this.db
+      .select({ address: addresses.address })
+      .from(addresses)
+      .where(and(...conditions))
+      .all();
+    if (victimRows.length === 0) return [];
+
+    const candidates = victimRows.map((row) => row.address);
+    const hasInToHacker = new Set<string>();
+    for (const chunk of chunkArray(candidates, D1_IN_CLAUSE_CHUNK_SIZE)) {
+      const rows = await this.db
+        .selectDistinct({ fromAddress: edges.fromAddress })
+        .from(edges)
+        .where(and(inArray(edges.fromAddress, chunk), eq(edges.direction, "in_to_hacker")))
+        .all();
+      for (const row of rows) hasInToHacker.add(row.fromAddress);
+    }
+    return candidates.filter((address) => !hasInToHacker.has(address));
+  }
+
+  async repairDownstreamRole(opts?: {
+    address?: string;
+    dryRun?: boolean;
+  }): Promise<{ dryRun: boolean; scanned: number; repaired: string[] }> {
+    const dryRun = opts?.dryRun === true;
+    const mislabelled = await this.listMislabelledSweepHops({ address: opts?.address });
+    if (dryRun) {
+      return { dryRun: true, scanned: mislabelled.length, repaired: [] };
+    }
+
+    const repaired: string[] = [];
+    for (const address of mislabelled) {
+      await this.upsertAddress({ address, role: "downstream", forceRole: true });
+      repaired.push(address);
+    }
+    return { dryRun: false, scanned: mislabelled.length, repaired };
+  }
+
   /** Downstream-role addresses that also have in_to_hacker edges (victim pollution). */
   async listVictimRolePollution(opts?: { address?: string }): Promise<string[]> {
     const conditions = [eq(addresses.role, "downstream")];
@@ -4535,7 +4675,7 @@ LIMIT ${remaining}
     const repaired: string[] = [];
     let jobsCancelled = 0;
     for (const address of polluted) {
-      await this.upsertAddress({ address, role: "victim", hopFromHacker: null });
+      await this.upsertAddress({ address, role: "victim", hopFromHacker: null, forceRole: true });
       jobsCancelled += await this.deleteActiveJobsForAddress(address);
       repaired.push(address);
     }

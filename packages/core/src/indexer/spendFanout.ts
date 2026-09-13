@@ -87,18 +87,6 @@ export async function applySpendFanoutSummary(
   const inboundSats = (existing?.inboundSats ?? 0) + meta.totalOutSats;
   const expandStatus = expandStatusToWrite(existing?.expandStatus, inboundSats, minExpandSats);
 
-  await store.upsertEdge({
-    fromAddress: spender,
-    toAddress: primary.address,
-    txid: tx.txid,
-    amountSats: meta.totalOutSats,
-    blockTime: blockTimeIso(tx),
-    hopFromHacker: hop + 1,
-    direction: "out_from_hacker",
-    edgeKind: "spend_fanout",
-    fanoutMetaJson: JSON.stringify(meta),
-  });
-
   await store.upsertAddress({
     address: primary.address,
     role: "downstream",
@@ -106,6 +94,22 @@ export async function applySpendFanoutSummary(
     hopFromHacker: hop + 1,
     ...(expandStatus != null ? { expandStatus } : {}),
   });
+
+  if (meta.totalOutSats < minExpandSats) {
+    await store.addInboundSats(primary.address, meta.totalOutSats);
+  } else {
+    await store.upsertEdge({
+      fromAddress: spender,
+      toAddress: primary.address,
+      txid: tx.txid,
+      amountSats: meta.totalOutSats,
+      blockTime: blockTimeIso(tx),
+      hopFromHacker: hop + 1,
+      direction: "out_from_hacker",
+      edgeKind: "spend_fanout",
+      fanoutMetaJson: JSON.stringify(meta),
+    });
+  }
 
   await store.setExpandProfile(spender, "spend_fanout", { fanoutMetaJson: JSON.stringify(meta) });
 

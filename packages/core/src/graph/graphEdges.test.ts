@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bundleParallelEdges, mapDbEdgeToGraph } from "./graphEdges.js";
+import { bundleParallelEdges, mapDbEdgeToGraph, victimReturnEdgeKind } from "./graphEdges.js";
 
 describe("graphEdges", () => {
   it("bundles parallel peel edges", () => {
@@ -34,5 +34,36 @@ describe("graphEdges", () => {
     });
     expect(edge.edgeKind).toBe("spend_fanout");
     expect(edge.outputCount).toBe(42);
+  });
+
+  it("does not bundle victim_refund edges into a peel", () => {
+    const edges = [
+      {
+        id: "a->v:tx1",
+        source: "a",
+        target: "v",
+        txid: "tx1",
+        amount: 200_000,
+        time: null,
+        edgeKind: "victim_refund" as const,
+      },
+      {
+        id: "a->v:tx2",
+        source: "a",
+        target: "v",
+        txid: "tx2",
+        amount: 150_000,
+        time: null,
+        edgeKind: "victim_refund" as const,
+      },
+    ];
+    const bundled = bundleParallelEdges(edges, 2);
+    expect(bundled).toHaveLength(2);
+    expect(bundled.every((e) => e.edgeKind === "victim_refund")).toBe(true);
+  });
+
+  it("classifies victim returns by amount floor", () => {
+    expect(victimReturnEdgeKind(99_999, 100_000)).toBe("victim_dust");
+    expect(victimReturnEdgeKind(100_000, 100_000)).toBe("victim_refund");
   });
 });

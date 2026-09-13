@@ -19,6 +19,7 @@ import {
   pruneInvalidAddresses,
   removeHacker,
   repairVictimRoles,
+  repairDownstreamRole,
   runIndexerTick,
   runLoadLocalWatchlist,
   runMaintenanceCli,
@@ -44,6 +45,7 @@ import {
   reBackfillHackerRemote,
   removeHackerRemote,
   repairVictimRolesRemote,
+  repairDownstreamRoleRemote,
   resumeCronRemote,
 } from "./d1Wrangler.js";
 import { openRemoteProductionStore } from "./remotePlatform.js";
@@ -329,6 +331,17 @@ async function main() {
     const result = remote
       ? await repairVictimRolesRemote(remoteClient(), { address, dryRun })
       : await repairVictimRoles(openLocalStore(), { address, dryRun });
+    console.log(
+      JSON.stringify({ ok: true, ...result, target: remote ? "remote-d1" : "local-sqlite" }, null, 2),
+    );
+    return;
+  }
+  if (cmd === "repair-downstream-role") {
+    const dryRun = argv.includes("--dry-run");
+    const address = flagValue("--address");
+    const result = remote
+      ? await repairDownstreamRoleRemote(remoteClient(), { address, dryRun })
+      : await repairDownstreamRole(openLocalStore(), { address, dryRun });
     console.log(
       JSON.stringify({ ok: true, ...result, target: remote ? "remote-d1" : "local-sqlite" }, null, 2),
     );

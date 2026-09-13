@@ -1,6 +1,13 @@
 import type { Edge } from "@cointrace/db";
 
-export type EdgeKind = "default" | "peel_relay" | "spend_fanout" | "victim_dust";
+export type EdgeKind = "default" | "peel_relay" | "spend_fanout" | "victim_dust" | "victim_refund";
+
+export function victimReturnEdgeKind(
+  amountSats: number,
+  minSats: number,
+): "victim_dust" | "victim_refund" {
+  return amountSats >= minSats ? "victim_refund" : "victim_dust";
+}
 
 export interface MappedGraphEdge {
   id: string;
@@ -53,9 +60,13 @@ export function mapDbEdgeToGraph(
   return base;
 }
 
+function skipParallelBundle(kind: EdgeKind | undefined): boolean {
+  return kind === "spend_fanout" || kind === "victim_refund" || kind === "victim_dust";
+}
+
 export function bundleParallelEdges(edges: MappedGraphEdge[], minBundle: number): MappedGraphEdge[] {
-  const spendFanout = edges.filter((e) => e.edgeKind === "spend_fanout");
-  const rest = edges.filter((e) => e.edgeKind !== "spend_fanout");
+  const passthrough = edges.filter((e) => skipParallelBundle(e.edgeKind));
+  const rest = edges.filter((e) => !skipParallelBundle(e.edgeKind));
 
   const groups = new Map<string, MappedGraphEdge[]>();
   for (const edge of rest) {
@@ -65,7 +76,7 @@ export function bundleParallelEdges(edges: MappedGraphEdge[], minBundle: number)
     groups.set(key, list);
   }
 
-  const bundled: MappedGraphEdge[] = [...spendFanout];
+  const bundled: MappedGraphEdge[] = [...passthrough];
   for (const [, group] of groups) {
     if (group.length >= minBundle) {
       const totalAmount = group.reduce((sum, e) => sum + e.amount, 0);

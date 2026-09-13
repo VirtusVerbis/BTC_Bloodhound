@@ -105,3 +105,34 @@ export async function repairVictimRoles(
     jobsCancelled: result.jobsCancelled,
   };
 }
+
+export interface RepairDownstreamRoleResult {
+  dryRun: boolean;
+  scanned: number;
+  mislabelled: string[];
+  repaired: string[];
+}
+
+export async function repairDownstreamRole(
+  store: Store,
+  opts: { address?: string; dryRun?: boolean } = {},
+): Promise<RepairDownstreamRoleResult> {
+  const dryRun = opts.dryRun === true;
+  const mislabelled = await store.listMislabelledSweepHops({ address: opts.address });
+  if (dryRun) {
+    return {
+      dryRun: true,
+      scanned: mislabelled.length,
+      mislabelled,
+      repaired: [],
+    };
+  }
+
+  const result = await store.repairDownstreamRole({ address: opts.address, dryRun: false });
+  return {
+    dryRun: false,
+    scanned: result.scanned,
+    mislabelled,
+    repaired: result.repaired,
+  };
+}

@@ -208,6 +208,27 @@ export function pageEntryHasOpReturnAsm(entry: ChainTxSummary): boolean {
   );
 }
 
+export function pageSpendSats(tx: ChainTxSummary, address: string): number {
+  let total = 0;
+  for (const vin of tx.vin ?? []) {
+    if (vin.prevout?.scriptpubkey_address !== address) continue;
+    const value = vin.prevout.value;
+    if (value != null && value > 0) total += value;
+  }
+  return total;
+}
+
+export function isSubFloorSpendFromPage(
+  tx: ChainTxSummary | undefined,
+  address: string,
+  minExpandSats: number,
+): boolean {
+  if (!tx?.vin?.length) return false;
+  if (!txInvolvesSpendFromPage(tx, address)) return false;
+  const spent = pageSpendSats(tx, address);
+  return spent > 0 && spent < minExpandSats;
+}
+
 export function shouldTraceHackerReceive(
   entry: ClassifiedPendingTx,
   config: AppConfig,
@@ -251,11 +272,18 @@ export function shouldSkipGetTx(
   if (opts?.expandProfile === "sweep_relay" && entry.isSpend === false) return true;
   if (shouldTraceHackerReceive(entry, config, opts)) return false;
   if (entry.isSpend === false) return true;
+  const pageEntry = opts?.pageEntry;
+  if (
+    pageEntry &&
+    isSubFloorSpendFromPage(pageEntry, address, config.minExpandSats) &&
+    !pageEntryHasOpReturnAsm(pageEntry)
+  ) {
+    return true;
+  }
   if (entry.isSpend === true) return false;
 
-  const voutCount = entry.voutCount ?? (opts?.pageEntry ? txVoutCount(opts.pageEntry) : 0);
+  const voutCount = entry.voutCount ?? (pageEntry ? txVoutCount(pageEntry) : 0);
   if (voutCount > config.maxVoutCountSkipGetTx) {
-    const pageEntry = opts?.pageEntry;
     if (pageEntry && !txInvolvesSpendFromPage(pageEntry, address)) return true;
   }
   return false;

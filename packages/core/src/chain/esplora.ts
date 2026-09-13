@@ -103,7 +103,7 @@ export class EsploraProvider implements ChainProvider {
     const txs = await this.fetchJson<TxPage>(`/address/${address}/txs`);
     if (!lastSeenTxid) return txs;
     const idx = txs.findIndex((t) => t.txid === lastSeenTxid);
-    return idx === -1 ? txs : txs.slice(0, idx);
+    return idx === -1 ? [] : txs.slice(0, idx);
   }
 
   async getAddressTxsChainPage(address: string, lastTxid: string): Promise<ChainTxSummary[]> {
@@ -135,7 +135,7 @@ export class MempoolProvider implements ChainProvider {
     const txs = await this.fetchJson<TxPage>(`/address/${address}/txs`);
     if (!lastSeenTxid) return txs;
     const idx = txs.findIndex((t) => t.txid === lastSeenTxid);
-    return idx === -1 ? txs : txs.slice(0, idx);
+    return idx === -1 ? [] : txs.slice(0, idx);
   }
 
   async getAddressTxsChainPage(address: string, lastTxid: string): Promise<ChainTxSummary[]> {
