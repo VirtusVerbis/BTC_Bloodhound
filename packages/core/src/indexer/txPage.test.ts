@@ -38,17 +38,47 @@ describe("txPage", () => {
     ).toBe(true);
   });
 
-  it("allows skinny receive at hop 0 when traceHackerReceives enabled", () => {
+  it("allows skinny hop-0 receive at or above the expand floor", () => {
     const tx = {
       txid: "deposit1",
+      vin: [{ prevout: { scriptpubkey_address: VICTIM, value: 150_000 } }],
+      vout: [{ scriptpubkey_address: HACKER, value: 150_000 }],
+    };
+    const classified = classifyPageTx(tx, HACKER);
+    expect(classified.isSpend).toBe(false);
+    expect(
+      shouldTraceHackerReceive(classified, config, { hop: 0, pageEntry: tx, address: HACKER }),
+    ).toBe(true);
+    expect(
+      shouldSkipGetTx(classified, HACKER, config, { hop: 0, traceHackerReceives: true, pageEntry: tx }),
+    ).toBe(false);
+  });
+
+  it("skips hop-0 receive tracing when hacker output is below the expand floor", () => {
+    const tx = {
+      txid: "deposit_dust",
       vin: [{ prevout: { scriptpubkey_address: VICTIM, value: 50_000 } }],
       vout: [{ scriptpubkey_address: HACKER, value: 50_000 }],
     };
     const classified = classifyPageTx(tx, HACKER);
-    expect(classified.isSpend).toBe(false);
-    expect(shouldTraceHackerReceive(classified, config, { hop: 0 })).toBe(true);
+    expect(
+      shouldTraceHackerReceive(classified, config, { hop: 0, pageEntry: tx, address: HACKER }),
+    ).toBe(false);
     expect(
       shouldSkipGetTx(classified, HACKER, config, { hop: 0, traceHackerReceives: true, pageEntry: tx }),
+    ).toBe(true);
+  });
+
+  it("still traces hop-0 receive when vout amounts are unknown", () => {
+    const classified = {
+      txid: "deposit_unknown",
+      isSpend: false,
+      voutCount: 1,
+      outputAddressCount: 1,
+    };
+    expect(shouldTraceHackerReceive(classified, config, { hop: 0, address: HACKER })).toBe(true);
+    expect(
+      shouldSkipGetTx(classified, HACKER, config, { hop: 0, traceHackerReceives: true }),
     ).toBe(false);
   });
 
@@ -174,7 +204,7 @@ describe("txPage", () => {
     expect(shouldSkipGetTx(classified, ADDRESS, config, { pageEntry: tx })).toBe(true);
   });
 
-  it("does not skip getTx for a sub-floor spend that carries OP_RETURN", () => {
+  it("skips getTx for a sub-floor spend that carries OP_RETURN (capture from page)", () => {
     const tx = {
       txid: "dustnote",
       vin: [{ prevout: { scriptpubkey_address: ADDRESS, value: 1_000 } }],
@@ -184,6 +214,6 @@ describe("txPage", () => {
       ],
     };
     const classified = classifyPageTx(tx, ADDRESS);
-    expect(shouldSkipGetTx(classified, ADDRESS, config, { pageEntry: tx })).toBe(false);
+    expect(shouldSkipGetTx(classified, ADDRESS, config, { pageEntry: tx })).toBe(true);
   });
 });

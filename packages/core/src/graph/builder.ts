@@ -8,7 +8,7 @@ import { bundleParallelEdges, mapDbEdgeToGraph, victimReturnEdgeKind, type EdgeK
 import { enrichNodesWithOpReturn } from "./graphOpReturn.js";
 import { appendVictimRefunds } from "./graphRefunds.js";
 import { filterDownstreamEdgesExcludingVictims } from "./graphVictims.js";
-import { DEFAULT_MIN_EXPAND_SATS, expandStatusToWrite } from "./expandSkip.js";
+import { DEFAULT_MIN_EXPAND_SATS, expandStatusToWrite, qualifiesForExpand } from "./expandSkip.js";
 
 export interface HackTraceOptions {
   tx?: ChainTxDetail;
@@ -616,17 +616,32 @@ export async function applyHackTraceEdgesChunk(
     };
   }
 
+  const minExpandSats = opts?.minExpandSats ?? DEFAULT_MIN_EXPAND_SATS;
+
   let newVictimAddresses = new Set<string>();
   if (startEdgeIndex === 0 && victimAddresses.length > 0) {
-    const existingVictims = await store.getExistingAddressSet(victimAddresses);
-    newVictimAddresses = new Set(victimAddresses.filter((a) => !existingVictims.has(a)));
-    await store.upsertAddressesBatch(
-      victimAddresses.map((address) => ({
-        address,
-        role: "victim",
-        source: "derived",
-      })),
+    const victimTotals = new Map<string, number>();
+    for (const edge of flat) {
+      if (edge.direction !== "in_to_hacker") continue;
+      victimTotals.set(
+        edge.fromAddress,
+        (victimTotals.get(edge.fromAddress) ?? 0) + edge.amountSats,
+      );
+    }
+    const qualifyingVictims = victimAddresses.filter((address) =>
+      qualifiesForExpand(victimTotals.get(address) ?? 0, minExpandSats),
     );
+    const existingVictims = await store.getExistingAddressSet(qualifyingVictims);
+    newVictimAddresses = new Set(qualifyingVictims.filter((a) => !existingVictims.has(a)));
+    if (qualifyingVictims.length > 0) {
+      await store.upsertAddressesBatch(
+        qualifyingVictims.map((address) => ({
+          address,
+          role: "victim",
+          source: "derived",
+        })),
+      );
+    }
   }
 
   const endIndex = Math.min(totalEdges, startEdgeIndex + maxEdges);
@@ -656,7 +671,6 @@ export async function applyHackTraceEdgesChunk(
     edgeKind?: string | null;
   }> = [];
 
-  const minExpandSats = opts?.minExpandSats ?? DEFAULT_MIN_EXPAND_SATS;
   const sliceInbound = new Map<string, number>();
   for (const edge of slice) {
     const isVictimReturn =

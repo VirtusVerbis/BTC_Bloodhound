@@ -60,8 +60,36 @@ describe("processClassifiedPendingTx", () => {
     expect(result.continued).toBe(false);
   });
 
-  it("traces hop-0 receive when traceFlaggedHackerReceives enabled", async () => {
+  it("traces hop-0 receive at or above the expand floor when traceFlaggedHackerReceives enabled", async () => {
     const config = loadConfig({ TRACE_FLAGGED_HACKER_RECEIVES: "1" });
+    const store = {
+      getTransaction: getTransactionMock.mockResolvedValue(null),
+    } as unknown as Store;
+    const router = {} as ChainRouter;
+    const pageEntry = {
+      txid: "abc123",
+      vin: [{ prevout: { scriptpubkey_address: victim, value: 150_000 } }],
+      vout: [{ scriptpubkey_address: address, value: 150_000 }],
+    };
+
+    const result = await processClassifiedPendingTx(
+      store,
+      router,
+      config,
+      address,
+      0,
+      { ...receiveEntry, pageEntry },
+      hackers,
+      {},
+    );
+
+    expect(processTxForHackTraceMock).toHaveBeenCalledTimes(1);
+    expect(result.chainCallsUsed).toBe(0);
+    expect(result.continued).toBe(false);
+  });
+
+  it("skips hop-0 receive tracing when hacker output is below the expand floor", async () => {
+    const config = loadConfig({ TRACE_FLAGGED_HACKER_RECEIVES: "1", MIN_EXPAND_SATS: "100000" });
     const store = {
       getTransaction: getTransactionMock.mockResolvedValue(null),
     } as unknown as Store;
@@ -83,9 +111,8 @@ describe("processClassifiedPendingTx", () => {
       {},
     );
 
-    expect(processTxForHackTraceMock).toHaveBeenCalledTimes(1);
+    expect(processTxForHackTraceMock).not.toHaveBeenCalled();
     expect(result.chainCallsUsed).toBe(0);
-    expect(result.continued).toBe(false);
   });
 
   it("skips downstream hop receive even when traceFlaggedHackerReceives enabled", async () => {
@@ -208,7 +235,7 @@ describe("processClassifiedPendingTx", () => {
     expect(processTxForHackTraceMock).not.toHaveBeenCalled();
   });
 
-  it("traces a sub-floor spend from the page without calling getTx", async () => {
+  it("does not trace a sub-floor spend from the page and skips getTx", async () => {
     const config = loadConfig({ MIN_EXPAND_SATS: "100000" });
     const getTx = vi.fn();
     const store = {
@@ -242,7 +269,51 @@ describe("processClassifiedPendingTx", () => {
 
     expect(getTx).not.toHaveBeenCalled();
     expect(router.withProvider).not.toHaveBeenCalled();
-    expect(processTxForHackTraceMock).toHaveBeenCalledTimes(1);
+    expect(processTxForHackTraceMock).not.toHaveBeenCalled();
     expect(result.chainCallsUsed).toBe(0);
+  });
+
+  it("captures OP_RETURN from a sub-floor spend without tracing", async () => {
+    const config = loadConfig({ MIN_EXPAND_SATS: "100000" });
+    const getTx = vi.fn();
+    const store = {
+      getTransaction: getTransactionMock.mockResolvedValue(null),
+    } as unknown as Store;
+    const router = {
+      withProvider: vi.fn(async (fn: (p: { getTx: typeof getTx }) => unknown) => fn({ getTx })),
+    } as unknown as ChainRouter;
+    const pageEntry = {
+      txid: "dust_op",
+      vin: [{ prevout: { scriptpubkey_address: address, value: 50_000 } }],
+      vout: [
+        { scriptpubkey_address: victim, value: 49_000 },
+        {
+          scriptpubkey_type: "op_return",
+          scriptpubkey_asm: "OP_RETURN 48656c6c6f",
+          value: 0,
+        },
+      ],
+    };
+
+    await processClassifiedPendingTx(
+      store,
+      router,
+      config,
+      address,
+      0,
+      {
+        txid: "dust_op",
+        isSpend: true,
+        voutCount: 2,
+        outputAddressCount: 1,
+        pageEntry,
+      },
+      hackers,
+      {},
+    );
+
+    expect(getTx).not.toHaveBeenCalled();
+    expect(captureOpReturnForTxMock).toHaveBeenCalled();
+    expect(processTxForHackTraceMock).not.toHaveBeenCalled();
   });
 });

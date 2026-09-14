@@ -31,6 +31,7 @@ export interface ShouldSkipGetTxOpts {
   pageEntry?: ChainTxSummary;
   hop?: number;
   traceHackerReceives?: boolean;
+  address?: string;
 }
 
 export function txInvolvesSpendFromPage(tx: ChainTxSummary, address: string): boolean {
@@ -218,6 +219,16 @@ export function pageSpendSats(tx: ChainTxSummary, address: string): number {
   return total;
 }
 
+export function pageReceiveSats(tx: ChainTxSummary, address: string): number {
+  let total = 0;
+  for (const vout of tx.vout ?? []) {
+    if (vout.scriptpubkey_address !== address) continue;
+    const value = vout.value;
+    if (value != null && value > 0) total += value;
+  }
+  return total;
+}
+
 export function isSubFloorSpendFromPage(
   tx: ChainTxSummary | undefined,
   address: string,
@@ -227,6 +238,17 @@ export function isSubFloorSpendFromPage(
   if (!txInvolvesSpendFromPage(tx, address)) return false;
   const spent = pageSpendSats(tx, address);
   return spent > 0 && spent < minExpandSats;
+}
+
+/** Unknown vout is not sub-floor: missing page data must not drop a real victim. */
+export function isSubFloorReceiveFromPage(
+  tx: ChainTxSummary | undefined,
+  address: string,
+  minExpandSats: number,
+): boolean {
+  if (!tx?.vout?.length) return false;
+  const received = pageReceiveSats(tx, address);
+  return received > 0 && received < minExpandSats;
 }
 
 export function shouldTraceHackerReceive(
@@ -243,7 +265,17 @@ export function shouldTraceHackerReceive(
   const voutCount =
     entry.voutCount ??
     (opts?.pageEntry ? txVoutCount(opts.pageEntry) : entry.pageSnapshot?.vout.length ?? 0);
-  return voutCount <= config.maxVoutCountSkipGetTx;
+  if (voutCount > config.maxVoutCountSkipGetTx) return false;
+  const page = opts?.pageEntry;
+  const receiveAddress = opts?.address;
+  if (
+    page &&
+    receiveAddress &&
+    isSubFloorReceiveFromPage(page, receiveAddress, config.minExpandSats)
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export function isSpendFanout(
@@ -270,14 +302,10 @@ export function shouldSkipGetTx(
   opts?: ShouldSkipGetTxOpts,
 ): boolean {
   if (opts?.expandProfile === "sweep_relay" && entry.isSpend === false) return true;
-  if (shouldTraceHackerReceive(entry, config, opts)) return false;
+  if (shouldTraceHackerReceive(entry, config, { ...opts, address })) return false;
   if (entry.isSpend === false) return true;
   const pageEntry = opts?.pageEntry;
-  if (
-    pageEntry &&
-    isSubFloorSpendFromPage(pageEntry, address, config.minExpandSats) &&
-    !pageEntryHasOpReturnAsm(pageEntry)
-  ) {
+  if (pageEntry && isSubFloorSpendFromPage(pageEntry, address, config.minExpandSats)) {
     return true;
   }
   if (entry.isSpend === true) return false;

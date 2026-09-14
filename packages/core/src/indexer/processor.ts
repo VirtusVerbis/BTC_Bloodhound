@@ -7,7 +7,7 @@ import { JOB_PRIORITY } from "../config.js";
 import { ChainRouter, RateLimitNotReadyError } from "../chain/router.js";
 import { isRateLimitError, isTransientFetchError } from "../chain/esplora.js";
 import { getHackerAddressSet, processTxForHackTrace } from "../graph/builder.js";
-import { qualifiesForExpand } from "../graph/expandSkip.js";
+import { qualifiesForExpand, SKIPPED_MIN_STATUS } from "../graph/expandSkip.js";
 import { applyColdcardWatchSync, applyColdcardWatchSyncBatch, enqueueColdcardWatchBatchJobs, fetchColdcardWatch } from "../sources/coldcardwatch.js";
 import {
   partitionSourceHackers,
@@ -1268,6 +1268,12 @@ async function expandDownstream(
   const jobSubreq = options?.jobSubreq;
   const cpuGuard = options?.cpuGuard;
   const address = rawPayload.address as string;
+  const expandCtx = (await store.getDownstreamExpandContext([address])).get(address);
+  if (!qualifiesForExpand(expandCtx?.inboundSats ?? 0, config.minExpandSats)) {
+    await store.setExpandStatus(address, SKIPPED_MIN_STATUS);
+    return;
+  }
+
   let pending = readPendingRuntime(rawPayload).pending;
   let processedIndex = (rawPayload.processedIndex as number | undefined) ?? 0;
   let chainCursor = rawPayload.chainCursor as string | undefined;

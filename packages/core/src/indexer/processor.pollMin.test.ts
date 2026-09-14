@@ -121,3 +121,49 @@ describe("poll_downstream_address min expand abort", () => {
     expect(store.getAddress).not.toHaveBeenCalled();
   });
 });
+
+describe("expand_downstream min expand abort", () => {
+  it("marks skipped_min and returns without chain fetch when inbound is below the floor", async () => {
+    const address = "bc1qdust";
+    const setExpandStatus = vi.fn();
+    const store = {
+      getDownstreamExpandContext: vi.fn().mockResolvedValue(
+        new Map([[address, { expandStatus: "queued", inboundSats: 1_000 }]]),
+      ),
+      setExpandStatus,
+      getAddress: vi.fn(),
+      enqueueJob: vi.fn(),
+      flushRecentHackerActivity: vi.fn(),
+    } as unknown as Store;
+
+    const router = {
+      fetchAddressTxPage: vi.fn(),
+      withProvider: vi.fn(),
+    } as unknown as ChainRouter;
+
+    const job = {
+      id: 2,
+      type: "expand_downstream",
+      payloadJson: JSON.stringify({
+        address,
+        pendingTxids: ["tx-pending"],
+        processedIndex: 0,
+      }),
+      status: "running",
+      priority: JOB_PRIORITY.CRON_EXPAND,
+      runAfter: new Date().toISOString(),
+      attempts: 0,
+      lastError: null,
+      createdAt: new Date().toISOString(),
+    } as Job;
+
+    await processJob(store, router, baseConfig(), job);
+
+    expect(store.getDownstreamExpandContext).toHaveBeenCalledWith([address]);
+    expect(setExpandStatus).toHaveBeenCalledWith(address, "skipped_min");
+    expect(router.fetchAddressTxPage).not.toHaveBeenCalled();
+    expect(router.withProvider).not.toHaveBeenCalled();
+    expect(store.enqueueJob).not.toHaveBeenCalled();
+    expect(store.getAddress).not.toHaveBeenCalled();
+  });
+});

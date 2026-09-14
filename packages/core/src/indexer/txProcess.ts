@@ -10,11 +10,12 @@ import type { CpuGuard } from "./cpuGuard.js";
 import {
   hasPageVinVout,
   isSpendFanout,
+  isSubFloorReceiveFromPage,
+  isSubFloorSpendFromPage,
   pageEntryHasOpReturnAsm,
   pageEntryToChainTxDetail,
   shouldSkipGetTx,
   shouldTraceHackerReceive,
-  txInvolvesSpendFromPage,
   uniqueOutputAddresses,
   type PendingTxRuntime,
 } from "./txPage.js";
@@ -63,12 +64,14 @@ function traceOptions(
 
 function skipGetTxOpts(
   hop: number,
+  address: string,
   config: AppConfig,
   opts?: { expandProfile?: string | null; skipIfIndexed?: boolean; cpuGuard?: CpuGuard },
 ) {
   return {
     expandProfile: opts?.expandProfile,
     hop,
+    address,
     traceHackerReceives: config.traceFlaggedHackerReceives,
   };
 }
@@ -113,7 +116,7 @@ export async function processClassifiedPendingTx(
     traceEdgesFlat: undefined,
   };
   const skipOpts = {
-    ...skipGetTxOpts(hop, config, opts),
+    ...skipGetTxOpts(hop, address, config, opts),
     pageEntry: entry.pageEntry,
   };
 
@@ -143,60 +146,14 @@ export async function processClassifiedPendingTx(
   }
 
   if (shouldSkipGetTx(entry, address, config, skipOpts)) {
-    if (
-      entry.pageEntry &&
-      hasPageVinVout(entry.pageEntry) &&
-      (entry.isSpend === true || txInvolvesSpendFromPage(entry.pageEntry, address))
-    ) {
-      await patchOpReturnFromPageIfNeeded(store, router, txid, entry, opts);
-      const traceResult = await processTxForHackTrace(
-        store,
-        router,
-        txid,
-        hackers,
-        traceOptions(
-          config,
-          state,
-          txid,
-          {
-            tx: pageEntryToChainTxDetail(entry.pageEntry),
-            spendingAddress: address,
-            spendingHop: hop,
-            captureOpReturn: {
-              allowGetTx: false,
-              budget: opts?.captureOpReturn?.budget,
-              jobSubreq: opts?.captureOpReturn?.jobSubreq,
-              cpuGuard: opts?.cpuGuard,
-            },
-          },
-          { cpuGuard: opts?.cpuGuard },
-        ),
-      );
-      if (!traceResult.traceComplete) {
-        return {
-          traceState: {
-            traceTxid: txid,
-            traceEdgeIndex: traceResult.nextEdgeIndex,
-            traceEdgesPending: true,
-            traceEdgeTotal: traceResult.traceEdgeTotal,
-            traceEdgesFlat: traceResult.traceEdgesFlat,
-          },
-          continued: true,
-          chainCallsUsed: 0,
-          cpuGuardTripped: traceResult.cpuGuardTripped,
-        };
-      }
-      return {
-        traceState: nextState,
-        continued: false,
-        chainCallsUsed: 0,
-        cpuGuardTripped: traceResult.cpuGuardTripped,
-      };
-    }
+    await patchOpReturnFromPageIfNeeded(store, router, txid, entry, opts);
     return { traceState: nextState, continued: false, chainCallsUsed: 0 };
   }
 
-  if (isSpendFanout(entry, address, config, entry.pageEntry)) {
+  if (
+    isSpendFanout(entry, address, config, entry.pageEntry) &&
+    !isSubFloorSpendFromPage(entry.pageEntry, address, config.minExpandSats)
+  ) {
     const pageTx = spendFanoutTxFromPage(entry);
     if (pageTx) {
       await applySpendFanoutSummary(store, pageTx, address, hop, config);
@@ -225,10 +182,34 @@ export async function processClassifiedPendingTx(
       voutCount: tx.vout?.length ?? 0,
       outputAddressCount: uniqueOutputAddresses(tx),
     };
-    if (isSpendFanout(fanoutEntry, address, config, tx)) {
+    if (
+      isSpendFanout(fanoutEntry, address, config, tx) &&
+      !isSubFloorSpendFromPage(tx, address, config.minExpandSats)
+    ) {
       await applySpendFanoutSummary(store, tx, address, hop, config);
       return { traceState: nextState, continued: false, chainCallsUsed };
     }
+  }
+
+  if (!traceActive && isSubFloorSpendFromPage(tx, address, config.minExpandSats)) {
+    await captureOpReturnForTx(store, router, txid, {
+      tx,
+      allowGetTx: false,
+      ...opts?.captureOpReturn,
+    });
+    return { traceState: nextState, continued: false, chainCallsUsed };
+  }
+  if (
+    !traceActive &&
+    hop === 0 &&
+    isSubFloorReceiveFromPage(tx, address, config.minExpandSats)
+  ) {
+    await captureOpReturnForTx(store, router, txid, {
+      tx,
+      allowGetTx: false,
+      ...opts?.captureOpReturn,
+    });
+    return { traceState: nextState, continued: false, chainCallsUsed };
   }
 
   const isDepositTrace = shouldTraceHackerReceive(entry, config, skipOpts);

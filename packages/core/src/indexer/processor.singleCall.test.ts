@@ -377,6 +377,9 @@ describe("single chain call per job", () => {
     const enqueueJob = vi.fn().mockResolvedValue(42);
     const store = mockStore({
       getAddress: vi.fn().mockResolvedValue({ hopFromHacker: 1 }),
+      getDownstreamExpandContext: vi.fn().mockResolvedValue(
+        new Map([[ADDRESS, { expandStatus: "pending", inboundSats: 10_000 }]]),
+      ),
       setExpandStatus: vi.fn(),
       enqueueJob,
       getTransaction: vi.fn().mockResolvedValue(null),

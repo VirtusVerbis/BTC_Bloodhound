@@ -54,7 +54,7 @@ export interface AppConfig {
   maxCrawlDepth: number;
   maxGraphDepth: number;
   minEdgeSats: number;
-  /** Crawl/expand floor for downstream only; victims are never gated by this. */
+  /** Crawl/expand floor for downstream and hop-0 receive tracing; dust-only victims are not recorded. */
   minExpandSats: number;
   balanceRefreshIntervalSec: number;
   btcUsdPriceRefreshIntervalSec: number;

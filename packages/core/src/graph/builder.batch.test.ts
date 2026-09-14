@@ -348,7 +348,7 @@ describe("applyHackTraceEdgesChunk", () => {
     expect((await store.getAddress("bc1qdone"))?.expandStatus).toBe("expanded");
   });
 
-  it("still captures a sub-threshold victim", async () => {
+  it("does not capture a sub-threshold victim", async () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);
     const store = new Store(db);
@@ -379,11 +379,46 @@ describe("applyHackTraceEdgesChunk", () => {
       { minExpandSats: 100_000 },
     );
 
-    const victim = await store.getAddress("bc1qtinyv");
-    expect(victim?.role).toBe("victim");
-    expect(victim?.expandStatus).not.toBe("skipped_min");
+    expect(await store.getAddress("bc1qtinyv")).toBeUndefined();
     const edges = await store.getEdgesToAddress("bc1qhacker");
     expect(edges.some((e) => e.fromAddress === "bc1qtinyv")).toBe(false);
+  });
+
+  it("still captures a victim at the expand floor", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    await store.upsertAddress({
+      address: "bc1qhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+    });
+
+    const computed: HackTraceEdges = {
+      inToHacker: [
+        {
+          fromAddress: "bc1qbigv",
+          toAddress: "bc1qhacker",
+          amountSats: 100_000,
+          hopFromHacker: 0,
+          direction: "in_to_hacker",
+        },
+      ],
+      outFromHacker: [],
+      victimAddresses: ["bc1qbigv"],
+    };
+
+    await applyHackTraceEdgesChunk(
+      store,
+      { txid: "tx_victim_floor", blockTime: "2024-01-04T00:00:00.000Z" },
+      computed,
+      { minExpandSats: 100_000 },
+    );
+
+    const victim = await store.getAddress("bc1qbigv");
+    expect(victim?.role).toBe("victim");
+    const edges = await store.getEdgesToAddress("bc1qhacker");
+    expect(edges.some((e) => e.fromAddress === "bc1qbigv" && e.amountSats === 100_000)).toBe(true);
   });
 
   it("still stores outs at or above the expand floor", async () => {
