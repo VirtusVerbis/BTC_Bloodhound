@@ -48,13 +48,19 @@ async function enqueueBackfillResume(store: Store, address: string): Promise<voi
   );
 }
 
+export interface MaintainOneHackerOpts {
+  throttled?: boolean;
+}
+
 export async function maintainOneHacker(
   store: Store,
   config: AppConfig,
   h: { address: string; liveBalanceAt?: string | null },
   ts: number,
+  opts?: MaintainOneHackerOpts,
 ): Promise<void> {
   const address = h.address;
+  const skipPollAndCosmetic = opts?.throttled === true;
 
   const addr = await store.getAddress(address);
   const status = addr?.expandStatus ?? "pending";
@@ -71,7 +77,7 @@ export async function maintainOneHacker(
     await enqueueBackfillResume(store, address);
   } else if (status === "expanded" && !backfill?.backfillComplete) {
     await enqueueBackfillResume(store, address);
-  } else if (auditDue) {
+  } else if (auditDue && !skipPollAndCosmetic) {
     await store.enqueueJobIfAbsent(
       "audit_hacker_backfill",
       { address },
@@ -80,6 +86,8 @@ export async function maintainOneHacker(
       { dedupeTypes: [...BACKFILL_DEDUPE_TYPES], address },
     );
   }
+
+  if (skipPollAndCosmetic) return;
 
   const backfillState = await store.getBackfillState(address);
   const sync = backfillState?.backfillComplete ? await store.getSyncState(address) : null;
@@ -216,7 +224,7 @@ export async function scheduleDownstreamCrawl(
   if (isMaintTick && !scheduleBudgetLow(budget, reserve, 8)) {
     if (hackers.length > 0) {
       const idx = await store.claimNextHackerPollIndex(hackers.length);
-      await maintainOneHacker(store, config, hackers[idx]!, ts);
+      await maintainOneHacker(store, config, hackers[idx]!, ts, { throttled });
     }
   }
 

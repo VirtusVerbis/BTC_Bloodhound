@@ -255,9 +255,11 @@ async function previewMaintainOneHacker(
   config: AppConfig,
   h: { address: string; liveBalanceAt?: string | null },
   ts: number,
+  opts?: { throttled?: boolean },
 ): Promise<string[]> {
   const wouldEnqueue: string[] = [];
   const address = h.address;
+  const skipPollAndCosmetic = opts?.throttled === true;
 
   let auditDue = false;
   let backfillDue = false;
@@ -286,7 +288,9 @@ async function previewMaintainOneHacker(
     }
   }
   if (backfillDue) wouldEnqueue.push("backfill_hacker_address");
-  if (auditDue) wouldEnqueue.push("audit_hacker_backfill");
+  if (auditDue && !skipPollAndCosmetic) wouldEnqueue.push("audit_hacker_backfill");
+
+  if (skipPollAndCosmetic) return wouldEnqueue;
 
   const backfill = await store.getBackfillState(address);
   const sync = backfill?.backfillComplete ? await store.getSyncState(address) : null;
@@ -344,6 +348,7 @@ export async function previewNextCronEnqueue(store: Store, config: AppConfig): P
     !(await store.hasPendingJob("sync_vercel_trackers"));
 
   const scheduler = await store.getSchedulerState();
+  const throttled = (scheduler?.pendingJobCount ?? 0) >= config.queueSoftThrottleDepth;
   const nextTick = (scheduler?.maintenanceCronCounter ?? 0) + 1;
   let hackerMaintenance: NextCronPreview["hackerMaintenance"] = null;
   if (nextTick % config.hackerMaintenanceEveryNCrons === 0) {
@@ -351,7 +356,7 @@ export async function previewNextCronEnqueue(store: Store, config: AppConfig): P
     if (hackers.length > 0) {
       const idx = (await store.getHackerPollIndex()) % hackers.length;
       const hacker = hackers[idx]!;
-      const wouldEnqueue = await previewMaintainOneHacker(store, config, hacker, ts);
+      const wouldEnqueue = await previewMaintainOneHacker(store, config, hacker, ts, { throttled });
       hackerMaintenance = { address: hacker.address, wouldEnqueue };
     }
   }

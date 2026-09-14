@@ -231,6 +231,55 @@ describe("previewNextCronEnqueue hacker maintenance", () => {
     expect(preview.hackerMaintenance?.wouldEnqueue).toContain("refresh_live_balance");
     expect(preview.hackerMaintenance?.wouldEnqueue).not.toContain("poll_hacker_address");
   });
+
+  it("omits poll refresh and audit when queue depth is at soft throttle", async () => {
+    const { store } = await setupStore();
+    await store.upsertAddress({
+      address: "bc1qhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+      hopFromHacker: 0,
+      source: "ops",
+      expandStatus: "expanded",
+    });
+    await store.upsertBackfillState("bc1qhacker", null, true);
+    await store.enqueueJob("poll_downstream_address", { address: "bc1qpad1" }, 1);
+    await store.enqueueJob("poll_downstream_address", { address: "bc1qpad2" }, 1);
+
+    const preview = await previewNextCronEnqueue(
+      store,
+      previewConfig({ queueSoftThrottleDepth: 2 }),
+    );
+
+    expect(preview.hackerMaintenance?.address).toBe("bc1qhacker");
+    expect(preview.hackerMaintenance?.wouldEnqueue).not.toContain("poll_hacker_address");
+    expect(preview.hackerMaintenance?.wouldEnqueue).not.toContain("refresh_live_balance");
+    expect(preview.hackerMaintenance?.wouldEnqueue).not.toContain("audit_hacker_backfill");
+  });
+
+  it("still previews backfill resume when throttled", async () => {
+    const { store } = await setupStore();
+    await store.upsertAddress({
+      address: "bc1qhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+      hopFromHacker: 0,
+      source: "ops",
+      expandStatus: "backfilling",
+    });
+    await store.enqueueJob("poll_downstream_address", { address: "bc1qpad1" }, 1);
+    await store.enqueueJob("poll_downstream_address", { address: "bc1qpad2" }, 1);
+
+    const preview = await previewNextCronEnqueue(
+      store,
+      previewConfig({ queueSoftThrottleDepth: 2 }),
+    );
+
+    expect(preview.hackerMaintenance?.address).toBe("bc1qhacker");
+    expect(preview.hackerMaintenance?.wouldEnqueue).toContain("backfill_hacker_address");
+    expect(preview.hackerMaintenance?.wouldEnqueue).not.toContain("refresh_live_balance");
+    expect(preview.hackerMaintenance?.wouldEnqueue).not.toContain("poll_hacker_address");
+  });
 });
 
 describe("enrichQueueJob", () => {
