@@ -8,7 +8,7 @@ import { bundleParallelEdges, mapDbEdgeToGraph, victimReturnEdgeKind, type EdgeK
 import { enrichNodesWithOpReturn } from "./graphOpReturn.js";
 import { appendVictimRefunds } from "./graphRefunds.js";
 import { filterDownstreamEdgesExcludingVictims } from "./graphVictims.js";
-import { DEFAULT_MIN_EXPAND_SATS, expandStatusToWrite, qualifiesForExpand } from "./expandSkip.js";
+import { DEFAULT_MIN_EXPAND_SATS, DEFAULT_MIN_VICTIM_INGEST_SATS, expandStatusToWrite, qualifiesForExpand } from "./expandSkip.js";
 
 export interface HackTraceOptions {
   tx?: ChainTxDetail;
@@ -16,6 +16,7 @@ export interface HackTraceOptions {
   spendingHop?: number;
   captureOpReturn?: CaptureOpReturnOpts;
   minExpandSats?: number;
+  minVictimIngestSats?: number;
 }
 
 export type { EdgeKind } from "./graphEdges.js";
@@ -565,6 +566,7 @@ export interface HackTraceApplyChunkOptions {
   cpuGuard?: CpuGuard;
   flaggedHackers?: Set<string>;
   minExpandSats?: number;
+  minVictimIngestSats?: number;
 }
 
 export interface HackTraceApplyChunkResult {
@@ -617,6 +619,7 @@ export async function applyHackTraceEdgesChunk(
   }
 
   const minExpandSats = opts?.minExpandSats ?? DEFAULT_MIN_EXPAND_SATS;
+  const minVictimIngestSats = opts?.minVictimIngestSats ?? DEFAULT_MIN_VICTIM_INGEST_SATS;
 
   let newVictimAddresses = new Set<string>();
   if (startEdgeIndex === 0 && victimAddresses.length > 0) {
@@ -629,7 +632,7 @@ export async function applyHackTraceEdgesChunk(
       );
     }
     const qualifyingVictims = victimAddresses.filter((address) =>
-      qualifiesForExpand(victimTotals.get(address) ?? 0, minExpandSats),
+      qualifiesForExpand(victimTotals.get(address) ?? 0, minVictimIngestSats),
     );
     const existingVictims = await store.getExistingAddressSet(qualifyingVictims);
     newVictimAddresses = new Set(qualifyingVictims.filter((a) => !existingVictims.has(a)));
@@ -697,7 +700,7 @@ export async function applyHackTraceEdgesChunk(
         ...(expandStatus != null ? { expandStatus } : {}),
       });
     }
-    if (edge.amountSats < minExpandSats) {
+    if (edge.amountSats < (edge.direction === "in_to_hacker" ? minVictimIngestSats : minExpandSats)) {
       if (edge.direction === "out_from_hacker" && !isVictimReturn) {
         skippedInbound.set(
           edge.toAddress,
@@ -862,6 +865,7 @@ export async function processTxForHackTrace(
       cpuGuard,
       flaggedHackers: hackerAddresses,
       minExpandSats: options.minExpandSats ?? DEFAULT_MIN_EXPAND_SATS,
+      minVictimIngestSats: options.minVictimIngestSats ?? DEFAULT_MIN_VICTIM_INGEST_SATS,
     },
   );
 

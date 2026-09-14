@@ -60,7 +60,7 @@ describe("processClassifiedPendingTx", () => {
     expect(result.continued).toBe(false);
   });
 
-  it("traces hop-0 receive at or above the expand floor when traceFlaggedHackerReceives enabled", async () => {
+  it("traces hop-0 receive at or above the victim ingest floor when traceFlaggedHackerReceives enabled", async () => {
     const config = loadConfig({ TRACE_FLAGGED_HACKER_RECEIVES: "1" });
     const store = {
       getTransaction: getTransactionMock.mockResolvedValue(null),
@@ -88,8 +88,8 @@ describe("processClassifiedPendingTx", () => {
     expect(result.continued).toBe(false);
   });
 
-  it("skips hop-0 receive tracing when hacker output is below the expand floor", async () => {
-    const config = loadConfig({ TRACE_FLAGGED_HACKER_RECEIVES: "1", MIN_EXPAND_SATS: "100000" });
+  it("skips hop-0 receive tracing when hacker output is below the victim ingest floor", async () => {
+    const config = loadConfig({ TRACE_FLAGGED_HACKER_RECEIVES: "1", MIN_VICTIM_INGEST_SATS: "100000" });
     const store = {
       getTransaction: getTransactionMock.mockResolvedValue(null),
     } as unknown as Store;
@@ -112,6 +112,37 @@ describe("processClassifiedPendingTx", () => {
     );
 
     expect(processTxForHackTraceMock).not.toHaveBeenCalled();
+    expect(result.chainCallsUsed).toBe(0);
+  });
+
+  it("traces hop-0 receive below expand floor when victim ingest floor is lower", async () => {
+    const config = loadConfig({
+      TRACE_FLAGGED_HACKER_RECEIVES: "1",
+      MIN_EXPAND_SATS: "100000",
+      MIN_VICTIM_INGEST_SATS: "0",
+    });
+    const store = {
+      getTransaction: getTransactionMock.mockResolvedValue(null),
+    } as unknown as Store;
+    const router = {} as ChainRouter;
+    const pageEntry = {
+      txid: "abc123",
+      vin: [{ prevout: { scriptpubkey_address: victim, value: 50_000 } }],
+      vout: [{ scriptpubkey_address: address, value: 50_000 }],
+    };
+
+    const result = await processClassifiedPendingTx(
+      store,
+      router,
+      config,
+      address,
+      0,
+      { ...receiveEntry, pageEntry },
+      hackers,
+      {},
+    );
+
+    expect(processTxForHackTraceMock).toHaveBeenCalledTimes(1);
     expect(result.chainCallsUsed).toBe(0);
   });
 

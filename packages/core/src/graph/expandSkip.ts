@@ -1,4 +1,5 @@
 export const DEFAULT_MIN_EXPAND_SATS = 100_000;
+export const DEFAULT_MIN_VICTIM_INGEST_SATS = 100_000;
 export const SKIPPED_MIN_STATUS = "skipped_min";
 
 export function qualifiesForExpand(inboundSats: number, minExpandSats: number): boolean {

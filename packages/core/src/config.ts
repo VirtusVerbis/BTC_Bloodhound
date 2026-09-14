@@ -54,8 +54,10 @@ export interface AppConfig {
   maxCrawlDepth: number;
   maxGraphDepth: number;
   minEdgeSats: number;
-  /** Crawl/expand floor for downstream and hop-0 receive tracing; dust-only victims are not recorded. */
+  /** Crawl/expand floor for downstream only. */
   minExpandSats: number;
+  /** Hop-0 receive tracing and in_to_hacker persist floor; dust-only victims below this are not recorded. */
+  minVictimIngestSats: number;
   balanceRefreshIntervalSec: number;
   btcUsdPriceRefreshIntervalSec: number;
   coldcardwatchSyncIntervalSec: number;
@@ -276,6 +278,7 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     maxGraphDepth: Number(env.MAX_GRAPH_DEPTH ?? 2),
     minEdgeSats: Number(env.MIN_EDGE_SATS ?? 100_000),
     minExpandSats: Number(env.MIN_EXPAND_SATS ?? 100_000),
+    minVictimIngestSats: Number(env.MIN_VICTIM_INGEST_SATS ?? 100_000),
     balanceRefreshIntervalSec: Number(env.BALANCE_REFRESH_INTERVAL_SEC ?? 300),
     btcUsdPriceRefreshIntervalSec: Number(env.BTC_USD_PRICE_REFRESH_INTERVAL_SEC ?? 900),
     coldcardwatchSyncIntervalSec: Number(env.COLDCARDWATCH_SYNC_INTERVAL_SEC ?? 3600),

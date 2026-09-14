@@ -53,7 +53,7 @@ describe("applyHackTraceEdgesChunk", () => {
       store,
       { txid: "txchunk", blockTime: "2024-01-01T00:00:00.000Z" },
       computed,
-      { startEdgeIndex: 0, maxEdges: 1, minExpandSats: 0 },
+      { startEdgeIndex: 0, maxEdges: 1, minExpandSats: 0, minVictimIngestSats: 0 },
     );
     expect(first.complete).toBe(false);
     expect(first.edgesApplied).toBe(1);
@@ -62,7 +62,7 @@ describe("applyHackTraceEdgesChunk", () => {
       store,
       { txid: "txchunk", blockTime: "2024-01-01T00:00:00.000Z" },
       computed,
-      { startEdgeIndex: first.nextEdgeIndex, maxEdges: 10, minExpandSats: 0 },
+      { startEdgeIndex: first.nextEdgeIndex, maxEdges: 10, minExpandSats: 0, minVictimIngestSats: 0 },
     );
     expect(second.complete).toBe(true);
 
@@ -94,7 +94,7 @@ describe("applyHackTraceEdgesChunk", () => {
       store,
       { txid: "txchunk", blockTime: "2024-01-01T00:00:00.000Z" },
       { flat, victimAddresses: computed.victimAddresses },
-      { startEdgeIndex: 0, maxEdges: 1, minExpandSats: 0 },
+      { startEdgeIndex: 0, maxEdges: 1, minExpandSats: 0, minVictimIngestSats: 0 },
     );
     expect(first.complete).toBe(false);
 
@@ -102,7 +102,7 @@ describe("applyHackTraceEdgesChunk", () => {
       store,
       { txid: "txchunk", blockTime: "2024-01-01T00:00:00.000Z" },
       { flat, victimAddresses: [] },
-      { startEdgeIndex: first.nextEdgeIndex, maxEdges: 10, minExpandSats: 0 },
+      { startEdgeIndex: first.nextEdgeIndex, maxEdges: 10, minExpandSats: 0, minVictimIngestSats: 0 },
     );
     expect(second.complete).toBe(true);
   });
@@ -376,7 +376,7 @@ describe("applyHackTraceEdgesChunk", () => {
       store,
       { txid: "tx_victim", blockTime: "2024-01-04T00:00:00.000Z" },
       computed,
-      { minExpandSats: 100_000 },
+      { minVictimIngestSats: 100_000 },
     );
 
     expect(await store.getAddress("bc1qtinyv")).toBeUndefined();
@@ -384,7 +384,7 @@ describe("applyHackTraceEdgesChunk", () => {
     expect(edges.some((e) => e.fromAddress === "bc1qtinyv")).toBe(false);
   });
 
-  it("still captures a victim at the expand floor", async () => {
+  it("still captures a victim at the victim ingest floor", async () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);
     const store = new Store(db);
@@ -412,7 +412,7 @@ describe("applyHackTraceEdgesChunk", () => {
       store,
       { txid: "tx_victim_floor", blockTime: "2024-01-04T00:00:00.000Z" },
       computed,
-      { minExpandSats: 100_000 },
+      { minVictimIngestSats: 100_000 },
     );
 
     const victim = await store.getAddress("bc1qbigv");
@@ -456,5 +456,56 @@ describe("applyHackTraceEdgesChunk", () => {
     expect(row?.expandStatus).toBe("pending");
     const edges = await store.getEdgesFromAddress("bc1qhacker");
     expect(edges.some((e) => e.toAddress === "bc1qbig" && e.amountSats === 100_000)).toBe(true);
+  });
+
+  it("stores a tiny victim when victim ingest is 0 while downstream still uses minExpandSats", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    await store.upsertAddress({
+      address: "bc1qhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+    });
+
+    const computed: HackTraceEdges = {
+      inToHacker: [
+        {
+          fromAddress: "bc1qtinyv",
+          toAddress: "bc1qhacker",
+          amountSats: 500,
+          hopFromHacker: 0,
+          direction: "in_to_hacker",
+        },
+      ],
+      outFromHacker: [
+        {
+          fromAddress: "bc1qhacker",
+          toAddress: "bc1qsmall",
+          amountSats: 500,
+          hopFromHacker: 1,
+          direction: "out_from_hacker",
+        },
+      ],
+      victimAddresses: ["bc1qtinyv"],
+    };
+
+    await applyHackTraceEdgesChunk(
+      store,
+      { txid: "tx_split_floors", blockTime: "2024-01-06T00:00:00.000Z" },
+      computed,
+      { minVictimIngestSats: 0, minExpandSats: 100_000 },
+    );
+
+    const victim = await store.getAddress("bc1qtinyv");
+    expect(victim?.role).toBe("victim");
+    const inEdges = await store.getEdgesToAddress("bc1qhacker");
+    expect(inEdges.some((e) => e.fromAddress === "bc1qtinyv" && e.amountSats === 500)).toBe(true);
+
+    const downstream = await store.getAddress("bc1qsmall");
+    expect(downstream?.role).toBe("downstream");
+    expect(downstream?.expandStatus).toBe("skipped_min");
+    const outEdges = await store.getEdgesFromAddress("bc1qhacker");
+    expect(outEdges.some((e) => e.toAddress === "bc1qsmall")).toBe(false);
   });
 });

@@ -51,10 +51,20 @@ describe("loadEnvFile via loadConfig", () => {
     expect(config.chainPrimaryProvider).toBe("esplora");
   });
 
-  it("defaults minEdgeSats and minExpandSats to 100000", () => {
+  it("defaults minEdgeSats, minExpandSats, and minVictimIngestSats to 100000", () => {
     const config = loadConfig({} as Record<string, string | undefined>);
     expect(config.minEdgeSats).toBe(100_000);
     expect(config.minExpandSats).toBe(100_000);
+    expect(config.minVictimIngestSats).toBe(100_000);
+  });
+
+  it("reads MIN_VICTIM_INGEST_SATS independently of MIN_EXPAND_SATS", () => {
+    const config = loadConfig({
+      MIN_EXPAND_SATS: "50000",
+      MIN_VICTIM_INGEST_SATS: "25000",
+    } as Record<string, string | undefined>);
+    expect(config.minExpandSats).toBe(50_000);
+    expect(config.minVictimIngestSats).toBe(25_000);
   });
 
   it("defaults maxPendingBackfillGlobal to 3", () => {

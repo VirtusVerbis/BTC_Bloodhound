@@ -35,6 +35,7 @@ function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     maxGraphDepth: 2,
     minEdgeSats: 1000,
     minExpandSats: 100_000,
+    minVictimIngestSats: 100_000,
     balanceRefreshIntervalSec: 300,
     btcUsdPriceRefreshIntervalSec: 60,
     coldcardwatchSyncIntervalSec: 3600,

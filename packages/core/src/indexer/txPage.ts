@@ -244,11 +244,11 @@ export function isSubFloorSpendFromPage(
 export function isSubFloorReceiveFromPage(
   tx: ChainTxSummary | undefined,
   address: string,
-  minExpandSats: number,
+  minVictimIngestSats: number,
 ): boolean {
   if (!tx?.vout?.length) return false;
   const received = pageReceiveSats(tx, address);
-  return received > 0 && received < minExpandSats;
+  return received > 0 && received < minVictimIngestSats;
 }
 
 export function shouldTraceHackerReceive(
@@ -271,7 +271,7 @@ export function shouldTraceHackerReceive(
   if (
     page &&
     receiveAddress &&
-    isSubFloorReceiveFromPage(page, receiveAddress, config.minExpandSats)
+    isSubFloorReceiveFromPage(page, receiveAddress, config.minVictimIngestSats)
   ) {
     return false;
   }

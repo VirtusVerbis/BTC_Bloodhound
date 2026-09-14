@@ -38,7 +38,7 @@ describe("txPage", () => {
     ).toBe(true);
   });
 
-  it("allows skinny hop-0 receive at or above the expand floor", () => {
+  it("allows skinny hop-0 receive at or above the victim ingest floor", () => {
     const tx = {
       txid: "deposit1",
       vin: [{ prevout: { scriptpubkey_address: VICTIM, value: 150_000 } }],
@@ -54,7 +54,7 @@ describe("txPage", () => {
     ).toBe(false);
   });
 
-  it("skips hop-0 receive tracing when hacker output is below the expand floor", () => {
+  it("skips hop-0 receive tracing when hacker output is below the victim ingest floor", () => {
     const tx = {
       txid: "deposit_dust",
       vin: [{ prevout: { scriptpubkey_address: VICTIM, value: 50_000 } }],
@@ -67,6 +67,26 @@ describe("txPage", () => {
     expect(
       shouldSkipGetTx(classified, HACKER, config, { hop: 0, traceHackerReceives: true, pageEntry: tx }),
     ).toBe(true);
+  });
+
+  it("traces hop-0 receive below expand floor when victim ingest floor is lower", () => {
+    const splitConfig = loadConfig({
+      TRACE_FLAGGED_HACKER_RECEIVES: "1",
+      MIN_EXPAND_SATS: "100000",
+      MIN_VICTIM_INGEST_SATS: "0",
+    });
+    const tx = {
+      txid: "deposit_mid",
+      vin: [{ prevout: { scriptpubkey_address: VICTIM, value: 50_000 } }],
+      vout: [{ scriptpubkey_address: HACKER, value: 50_000 }],
+    };
+    const classified = classifyPageTx(tx, HACKER);
+    expect(
+      shouldTraceHackerReceive(classified, splitConfig, { hop: 0, pageEntry: tx, address: HACKER }),
+    ).toBe(true);
+    expect(
+      shouldSkipGetTx(classified, HACKER, splitConfig, { hop: 0, traceHackerReceives: true, pageEntry: tx }),
+    ).toBe(false);
   });
 
   it("still traces hop-0 receive when vout amounts are unknown", () => {

@@ -58,6 +58,7 @@ function traceOptions(
     maxGraphEdgesPerTx: config.maxGraphEdgesPerTx > 0 ? config.maxGraphEdgesPerTx : undefined,
     maxEdgesPerJob: config.maxEdgesPerJob > 0 ? config.maxEdgesPerJob : undefined,
     minExpandSats: config.minExpandSats,
+    minVictimIngestSats: config.minVictimIngestSats,
     cpuGuard: opts?.cpuGuard,
   };
 }
@@ -202,7 +203,7 @@ export async function processClassifiedPendingTx(
   if (
     !traceActive &&
     hop === 0 &&
-    isSubFloorReceiveFromPage(tx, address, config.minExpandSats)
+    isSubFloorReceiveFromPage(tx, address, config.minVictimIngestSats)
   ) {
     await captureOpReturnForTx(store, router, txid, {
       tx,

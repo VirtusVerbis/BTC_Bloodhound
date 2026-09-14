@@ -41,6 +41,7 @@ function baseConfig(): AppConfig {
     maxGraphDepth: 2,
     minEdgeSats: 1000,
     minExpandSats: 1000,
+    minVictimIngestSats: 1000,
     balanceRefreshIntervalSec: 300,
     btcUsdPriceRefreshIntervalSec: 60,
     coldcardwatchSyncIntervalSec: 3600,

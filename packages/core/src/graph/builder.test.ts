@@ -169,6 +169,7 @@ describe("processTxForHackTrace", () => {
       spendingAddress: "down1",
       spendingHop: 1,
       minExpandSats: 0,
+      minVictimIngestSats: 0,
     });
 
     const child = await store.getAddress("child2");
@@ -194,7 +195,11 @@ describe("processTxForHackTrace", () => {
     const router = { withProvider: vi.fn() } as unknown as ChainRouter;
     const hackers = new Set(["hack1"]);
 
-    await processTxForHackTrace(store, router, tx.txid, hackers, { tx, minExpandSats: 0 });
+    await processTxForHackTrace(store, router, tx.txid, hackers, {
+      tx,
+      minExpandSats: 0,
+      minVictimIngestSats: 0,
+    });
 
     const down = await store.getAddress("down1");
     expect(down?.hopFromHacker).toBe(1);
@@ -224,7 +229,11 @@ describe("processTxForHackTrace", () => {
     const router = { withProvider: vi.fn() } as unknown as ChainRouter;
     const hackers = new Set(["hack1"]);
 
-    await processTxForHackTrace(store, router, tx.txid, hackers, { tx, minExpandSats: 0 });
+    await processTxForHackTrace(store, router, tx.txid, hackers, {
+      tx,
+      minExpandSats: 0,
+      minVictimIngestSats: 0,
+    });
 
     expect((await store.getAddress("hack1"))?.totalReceivedSats).toBe(60_000);
     const inEdges = (await store.getEdgesToAddress("hack1")).filter((e) => e.direction === "in_to_hacker");
@@ -260,6 +269,7 @@ describe("processTxForHackTrace", () => {
       traceEdgesFlat: flat,
       maxEdgesPerJob: 1,
       minExpandSats: 0,
+      minVictimIngestSats: 0,
     });
 
     expect(spy).not.toHaveBeenCalled();
@@ -792,6 +802,7 @@ describe("applyHackTraceEdgesChunk graph activity", () => {
     const computed = computeHackTraceEdges(tx, new Set(["hack1"]));
     await applyHackTraceEdgesChunk(store, { txid: tx.txid, blockTime: "2026-01-01T00:00:00.000Z" }, computed, {
       minExpandSats: 0,
+      minVictimIngestSats: 0,
     });
     await store.flushRecentHackerActivity(5);
 
@@ -822,6 +833,7 @@ describe("applyHackTraceEdgesChunk graph activity", () => {
     const computed = computeHackTraceEdges(tx, new Set(["hack1"]));
     await applyHackTraceEdgesChunk(store, { txid: tx.txid, blockTime: "2026-02-01T00:00:00.000Z" }, computed, {
       minExpandSats: 0,
+      minVictimIngestSats: 0,
     });
     await store.flushRecentHackerActivity(5);
 
