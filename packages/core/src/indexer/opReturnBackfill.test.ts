@@ -74,6 +74,7 @@ function baseConfig(): AppConfig {
     d1BatchSize: 8,
     syncAddressesPerJob: 5,
     maxPendingBackfillGlobal: 3,
+    maxPendingAuditGlobal: 1,
     opReturnBackfillPerJob: 3,
     opReturnBackfillEveryNCrons: 10,
   } as AppConfig;

@@ -18,6 +18,7 @@ const store = new Store(db, {
     maxPendingExpandPerAddress: config.maxPendingExpandPerAddress,
     maxPendingExpandGlobal: config.maxPendingExpandGlobal,
     maxPendingBackfillGlobal: config.maxPendingBackfillGlobal,
+    maxPendingAuditGlobal: config.maxPendingAuditGlobal,
 });
 const app = createApp(store, config);
 

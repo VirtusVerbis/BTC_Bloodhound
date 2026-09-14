@@ -24,6 +24,8 @@ const COSMETIC_TYPES = new Set<JobType>([
 
 export const INGEST_JOB_TYPES = [...INGEST_TYPES] as JobType[];
 
+export const BACKFILL_DEDUPE_TYPES = ["backfill_hacker_address", "audit_hacker_backfill"] as const;
+
 export const MAINT_COSMETIC_JOB_TYPES = [...MAINT_TYPES, ...COSMETIC_TYPES] as JobType[];
 
 export function jobClassForType(type: string): JobClass {

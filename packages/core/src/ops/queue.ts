@@ -25,7 +25,7 @@ const PRIORITY_NAME_BY_VALUE = Object.fromEntries(
 
 const DEFAULT_PRIORITY_BY_JOB_TYPE: Record<JobType, number> = {
   backfill_hacker_address: JOB_PRIORITY.BACKFILL_HACKER,
-  audit_hacker_backfill: JOB_PRIORITY.BACKFILL_HACKER,
+  audit_hacker_backfill: JOB_PRIORITY.AUDIT_HACKER_BACKFILL,
   expand_downstream: JOB_PRIORITY.CRON_EXPAND,
   poll_hacker_address: JOB_PRIORITY.POLL_HACKER,
   poll_downstream_address: JOB_PRIORITY.POLL_DOWNSTREAM,
@@ -274,7 +274,10 @@ async function previewMaintainOneHacker(
       const lastAudit = backfill.lastBackfillAuditAt
         ? new Date(backfill.lastBackfillAuditAt).getTime()
         : 0;
-      if (ts - lastAudit >= config.backfillHealAuditIntervalSec * 1000) {
+      if (
+        ts - lastAudit >= config.backfillHealAuditIntervalSec * 1000 &&
+        (await store.countActiveJobs("audit_hacker_backfill")) < config.maxPendingAuditGlobal
+      ) {
         wouldEnqueue.push("audit_hacker_backfill");
       }
     }

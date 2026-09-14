@@ -66,6 +66,7 @@ function baseConfig(): AppConfig {
     maxPendingExpandPerAddress: 2,
     maxPendingExpandGlobal: 40,
     maxPendingBackfillGlobal: 3,
+    maxPendingAuditGlobal: 1,
     pollSliceEveryNCrons: 4,
     ageBoostEnabled: true,
     ageBoostIntervalSec: 900,

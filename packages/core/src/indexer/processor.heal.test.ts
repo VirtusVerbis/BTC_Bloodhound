@@ -4,6 +4,7 @@ import type { AppConfig } from "../config.js";
 import { JOB_PRIORITY } from "../config.js";
 import type { Job, Store } from "@cointrace/db";
 import type { ChainRouter } from "../chain/router.js";
+import { BACKFILL_DEDUPE_TYPES } from "./jobClass.js";
 
 function baseConfig(): AppConfig {
   return {
@@ -73,6 +74,7 @@ function baseConfig(): AppConfig {
     d1BatchSize: 8,
     syncAddressesPerJob: 5,
     maxPendingBackfillGlobal: 3,
+    maxPendingAuditGlobal: 1,
   };
 }
 
@@ -85,6 +87,7 @@ describe("audit_hacker_backfill", () => {
       setExpandStatus: vi.fn(),
       upsertBackfillState: vi.fn(),
       getBackfillState: vi.fn().mockResolvedValue({ payload: null, backfillComplete: true }),
+      enqueueJobIfAbsent: vi.fn(),
       enqueueJob: vi.fn(),
       flushRecentHackerActivity: vi.fn(),
     } as unknown as Store;
@@ -115,11 +118,14 @@ describe("audit_hacker_backfill", () => {
 
     expect(store.updateBackfillAudit).toHaveBeenCalledWith(address, 100);
     expect(store.setExpandStatus).toHaveBeenCalledWith(address, "backfilling");
-    expect(store.enqueueJob).toHaveBeenCalledWith(
+    expect(store.enqueueJobIfAbsent).toHaveBeenCalledWith(
       "backfill_hacker_address",
       { address },
       JOB_PRIORITY.BACKFILL_HACKER,
+      undefined,
+      { dedupeTypes: [...BACKFILL_DEDUPE_TYPES], address },
     );
+    expect(store.enqueueJob).not.toHaveBeenCalled();
   });
 
   it("marks backfill complete when chain and indexed counts align within slack", async () => {
@@ -130,6 +136,7 @@ describe("audit_hacker_backfill", () => {
       setExpandStatus: vi.fn(),
       upsertBackfillState: vi.fn(),
       getBackfillState: vi.fn(),
+      enqueueJobIfAbsent: vi.fn(),
       enqueueJob: vi.fn(),
       flushRecentHackerActivity: vi.fn(),
     } as unknown as Store;
@@ -159,6 +166,7 @@ describe("audit_hacker_backfill", () => {
     await processJob(store, router, baseConfig(), job);
 
     expect(store.upsertBackfillState).toHaveBeenCalledWith(address, null, true);
+    expect(store.enqueueJobIfAbsent).not.toHaveBeenCalled();
     expect(store.enqueueJob).not.toHaveBeenCalled();
   });
 });

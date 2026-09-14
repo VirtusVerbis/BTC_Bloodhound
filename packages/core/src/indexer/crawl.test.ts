@@ -85,6 +85,7 @@ function baseConfig(): AppConfig {
     maxPendingExpandPerAddress: 2,
     maxPendingExpandGlobal: 40,
     maxPendingBackfillGlobal: 3,
+    maxPendingAuditGlobal: 1,
     pollSliceEveryNCrons: 4,
     indexerJobDetails: false,
     indexerLogColor: false,
@@ -249,7 +250,7 @@ describe("maintainOneHacker", () => {
     expect(store.enqueueJobIfAbsent).toHaveBeenCalledWith(
       "audit_hacker_backfill",
       { address: addr },
-      JOB_PRIORITY.BACKFILL_HACKER,
+      JOB_PRIORITY.AUDIT_HACKER_BACKFILL,
       undefined,
       expect.objectContaining({ ...BACKFILL_DEDUPE, address: addr }),
     );

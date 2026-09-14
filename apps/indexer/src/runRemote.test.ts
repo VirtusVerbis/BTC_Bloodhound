@@ -100,6 +100,7 @@ function minimalConfig(): AppConfig {
     d1BatchSize: 8,
     syncAddressesPerJob: 5,
     maxPendingBackfillGlobal: 3,
+    maxPendingAuditGlobal: 1,
     jobCpuGuardMs: 0,
   } as AppConfig;
 }

@@ -13,6 +13,7 @@ const config = loadConfig();
 describe("defaultPriorityForJobType", () => {
   it("returns canonical enqueue priority per job type", () => {
     expect(defaultPriorityForJobType("backfill_hacker_address")).toBe(JOB_PRIORITY.BACKFILL_HACKER);
+    expect(defaultPriorityForJobType("audit_hacker_backfill")).toBe(JOB_PRIORITY.AUDIT_HACKER_BACKFILL);
     expect(defaultPriorityForJobType("expand_downstream")).toBe(JOB_PRIORITY.CRON_EXPAND);
     expect(defaultPriorityForJobType("poll_hacker_address")).toBe(JOB_PRIORITY.POLL_HACKER);
     expect(defaultPriorityForJobType("refresh_live_balance")).toBe(JOB_PRIORITY.REFRESH_BALANCE);

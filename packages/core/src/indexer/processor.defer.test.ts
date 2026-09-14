@@ -74,6 +74,7 @@ function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     d1BatchSize: 8,
     syncAddressesPerJob: 5,
     maxPendingBackfillGlobal: 3,
+    maxPendingAuditGlobal: 1,
     ...overrides,
   };
 }

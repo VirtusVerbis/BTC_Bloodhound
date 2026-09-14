@@ -123,6 +123,7 @@ function openLocalStore(): Store {
     maxPendingExpandPerAddress: config.maxPendingExpandPerAddress,
     maxPendingExpandGlobal: config.maxPendingExpandGlobal,
     maxPendingBackfillGlobal: config.maxPendingBackfillGlobal,
+    maxPendingAuditGlobal: config.maxPendingAuditGlobal,
   });
 }
 

@@ -368,6 +368,7 @@ export interface StoreOptions {
   maxPendingExpandPerAddress?: number;
   maxPendingExpandGlobal?: number;
   maxPendingBackfillGlobal?: number;
+  maxPendingAuditGlobal?: number;
   d1BatchSize?: number;
   d1?: D1Binding;
   d1RowMeter?: D1RowMeter;
@@ -497,6 +498,7 @@ export class Store {
   private maxPendingExpandPerAddress: number;
   private maxPendingExpandGlobal: number;
   private maxPendingBackfillGlobal: number;
+  private maxPendingAuditGlobal: number;
   private d1BatchSize: number;
   private d1?: D1Binding;
   private subrequestBudget?: StoreOptions["subrequestBudget"];
@@ -512,6 +514,7 @@ export class Store {
     this.maxPendingExpandPerAddress = options?.maxPendingExpandPerAddress ?? 2;
     this.maxPendingExpandGlobal = options?.maxPendingExpandGlobal ?? 40;
     this.maxPendingBackfillGlobal = options?.maxPendingBackfillGlobal ?? 3;
+    this.maxPendingAuditGlobal = options?.maxPendingAuditGlobal ?? 1;
     this.d1BatchSize = options?.d1BatchSize ?? 8;
     this.d1 = options?.d1;
     this.subrequestBudget = options?.subrequestBudget;
@@ -556,6 +559,11 @@ export class Store {
     if (type === "backfill_hacker_address" && !continuation) {
       const globalBackfill = await this.countActiveJobs("backfill_hacker_address");
       if (globalBackfill >= this.maxPendingBackfillGlobal) return false;
+    }
+
+    if (type === "audit_hacker_backfill") {
+      const globalAudit = await this.countActiveJobs("audit_hacker_backfill");
+      if (globalAudit >= this.maxPendingAuditGlobal) return false;
     }
 
     const state = await this.getSchedulerState();

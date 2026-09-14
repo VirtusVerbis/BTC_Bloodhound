@@ -9,6 +9,7 @@ describe("queue cap", () => {
       maxPendingExpandPerAddress?: number;
       maxPendingExpandGlobal?: number;
       maxPendingBackfillGlobal?: number;
+      maxPendingAuditGlobal?: number;
     },
   ) {
     const { sqlite, db } = openDatabase(":memory:");
@@ -21,6 +22,7 @@ describe("queue cap", () => {
       maxPendingExpandPerAddress: opts?.maxPendingExpandPerAddress,
       maxPendingExpandGlobal: opts?.maxPendingExpandGlobal,
       maxPendingBackfillGlobal: opts?.maxPendingBackfillGlobal,
+      maxPendingAuditGlobal: opts?.maxPendingAuditGlobal,
     });
   }
 
@@ -133,6 +135,19 @@ describe("queue cap", () => {
       10,
     );
     expect(continuation).not.toBeNull();
+  });
+
+  it("blocks a second audit_hacker_backfill even for a different address", async () => {
+    const store = openStore({ maxQueueDepth: 20, maxPendingAuditGlobal: 1 });
+    expect(await store.enqueueJob("audit_hacker_backfill", { address: "bc1qa" }, 7)).not.toBeNull();
+    expect(await store.enqueueJob("audit_hacker_backfill", { address: "bc1qb" }, 7)).toBeNull();
+  });
+
+  it("allows a second audit when the cap is 2", async () => {
+    const store = openStore({ maxQueueDepth: 20, maxPendingAuditGlobal: 2 });
+    expect(await store.enqueueJob("audit_hacker_backfill", { address: "bc1qa" }, 7)).not.toBeNull();
+    expect(await store.enqueueJob("audit_hacker_backfill", { address: "bc1qb" }, 7)).not.toBeNull();
+    expect(await store.enqueueJob("audit_hacker_backfill", { address: "bc1qc" }, 7)).toBeNull();
   });
 
   it("bypasses the backfill cap when bypassQueueCap is set", async () => {

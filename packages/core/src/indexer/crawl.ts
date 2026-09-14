@@ -4,6 +4,7 @@ import { JOB_PRIORITY } from "../config.js";
 import type { ChainRouter } from "../chain/router.js";
 import { fetchMempoolBtcUsd } from "../price/mempoolPrices.js";
 import { buildBackfillJobPayload } from "./processor.js";
+import { BACKFILL_DEDUPE_TYPES } from "./jobClass.js";
 import { isRebuildActive } from "./rebuildMode.js";
 import { logCronDetail } from "./jobLog.js";
 import type { IndexerLogColorMode } from "./logColor.js";
@@ -17,8 +18,6 @@ export interface ScheduleDownstreamOpts {
   logColor?: boolean;
   logColorMode?: IndexerLogColorMode;
 }
-
-const BACKFILL_DEDUPE_TYPES = ["backfill_hacker_address", "audit_hacker_backfill"] as const;
 
 export interface ScheduleEnqueueCache {
   queueSchedulingPaused: boolean;
@@ -72,7 +71,7 @@ export async function maintainOneHacker(
       await store.enqueueJobIfAbsent(
         "audit_hacker_backfill",
         { address },
-        JOB_PRIORITY.BACKFILL_HACKER,
+        JOB_PRIORITY.AUDIT_HACKER_BACKFILL,
         undefined,
         { dedupeTypes: [...BACKFILL_DEDUPE_TYPES], address },
       );

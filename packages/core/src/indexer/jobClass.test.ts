@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { jobClassForType, isIngestContinuation, isIngestJobType, jobNeedsHackersSet } from "./jobClass.js";
+import { jobClassForType, isIngestContinuation, isIngestJobType, jobNeedsHackersSet, BACKFILL_DEDUPE_TYPES } from "./jobClass.js";
 
 describe("jobClassForType", () => {
   it("classifies ingest jobs", () => {
     expect(jobClassForType("backfill_hacker_address")).toBe("ingest");
     expect(jobClassForType("audit_hacker_backfill")).toBe("ingest");
     expect(jobClassForType("expand_downstream")).toBe("ingest");
+    expect(BACKFILL_DEDUPE_TYPES).toEqual(["backfill_hacker_address", "audit_hacker_backfill"]);
   });
 
   it("classifies maintenance jobs", () => {

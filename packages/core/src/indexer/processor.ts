@@ -32,7 +32,12 @@ import { normalizeBitcoinAddress } from "../util/address.js";
 import { formatErrorMessage } from "../util/error.js";
 import { logJobDefer, logJobDone, logJobFail, logJobStart } from "./jobLog.js";
 import type { IndexerLogColorMode } from "./logColor.js";
-import { isIngestJobType, jobNeedsHackersSet, MAINT_COSMETIC_JOB_TYPES } from "./jobClass.js";
+import {
+  BACKFILL_DEDUPE_TYPES,
+  isIngestJobType,
+  jobNeedsHackersSet,
+  MAINT_COSMETIC_JOB_TYPES,
+} from "./jobClass.js";
 import { toClaimAgeBoost } from "./jobAge.js";
 import {
   jobClaimMeta,
@@ -756,10 +761,12 @@ async function auditHackerBackfill(
   if (chainTxCount > indexedTxs + config.backfillHealTxSlack) {
     await store.setExpandStatus(address, "backfilling");
     await store.upsertBackfillState(address, null, false);
-    await store.enqueueJob(
+    await store.enqueueJobIfAbsent(
       "backfill_hacker_address",
       await buildBackfillJobPayload(store, address),
       JOB_PRIORITY.BACKFILL_HACKER,
+      undefined,
+      { dedupeTypes: [...BACKFILL_DEDUPE_TYPES], address },
     );
   } else {
     await store.upsertBackfillState(address, null, true);

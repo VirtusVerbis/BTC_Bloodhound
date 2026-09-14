@@ -72,6 +72,7 @@ function buildIndexer(
     maxPendingExpandPerAddress: config.maxPendingExpandPerAddress,
     maxPendingExpandGlobal: config.maxPendingExpandGlobal,
     maxPendingBackfillGlobal: config.maxPendingBackfillGlobal,
+    maxPendingAuditGlobal: config.maxPendingAuditGlobal,
     d1BatchSize: config.d1BatchSize,
     d1RowMeter,
   });

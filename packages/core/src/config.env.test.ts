@@ -62,6 +62,11 @@ describe("loadEnvFile via loadConfig", () => {
     expect(config.maxPendingBackfillGlobal).toBe(3);
   });
 
+  it("defaults maxPendingAuditGlobal to 1", () => {
+    const config = loadConfig({} as Record<string, string | undefined>);
+    expect(config.maxPendingAuditGlobal).toBe(1);
+  });
+
   it("resolves CF tier quota presets through loadConfig", () => {
     const free = loadConfig({ CF_WORKERS_TIER: "free" });
     expect(free.cfWorkersTier).toBe("free");

@@ -7,8 +7,9 @@ import { resolveCfTierQuotaConfig, type CfWorkersTier } from "./quota/cfTier.js"
 export const JOB_PRIORITY = {
   PROCESS_TX_REBUILD: 11,
   BACKFILL_HACKER: 10,
-  CRON_EXPAND: 5,
+  AUDIT_HACKER_BACKFILL: 7,
   POLL_HACKER: 6,
+  CRON_EXPAND: 5,
   POLL_DOWNSTREAM: 5,
   PROCESS_TX: 4,
   SYNC_COLDCARDWATCH: 3,
@@ -176,6 +177,8 @@ export interface AppConfig {
   maxPendingExpandGlobal: number;
   /** Max pending+running backfill_hacker_address jobs (non-continuation). */
   maxPendingBackfillGlobal: number;
+  /** Max pending+running audit_hacker_backfill jobs. */
+  maxPendingAuditGlobal: number;
   /** Every N maintenance cron ticks, ingest slot 0 skips ingest pick (poll slice). */
   pollSliceEveryNCrons: number;
   /** When true, maint/cosmetic jobs gain effective priority while waiting in queue. */
@@ -363,6 +366,7 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     maxPendingExpandPerAddress: Math.max(1, Number(env.MAX_PENDING_EXPAND_PER_ADDRESS ?? 2)),
     maxPendingExpandGlobal: Math.max(1, Number(env.MAX_PENDING_EXPAND_GLOBAL ?? 40)),
     maxPendingBackfillGlobal: Math.max(1, Number(env.MAX_PENDING_BACKFILL_GLOBAL ?? 3)),
+    maxPendingAuditGlobal: Math.max(1, Number(env.MAX_PENDING_AUDIT_GLOBAL ?? 1)),
     pollSliceEveryNCrons: Math.max(1, Number(env.POLL_SLICE_EVERY_N_CRONS ?? 4)),
     ageBoostEnabled: env.AGE_BOOST_ENABLED !== "0",
     ageBoostIntervalSec: Math.max(1, Number(env.AGE_BOOST_INTERVAL_SEC ?? 900)),
