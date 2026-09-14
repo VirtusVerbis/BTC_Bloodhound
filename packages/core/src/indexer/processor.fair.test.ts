@@ -65,6 +65,7 @@ function baseConfig(): AppConfig {
     queueSchedulingResumeDepth: 180,
     maxPendingExpandPerAddress: 2,
     maxPendingExpandGlobal: 40,
+    maxPendingBackfillGlobal: 3,
     pollSliceEveryNCrons: 4,
     ageBoostEnabled: true,
     ageBoostIntervalSec: 900,

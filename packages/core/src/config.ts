@@ -174,6 +174,8 @@ export interface AppConfig {
   maxPendingExpandPerAddress: number;
   /** Max pending+running expand_downstream jobs account-wide. */
   maxPendingExpandGlobal: number;
+  /** Max pending+running backfill_hacker_address jobs (non-continuation). */
+  maxPendingBackfillGlobal: number;
   /** Every N maintenance cron ticks, ingest slot 0 skips ingest pick (poll slice). */
   pollSliceEveryNCrons: number;
   /** When true, maint/cosmetic jobs gain effective priority while waiting in queue. */
@@ -360,6 +362,7 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     workersRequestDailyLimit: tierQuota.workersRequestDailyLimit,
     maxPendingExpandPerAddress: Math.max(1, Number(env.MAX_PENDING_EXPAND_PER_ADDRESS ?? 2)),
     maxPendingExpandGlobal: Math.max(1, Number(env.MAX_PENDING_EXPAND_GLOBAL ?? 40)),
+    maxPendingBackfillGlobal: Math.max(1, Number(env.MAX_PENDING_BACKFILL_GLOBAL ?? 3)),
     pollSliceEveryNCrons: Math.max(1, Number(env.POLL_SLICE_EVERY_N_CRONS ?? 4)),
     ageBoostEnabled: env.AGE_BOOST_ENABLED !== "0",
     ageBoostIntervalSec: Math.max(1, Number(env.AGE_BOOST_INTERVAL_SEC ?? 900)),

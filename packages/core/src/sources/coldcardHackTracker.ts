@@ -2,7 +2,7 @@ import type { Store } from "@cointrace/db";
 import { JOB_PRIORITY } from "../config.js";
 import { sha256Hex } from "../util/hash.js";
 import { normalizeBitcoinAddress } from "../util/address.js";
-import { insertAddressIfMissing } from "./insertIfMissing.js";
+import { ingestSourceHacker } from "./sourceDelta.js";
 import { instrumentedFetch, type SubrequestSink } from "../subrequest/instrumentedFetch.js";
 import type { JobSubrequestBudget } from "../indexer/subrequestBudget.js";
 
@@ -37,9 +37,13 @@ export async function fetchColdcardHackTracker(
     addresses.push(normalized);
   }
   addresses.sort();
-  const contentHash = await sha256Hex(`${body.updatedAt ?? ""}\n${addresses.join("\n")}`);
+  const contentHash = await coldcardHackTrackerContentHash(addresses);
 
   return { addresses, contentHash };
+}
+
+export function coldcardHackTrackerContentHash(addresses: string[]): Promise<string> {
+  return sha256Hex(addresses.join("\n"));
 }
 
 export interface ColdcardHackTrackerBatchPayload {
@@ -63,11 +67,13 @@ export async function enqueueColdcardHackTrackerBatchJobs(
   store: Store,
   data: ColdcardHackTrackerData,
   perJob: number,
+  lastAddressCount?: number,
 ): Promise<void> {
+  const addressCount = lastAddressCount ?? data.addresses.length;
   const chunks = chunkArray(data.addresses, perJob);
   if (chunks.length === 0) {
     await store.upsertSourceSync("coldcard_hack_tracker", {
-      lastAddressCount: data.addresses.length,
+      lastAddressCount: addressCount,
       lastContentHash: data.contentHash,
     });
     return;
@@ -81,7 +87,7 @@ export async function enqueueColdcardHackTrackerBatchJobs(
         contentHash: data.contentHash,
         addresses: chunks[i],
         finalize,
-        lastAddressCount: data.addresses.length,
+        lastAddressCount: addressCount,
         chunkIndex: i + 1,
         chunkTotal: chunks.length,
       },
@@ -118,23 +124,7 @@ export async function applyColdcardHackTrackerSyncBatch(
       return inserted;
     }
     const address = addresses[i]!;
-    const added = await insertAddressIfMissing(store, address, {
-      role: "hacker",
-      isFlaggedHacker: true,
-      source: "coldcard_hack_tracker",
-      hopFromHacker: 0,
-      expandStatus: "pending",
-    });
-    if (added) {
-      inserted++;
-      await store.enqueueJobIfAbsent(
-        "backfill_hacker_address",
-        { address },
-        JOB_PRIORITY.BACKFILL_HACKER,
-        undefined,
-        { address },
-      );
-    }
+    if (await ingestSourceHacker(store, address, "coldcard_hack_tracker")) inserted++;
   }
   if (payload.finalize) {
     await store.upsertSourceSync("coldcard_hack_tracker", {
@@ -148,23 +138,7 @@ export async function applyColdcardHackTrackerSyncBatch(
 export async function applyColdcardHackTrackerSync(store: Store, data: ColdcardHackTrackerData): Promise<number> {
   let inserted = 0;
   for (const address of data.addresses) {
-    const added = await insertAddressIfMissing(store, address, {
-      role: "hacker",
-      isFlaggedHacker: true,
-      source: "coldcard_hack_tracker",
-      hopFromHacker: 0,
-      expandStatus: "pending",
-    });
-    if (added) {
-      inserted++;
-      await store.enqueueJobIfAbsent(
-        "backfill_hacker_address",
-        { address },
-        JOB_PRIORITY.BACKFILL_HACKER,
-        undefined,
-        { address },
-      );
-    }
+    if (await ingestSourceHacker(store, address, "coldcard_hack_tracker")) inserted++;
   }
 
   await store.upsertSourceSync("coldcard_hack_tracker", {

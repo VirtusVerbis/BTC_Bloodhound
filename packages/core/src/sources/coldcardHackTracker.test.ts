@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Store } from "@cointrace/db";
-import { enqueueColdcardHackTrackerBatchJobs } from "./coldcardHackTracker.js";
+import { enqueueColdcardHackTrackerBatchJobs, coldcardHackTrackerContentHash } from "./coldcardHackTracker.js";
+import { sha256Hex } from "../util/hash.js";
 
 describe("enqueueColdcardHackTrackerBatchJobs", () => {
   it("enqueues chunk jobs with chunkIndex and chunkTotal", async () => {
@@ -33,5 +34,12 @@ describe("enqueueColdcardHackTrackerBatchJobs", () => {
       chunkTotal: 3,
       finalize: true,
     });
+  });
+
+  it("hashes the address set without snapshot updatedAt", async () => {
+    const addresses = ["bc1qa", "bc1qb"];
+    const hash = await coldcardHackTrackerContentHash(addresses);
+    expect(hash).toBe(await sha256Hex(addresses.join("\n")));
+    expect(hash).not.toBe(await sha256Hex(`2026-01-01T00:00:00Z\n${addresses.join("\n")}`));
   });
 });

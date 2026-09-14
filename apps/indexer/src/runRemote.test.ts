@@ -99,6 +99,7 @@ function minimalConfig(): AppConfig {
     maxVoutCountSkipGetTx: 20,
     d1BatchSize: 8,
     syncAddressesPerJob: 5,
+    maxPendingBackfillGlobal: 3,
     jobCpuGuardMs: 0,
   } as AppConfig;
 }

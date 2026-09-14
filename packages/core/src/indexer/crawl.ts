@@ -240,8 +240,19 @@ export async function scheduleDownstreamCrawl(
   const hackersForCrawl = hackers;
   if (hackersForCrawl.length > 0) {
     const idx = await store.claimNextHackerPollIndex(hackersForCrawl.length);
+    const picked = hackersForCrawl[idx]!;
+    if (!enqueueCache.queueSchedulingPaused) {
+      const activeBackfills = await store.countActiveJobs("backfill_hacker_address");
+      if (activeBackfills < config.maxPendingBackfillGlobal) {
+        const addr = await store.getAddress(picked.address);
+        const status = addr?.expandStatus;
+        if (status === "pending" || status === "backfilling") {
+          await enqueueBackfillResume(store, picked.address);
+        }
+      }
+    }
     const frontier = await store.getCrawlEnqueueCandidates(
-      hackersForCrawl[idx]!.address,
+      picked.address,
       config.crawlEnqueuePerCron,
       config.maxCrawlDepth,
       config.minExpandSats,

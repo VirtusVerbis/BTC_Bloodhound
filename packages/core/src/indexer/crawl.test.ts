@@ -84,6 +84,7 @@ function baseConfig(): AppConfig {
     queueSoftThrottleDepth: 80,
     maxPendingExpandPerAddress: 2,
     maxPendingExpandGlobal: 40,
+    maxPendingBackfillGlobal: 3,
     pollSliceEveryNCrons: 4,
     indexerJobDetails: false,
     indexerLogColor: false,
@@ -432,6 +433,55 @@ describe("scheduleDownstreamCrawl", () => {
       JOB_PRIORITY.BACKFILL_HACKER,
       undefined,
       expect.objectContaining({ ...BACKFILL_DEDUPE, address: addr }),
+    );
+  });
+
+  it("refills one pending hacker backfill when under the global cap", async () => {
+    const addr = "bc1qpending";
+    const store = mockStore({
+      incrementMaintenanceCronCounter: vi.fn().mockResolvedValue(7),
+      listHackersCached: vi.fn().mockResolvedValue([{ address: addr }]),
+      getAddress: vi.fn().mockResolvedValue({ address: addr, expandStatus: "pending" }),
+      getBackfillState: vi.fn().mockResolvedValue({ payload: null, backfillComplete: false }),
+      getSourceSync: vi.fn().mockResolvedValue({ lastSyncAt: new Date().toISOString() }),
+      countActiveJobs: vi.fn().mockResolvedValue(1),
+      claimNextHackerPollIndex: vi.fn().mockResolvedValue(0),
+      getCrawlEnqueueCandidates: vi.fn().mockResolvedValue([]),
+      listDownstreamForPoll: vi.fn().mockResolvedValue([]),
+    });
+
+    await scheduleDownstreamCrawl(store, baseConfig(), unlimitedBudget, 0);
+
+    expect(store.enqueueJobIfAbsent).toHaveBeenCalledWith(
+      "backfill_hacker_address",
+      { address: addr },
+      JOB_PRIORITY.BACKFILL_HACKER,
+      undefined,
+      expect.objectContaining({ ...BACKFILL_DEDUPE, address: addr }),
+    );
+  });
+
+  it("does not refill backfill when the global cap is reached", async () => {
+    const addr = "bc1qpending";
+    const store = mockStore({
+      incrementMaintenanceCronCounter: vi.fn().mockResolvedValue(7),
+      listHackersCached: vi.fn().mockResolvedValue([{ address: addr }]),
+      getAddress: vi.fn().mockResolvedValue({ address: addr, expandStatus: "pending" }),
+      getSourceSync: vi.fn().mockResolvedValue({ lastSyncAt: new Date().toISOString() }),
+      countActiveJobs: vi.fn().mockResolvedValue(3),
+      claimNextHackerPollIndex: vi.fn().mockResolvedValue(0),
+      getCrawlEnqueueCandidates: vi.fn().mockResolvedValue([]),
+      listDownstreamForPoll: vi.fn().mockResolvedValue([]),
+    });
+
+    await scheduleDownstreamCrawl(store, baseConfig(), unlimitedBudget, 0);
+
+    expect(store.enqueueJobIfAbsent).not.toHaveBeenCalledWith(
+      "backfill_hacker_address",
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
     );
   });
 

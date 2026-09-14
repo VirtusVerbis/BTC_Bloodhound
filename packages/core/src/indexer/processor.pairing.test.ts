@@ -74,6 +74,7 @@ function baseConfig(): AppConfig {
     maxGraphEdgesPerTx: 0,
     d1BatchSize: 8,
     syncAddressesPerJob: 5,
+    maxPendingBackfillGlobal: 3,
     jobCpuGuardMs: 0,
     recentHackersLimit: 5,
     hackersPollMs: 3_600_000,

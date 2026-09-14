@@ -82,6 +82,7 @@ function baseConfig(): AppConfig {
     maxGraphEdgesPerTx: 0,
     d1BatchSize: 8,
     syncAddressesPerJob: 5,
+    maxPendingBackfillGlobal: 3,
   };
 }
 

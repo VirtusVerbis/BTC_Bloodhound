@@ -117,7 +117,13 @@ function openLocalStore(): Store {
   mkdirSync(path.dirname(dbPath), { recursive: true });
   const { sqlite, db } = openDatabase(dbPath);
   runMigrations(sqlite);
-  return new Store(db, { maxQueueDepth: config.maxQueueDepth });
+  return new Store(db, {
+    maxQueueDepth: config.maxQueueDepth,
+    queueSchedulingResumeDepth: config.queueSchedulingResumeDepth,
+    maxPendingExpandPerAddress: config.maxPendingExpandPerAddress,
+    maxPendingExpandGlobal: config.maxPendingExpandGlobal,
+    maxPendingBackfillGlobal: config.maxPendingBackfillGlobal,
+  });
 }
 
 function openChainRouter(store: Store): ChainRouter {

@@ -45,6 +45,17 @@ describe("addHacker / clearQueue / removeHacker", () => {
     expect(await store.countActiveJobs("backfill_hacker_address")).toBe(1);
   });
 
+  it("bypasses the global backfill cap", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db, { maxPendingBackfillGlobal: 1, maxQueueDepth: 20 });
+    const first = await addHacker(store, { address: H1 });
+    const second = await addHacker(store, { address: H2 });
+    expect(first.enqueuedBackfill).toBe(true);
+    expect(second.enqueuedBackfill).toBe(true);
+    expect(await store.countActiveJobs("backfill_hacker_address")).toBe(2);
+  });
+
   it("clearQueue removes pending/running only", async () => {
     const store = await freshStore();
     const doneId = await store.enqueueJob("refresh_btc_usd_price", {}, 1);

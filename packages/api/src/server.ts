@@ -15,8 +15,9 @@ runMigrations(sqlite);
 const store = new Store(db, {
   maxQueueDepth: config.maxQueueDepth,
   queueSchedulingResumeDepth: config.queueSchedulingResumeDepth,
-  maxPendingExpandPerAddress: config.maxPendingExpandPerAddress,
-  maxPendingExpandGlobal: config.maxPendingExpandGlobal,
+    maxPendingExpandPerAddress: config.maxPendingExpandPerAddress,
+    maxPendingExpandGlobal: config.maxPendingExpandGlobal,
+    maxPendingBackfillGlobal: config.maxPendingBackfillGlobal,
 });
 const app = createApp(store, config);
 

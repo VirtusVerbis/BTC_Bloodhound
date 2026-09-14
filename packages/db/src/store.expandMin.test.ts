@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { openDatabase, runMigrations, Store } from "./index.js";
 
 describe("getCrawlEnqueueCandidates min expand", () => {
-  it("includes the pending hacker and hop-1 above the floor, largest first", async () => {
+  it("includes hop-1 above the floor, largest first, and omits the pending hacker", async () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);
     const store = new Store(db);
@@ -54,7 +54,7 @@ describe("getCrawlEnqueueCandidates min expand", () => {
     });
 
     const rows = await store.getCrawlEnqueueCandidates("hack1", 10, 5, 100_000);
-    expect(rows.map((r) => r.address)).toEqual(["hack1", "big", "mid"]);
+    expect(rows.map((r) => r.address)).toEqual(["big", "mid"]);
   });
 });
 

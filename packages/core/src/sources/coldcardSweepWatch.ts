@@ -3,6 +3,7 @@ import { JOB_PRIORITY } from "../config.js";
 import { sha256Hex } from "../util/hash.js";
 import { normalizeBitcoinAddress } from "../util/address.js";
 import { insertAddressIfMissing } from "./insertIfMissing.js";
+import { ingestSourceHacker } from "./sourceDelta.js";
 import { instrumentedFetch, type SubrequestSink } from "../subrequest/instrumentedFetch.js";
 import type { JobSubrequestBudget } from "../indexer/subrequestBudget.js";
 
@@ -84,7 +85,9 @@ export async function enqueueColdcardSweepWatchBatchJobs(
   store: Store,
   data: ColdcardSweepWatchData,
   perJob: number,
+  lastAddressCount?: number,
 ): Promise<void> {
+  const addressCount = lastAddressCount ?? data.collectors.length + data.vaults.length;
   const jobs: ColdcardSweepWatchBatchPayload[] = [];
   for (const chunk of chunkArray(data.collectors, perJob)) {
     jobs.push({ contentHash: data.contentHash, collectors: chunk });
@@ -94,14 +97,14 @@ export async function enqueueColdcardSweepWatchBatchJobs(
   }
   if (jobs.length === 0) {
     await store.upsertSourceSync("coldcard_sweep_watch", {
-      lastAddressCount: data.collectors.length + data.vaults.length,
+      lastAddressCount: addressCount,
       lastContentHash: data.contentHash,
     });
     return;
   }
   const last = jobs[jobs.length - 1]!;
   last.finalize = true;
-  last.lastAddressCount = data.collectors.length + data.vaults.length;
+  last.lastAddressCount = addressCount;
   for (let i = 0; i < jobs.length; i++) {
     await store.enqueueJob(
       "sync_vercel_trackers",
@@ -147,23 +150,7 @@ export async function applyColdcardSweepWatchSyncBatch(
       return inserted;
     }
     const address = collectors[i]!;
-    const added = await insertAddressIfMissing(store, address, {
-      role: "hacker",
-      isFlaggedHacker: true,
-      source: "coldcard_sweep_watch",
-      hopFromHacker: 0,
-      expandStatus: "pending",
-    });
-    if (added) {
-      inserted++;
-      await store.enqueueJobIfAbsent(
-        "backfill_hacker_address",
-        { address },
-        JOB_PRIORITY.BACKFILL_HACKER,
-        undefined,
-        { address },
-      );
-    }
+    if (await ingestSourceHacker(store, address, "coldcard_sweep_watch")) inserted++;
   }
 
   if ((payload.vaults?.length ?? 0) > 0) {
@@ -211,23 +198,7 @@ export async function applyColdcardSweepWatchSync(store: Store, data: ColdcardSw
   let inserted = 0;
 
   for (const address of data.collectors) {
-    const added = await insertAddressIfMissing(store, address, {
-      role: "hacker",
-      isFlaggedHacker: true,
-      source: "coldcard_sweep_watch",
-      hopFromHacker: 0,
-      expandStatus: "pending",
-    });
-    if (added) {
-      inserted++;
-      await store.enqueueJobIfAbsent(
-        "backfill_hacker_address",
-        { address },
-        JOB_PRIORITY.BACKFILL_HACKER,
-        undefined,
-        { address },
-      );
-    }
+    if (await ingestSourceHacker(store, address, "coldcard_sweep_watch")) inserted++;
   }
 
   for (const address of data.vaults) {

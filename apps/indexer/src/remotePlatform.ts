@@ -58,6 +58,7 @@ export async function openRemoteProductionStore(
     queueSchedulingResumeDepth: config.queueSchedulingResumeDepth,
     maxPendingExpandPerAddress: config.maxPendingExpandPerAddress,
     maxPendingExpandGlobal: config.maxPendingExpandGlobal,
+    maxPendingBackfillGlobal: config.maxPendingBackfillGlobal,
     d1BatchSize: config.d1BatchSize,
     d1RowMeter: opts?.d1RowMeter,
   });

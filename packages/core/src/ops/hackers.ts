@@ -60,7 +60,7 @@ export async function addHacker(
     { address },
     JOB_PRIORITY.BACKFILL_HACKER,
     undefined,
-    { address },
+    { address, bypassQueueCap: true },
   );
 
   return { address, upserted: true, enqueuedBackfill: jobId != null };

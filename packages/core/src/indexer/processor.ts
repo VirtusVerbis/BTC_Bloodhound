@@ -10,6 +10,11 @@ import { getHackerAddressSet, processTxForHackTrace } from "../graph/builder.js"
 import { qualifiesForExpand } from "../graph/expandSkip.js";
 import { applyColdcardWatchSync, applyColdcardWatchSyncBatch, enqueueColdcardWatchBatchJobs, fetchColdcardWatch } from "../sources/coldcardwatch.js";
 import {
+  partitionSourceHackers,
+  partitionSourceMissing,
+  sourceDeltaEmpty,
+} from "../sources/sourceDelta.js";
+import {
   applyColdcardHackTrackerSync,
   applyColdcardHackTrackerSyncBatch,
   enqueueColdcardHackTrackerBatchJobs,
@@ -1411,8 +1416,32 @@ async function syncColdcardwatch(
   }
   const data = await fetchColdcardWatch(config.coldcardwatchBase, store);
   const prev = await store.getSourceSync("coldcardwatch");
-  if (prev?.lastContentHash === data.contentHash) return;
-  await enqueueColdcardWatchBatchJobs(store, data, config.syncAddressesPerJob);
+  const lastAddressCount = data.collectors.length + data.victims.length;
+  if (prev?.lastContentHash === data.contentHash) {
+    await store.upsertSourceSync("coldcardwatch", { lastContentHash: data.contentHash });
+    return;
+  }
+  const existing = await store.getAddressesMap([
+    ...data.collectors,
+    ...data.victims,
+    ...data.downstream,
+  ]);
+  const collectors = partitionSourceHackers(data.collectors, existing).ingest;
+  const victims = partitionSourceMissing(data.victims, existing).missing;
+  const downstream = partitionSourceMissing(data.downstream, existing).missing;
+  if (sourceDeltaEmpty({ hackers: collectors, victims, downstream })) {
+    await store.upsertSourceSync("coldcardwatch", {
+      lastAddressCount,
+      lastContentHash: data.contentHash,
+    });
+    return;
+  }
+  await enqueueColdcardWatchBatchJobs(
+    store,
+    { collectors, victims, downstream, contentHash: data.contentHash },
+    config.syncAddressesPerJob,
+    lastAddressCount,
+  );
 }
 
 async function syncVercelTrackers(
@@ -1447,10 +1476,47 @@ async function syncVercelTrackers(
   const prevSweep = await store.getSourceSync("coldcard_sweep_watch");
   const hackUnchanged = prevHack?.lastContentHash === hackData.contentHash;
   const sweepUnchanged = prevSweep?.lastContentHash === sweepData.contentHash;
-  if (hackUnchanged && sweepUnchanged) return;
+  if (hackUnchanged && sweepUnchanged) {
+    await store.upsertSourceSync("coldcard_hack_tracker", { lastContentHash: hackData.contentHash });
+    await store.upsertSourceSync("coldcard_sweep_watch", { lastContentHash: sweepData.contentHash });
+    return;
+  }
 
-  if (!hackUnchanged) await enqueueColdcardHackTrackerBatchJobs(store, hackData, config.syncAddressesPerJob);
-  if (!sweepUnchanged) await enqueueColdcardSweepWatchBatchJobs(store, sweepData, config.syncAddressesPerJob);
+  if (!hackUnchanged) {
+    const existing = await store.getAddressesMap(hackData.addresses);
+    const addresses = partitionSourceHackers(hackData.addresses, existing).ingest;
+    if (addresses.length === 0) {
+      await store.upsertSourceSync("coldcard_hack_tracker", {
+        lastAddressCount: hackData.addresses.length,
+        lastContentHash: hackData.contentHash,
+      });
+    } else {
+      await enqueueColdcardHackTrackerBatchJobs(
+        store,
+        { addresses, contentHash: hackData.contentHash },
+        config.syncAddressesPerJob,
+        hackData.addresses.length,
+      );
+    }
+  }
+  if (!sweepUnchanged) {
+    const existing = await store.getAddressesMap([...sweepData.collectors, ...sweepData.vaults]);
+    const collectors = partitionSourceHackers(sweepData.collectors, existing).ingest;
+    const vaults = partitionSourceMissing(sweepData.vaults, existing).missing;
+    if (sourceDeltaEmpty({ hackers: collectors, victims: vaults })) {
+      await store.upsertSourceSync("coldcard_sweep_watch", {
+        lastAddressCount: sweepData.collectors.length + sweepData.vaults.length,
+        lastContentHash: sweepData.contentHash,
+      });
+    } else {
+      await enqueueColdcardSweepWatchBatchJobs(
+        store,
+        { collectors, vaults, contentHash: sweepData.contentHash },
+        config.syncAddressesPerJob,
+        sweepData.collectors.length + sweepData.vaults.length,
+      );
+    }
+  }
 }
 
 function captureOpReturnJobOpts(

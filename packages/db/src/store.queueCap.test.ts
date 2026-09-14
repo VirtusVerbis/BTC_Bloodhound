@@ -8,6 +8,7 @@ describe("queue cap", () => {
       queueSchedulingResumeDepth?: number;
       maxPendingExpandPerAddress?: number;
       maxPendingExpandGlobal?: number;
+      maxPendingBackfillGlobal?: number;
     },
   ) {
     const { sqlite, db } = openDatabase(":memory:");
@@ -19,6 +20,7 @@ describe("queue cap", () => {
         opts?.queueSchedulingResumeDepth ?? Math.floor(maxQueueDepth / 2),
       maxPendingExpandPerAddress: opts?.maxPendingExpandPerAddress,
       maxPendingExpandGlobal: opts?.maxPendingExpandGlobal,
+      maxPendingBackfillGlobal: opts?.maxPendingBackfillGlobal,
     });
   }
 
@@ -116,6 +118,34 @@ describe("queue cap", () => {
     await store.enqueueJob("expand_downstream", { address: "bc1qhot" }, 5);
     const blocked = await store.enqueueJob("expand_downstream", { address: "bc1qhot" }, 5);
     expect(blocked).toBeNull();
+  });
+
+  it("blocks a fourth new backfill while allowing continuations", async () => {
+    const store = openStore({ maxQueueDepth: 20, maxPendingBackfillGlobal: 3 });
+    expect(await store.enqueueJob("backfill_hacker_address", { address: "bc1qa" }, 10)).not.toBeNull();
+    expect(await store.enqueueJob("backfill_hacker_address", { address: "bc1qb" }, 10)).not.toBeNull();
+    expect(await store.enqueueJob("backfill_hacker_address", { address: "bc1qc" }, 10)).not.toBeNull();
+    expect(await store.enqueueJob("backfill_hacker_address", { address: "bc1qd" }, 10)).toBeNull();
+
+    const continuation = await store.enqueueJob(
+      "backfill_hacker_address",
+      { address: "bc1qa", chainCursor: "txabc", pendingTxids: ["tx1"] },
+      10,
+    );
+    expect(continuation).not.toBeNull();
+  });
+
+  it("bypasses the backfill cap when bypassQueueCap is set", async () => {
+    const store = openStore({ maxQueueDepth: 20, maxPendingBackfillGlobal: 1 });
+    expect(await store.enqueueJob("backfill_hacker_address", { address: "bc1qa" }, 10)).not.toBeNull();
+    const bypassed = await store.enqueueJob(
+      "backfill_hacker_address",
+      { address: "bc1qb" },
+      10,
+      undefined,
+      { bypassQueueCap: true },
+    );
+    expect(bypassed).not.toBeNull();
   });
 
   it("records per-provider API thresholds", async () => {

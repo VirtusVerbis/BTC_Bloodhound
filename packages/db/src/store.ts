@@ -367,6 +367,7 @@ export interface StoreOptions {
   queueSchedulingResumeDepth?: number;
   maxPendingExpandPerAddress?: number;
   maxPendingExpandGlobal?: number;
+  maxPendingBackfillGlobal?: number;
   d1BatchSize?: number;
   d1?: D1Binding;
   d1RowMeter?: D1RowMeter;
@@ -495,6 +496,7 @@ export class Store {
   private queueSchedulingResumeDepth: number;
   private maxPendingExpandPerAddress: number;
   private maxPendingExpandGlobal: number;
+  private maxPendingBackfillGlobal: number;
   private d1BatchSize: number;
   private d1?: D1Binding;
   private subrequestBudget?: StoreOptions["subrequestBudget"];
@@ -509,6 +511,7 @@ export class Store {
       options?.queueSchedulingResumeDepth ?? Math.floor(this.maxQueueDepth / 2);
     this.maxPendingExpandPerAddress = options?.maxPendingExpandPerAddress ?? 2;
     this.maxPendingExpandGlobal = options?.maxPendingExpandGlobal ?? 40;
+    this.maxPendingBackfillGlobal = options?.maxPendingBackfillGlobal ?? 3;
     this.d1BatchSize = options?.d1BatchSize ?? 8;
     this.d1 = options?.d1;
     this.subrequestBudget = options?.subrequestBudget;
@@ -548,6 +551,11 @@ export class Store {
       }
       const globalExpand = await this.countActiveJobs("expand_downstream");
       if (globalExpand >= this.maxPendingExpandGlobal) return false;
+    }
+
+    if (type === "backfill_hacker_address" && !continuation) {
+      const globalBackfill = await this.countActiveJobs("backfill_hacker_address");
+      if (globalBackfill >= this.maxPendingBackfillGlobal) return false;
     }
 
     const state = await this.getSchedulerState();
@@ -3849,7 +3857,7 @@ export class Store {
       .all();
   }
 
-  /** Pending expand candidates for one flagged hacker (self + hop-1 downstream). */
+  /** Pending hop-1 expand candidates for one flagged hacker (hacker history is backfill-only). */
   async getCrawlEnqueueCandidates(
     hacker: string,
     limit: number,
@@ -3860,16 +3868,7 @@ export class Store {
     const out: { address: string }[] = [];
     const seen = new Set<string>();
 
-    const hackerRow = await this.getAddress(hacker);
-    if (hackerRow?.isFlaggedHacker) {
-      const status = hackerRow.expandStatus ?? "pending";
-      if (status === "pending" || status === "backfilling") {
-        out.push({ address: hacker });
-        seen.add(hacker);
-      }
-    }
-
-    if (out.length < limit && maxDepth > 1) {
+    if (maxDepth > 1) {
       const remaining = limit - out.length;
       const floor = Math.max(0, Math.floor(minExpandSats));
       const depth = Math.floor(maxDepth);

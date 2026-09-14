@@ -22,6 +22,7 @@ export * from "./indexer/maintenanceCli.js";
 export * from "./subrequest/instrumentedFetch.js";
 export * from "./indexer/tickStats.js";
 export * from "./scheduler/eta.js";
+export * from "./sources/sourceDelta.js";
 export * from "./sources/coldcardwatch.js";
 export * from "./sources/coldcardHackTracker.js";
 export * from "./sources/coldcardSweepWatch.js";
