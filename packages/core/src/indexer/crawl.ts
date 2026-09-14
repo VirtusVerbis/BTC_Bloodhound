@@ -9,6 +9,7 @@ import { isRebuildActive } from "./rebuildMode.js";
 import { logCronDetail } from "./jobLog.js";
 import type { IndexerLogColorMode } from "./logColor.js";
 import { formatMaintenanceLogLine, runScheduledMaintenance } from "./maintenance.js";
+import { shouldEnqueueRefreshLiveBalance } from "./addressStats.js";
 import type { SubrequestBudget } from "./subrequestBudget.js";
 import type { BtcScheduleMode, ScheduleTickStats } from "./tickStats.js";
 
@@ -59,27 +60,43 @@ export async function maintainOneHacker(
   const status = addr?.expandStatus ?? "pending";
   const backfill = await store.getBackfillState(address);
 
+  const auditDue =
+    status === "expanded" &&
+    (backfill?.backfillComplete ?? false) &&
+    ts -
+      (backfill?.lastBackfillAuditAt ? new Date(backfill.lastBackfillAuditAt).getTime() : 0) >=
+      config.backfillHealAuditIntervalSec * 1000;
+
   if (status === "pending" || status === "backfilling") {
     await enqueueBackfillResume(store, address);
   } else if (status === "expanded" && !backfill?.backfillComplete) {
     await enqueueBackfillResume(store, address);
-  } else if (status === "expanded" && backfill?.backfillComplete) {
-    const lastAudit = backfill.lastBackfillAuditAt
-      ? new Date(backfill.lastBackfillAuditAt).getTime()
-      : 0;
-    if (ts - lastAudit >= config.backfillHealAuditIntervalSec * 1000) {
-      await store.enqueueJobIfAbsent(
-        "audit_hacker_backfill",
-        { address },
-        JOB_PRIORITY.AUDIT_HACKER_BACKFILL,
-        undefined,
-        { dedupeTypes: [...BACKFILL_DEDUPE_TYPES], address },
-      );
-    }
+  } else if (auditDue) {
+    await store.enqueueJobIfAbsent(
+      "audit_hacker_backfill",
+      { address },
+      JOB_PRIORITY.AUDIT_HACKER_BACKFILL,
+      undefined,
+      { dedupeTypes: [...BACKFILL_DEDUPE_TYPES], address },
+    );
   }
 
+  const backfillState = await store.getBackfillState(address);
+  const sync = backfillState?.backfillComplete ? await store.getSyncState(address) : null;
+  const lastPoll = sync?.lastPolledAt ? new Date(sync.lastPolledAt).getTime() : 0;
+  const pollDue =
+    (backfillState?.backfillComplete ?? false) &&
+    ts - lastPoll >= config.cronIntervalSec * 1000;
+
   const balanceAt = h.liveBalanceAt ? new Date(h.liveBalanceAt).getTime() : 0;
-  if (ts - balanceAt >= config.balanceRefreshIntervalSec * 1000) {
+  const balanceStale = ts - balanceAt >= config.balanceRefreshIntervalSec * 1000;
+  if (
+    shouldEnqueueRefreshLiveBalance({
+      balanceStale,
+      pollDue,
+      auditDue,
+    })
+  ) {
     await store.enqueueJobIfAbsent(
       "refresh_live_balance",
       { address },
@@ -89,19 +106,14 @@ export async function maintainOneHacker(
     );
   }
 
-  const backfillState = await store.getBackfillState(address);
-  if (backfillState?.backfillComplete) {
-    const sync = await store.getSyncState(address);
-    const lastPoll = sync?.lastPolledAt ? new Date(sync.lastPolledAt).getTime() : 0;
-    if (ts - lastPoll >= config.cronIntervalSec * 1000) {
-      await store.enqueueJobIfAbsent(
-        "poll_hacker_address",
-        { address },
-        JOB_PRIORITY.POLL_HACKER,
-        undefined,
-        { address },
-      );
-    }
+  if (pollDue) {
+    await store.enqueueJobIfAbsent(
+      "poll_hacker_address",
+      { address },
+      JOB_PRIORITY.POLL_HACKER,
+      undefined,
+      { address },
+    );
   }
 }
 

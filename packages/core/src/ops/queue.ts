@@ -2,6 +2,7 @@ import type { Job, Store } from "@cointrace/db";
 import type { AppConfig, JobType } from "../config.js";
 import { JOB_PRIORITY } from "../config.js";
 import { jobClassForType, isIngestContinuation } from "../indexer/jobClass.js";
+import { shouldEnqueueRefreshLiveBalance } from "../indexer/addressStats.js";
 import { isRebuildActive } from "../indexer/rebuildMode.js";
 import { jobEtaFields } from "../scheduler/eta.js";
 
@@ -258,6 +259,8 @@ async function previewMaintainOneHacker(
   const wouldEnqueue: string[] = [];
   const address = h.address;
 
+  let auditDue = false;
+  let backfillDue = false;
   if (
     !(await store.hasPendingJob("backfill_hacker_address", address)) &&
     !(await store.hasPendingJob("audit_hacker_backfill", address))
@@ -267,9 +270,9 @@ async function previewMaintainOneHacker(
     const backfill = await store.getBackfillState(address);
 
     if (status === "pending" || status === "backfilling") {
-      wouldEnqueue.push("backfill_hacker_address");
+      backfillDue = true;
     } else if (status === "expanded" && !backfill?.backfillComplete) {
-      wouldEnqueue.push("backfill_hacker_address");
+      backfillDue = true;
     } else if (status === "expanded" && backfill?.backfillComplete) {
       const lastAudit = backfill.lastBackfillAuditAt
         ? new Date(backfill.lastBackfillAuditAt).getTime()
@@ -278,29 +281,31 @@ async function previewMaintainOneHacker(
         ts - lastAudit >= config.backfillHealAuditIntervalSec * 1000 &&
         (await store.countActiveJobs("audit_hacker_backfill")) < config.maxPendingAuditGlobal
       ) {
-        wouldEnqueue.push("audit_hacker_backfill");
+        auditDue = true;
       }
     }
   }
+  if (backfillDue) wouldEnqueue.push("backfill_hacker_address");
+  if (auditDue) wouldEnqueue.push("audit_hacker_backfill");
+
+  const backfill = await store.getBackfillState(address);
+  const sync = backfill?.backfillComplete ? await store.getSyncState(address) : null;
+  const lastPoll = sync?.lastPolledAt ? new Date(sync.lastPolledAt).getTime() : 0;
+  const pollDue =
+    (backfill?.backfillComplete ?? false) &&
+    ts - lastPoll >= config.cronIntervalSec * 1000 &&
+    !(await store.hasPendingJob("poll_hacker_address", address));
 
   const balanceAt = h.liveBalanceAt ? new Date(h.liveBalanceAt).getTime() : 0;
-  if (
+  const balanceStale =
     ts - balanceAt >= config.balanceRefreshIntervalSec * 1000 &&
-    !(await store.hasPendingJob("refresh_live_balance", address))
-  ) {
+    !(await store.hasPendingJob("refresh_live_balance", address));
+  if (shouldEnqueueRefreshLiveBalance({ balanceStale, pollDue, auditDue })) {
     wouldEnqueue.push("refresh_live_balance");
   }
 
-  const backfill = await store.getBackfillState(address);
-  if (backfill?.backfillComplete) {
-    const sync = await store.getSyncState(address);
-    const lastPoll = sync?.lastPolledAt ? new Date(sync.lastPolledAt).getTime() : 0;
-    if (
-      ts - lastPoll >= config.cronIntervalSec * 1000 &&
-      !(await store.hasPendingJob("poll_hacker_address", address))
-    ) {
-      wouldEnqueue.push("poll_hacker_address");
-    }
+  if (pollDue) {
+    wouldEnqueue.push("poll_hacker_address");
   }
 
   return wouldEnqueue;

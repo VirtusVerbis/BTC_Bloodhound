@@ -327,6 +327,8 @@ FROM addresses WHERE is_flagged_hacker = 1 ORDER BY total_received_sats DESC;`,
         row.last_backfill_audit_at != null ? str(row.last_backfill_audit_at) : null,
       chainTxCountAtAudit:
         row.chain_tx_count_at_audit != null ? num(row.chain_tx_count_at_audit) : null,
+      lastObservedTxCount:
+        row.last_observed_tx_count != null ? num(row.last_observed_tx_count) : null,
     };
   }
 

@@ -321,3 +321,27 @@ describe("listDownstreamForPoll", () => {
     expect(state?.monitorSnapshotDirty).toBe(0);
   });
 });
+
+describe("lastObservedTxCount", () => {
+  it("persists on upsertSyncState and touchSyncPoll without clearing on a bare poll touch", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.upsertAddress({
+      address: "bc1qobs",
+      role: "hacker",
+      hopFromHacker: 0,
+      expandStatus: "expanded",
+    });
+    await store.upsertSyncState("bc1qobs", { lastSeenTxid: "tx1", lastObservedTxCount: 7 });
+    expect((await store.getSyncState("bc1qobs"))?.lastObservedTxCount).toBe(7);
+
+    await store.touchSyncPoll("bc1qobs");
+    expect((await store.getSyncState("bc1qobs"))?.lastObservedTxCount).toBe(7);
+    expect((await store.getSyncState("bc1qobs"))?.lastSeenTxid).toBe("tx1");
+
+    await store.touchSyncPoll("bc1qobs", { lastObservedTxCount: 8 });
+    expect((await store.getSyncState("bc1qobs"))?.lastObservedTxCount).toBe(8);
+  });
+});

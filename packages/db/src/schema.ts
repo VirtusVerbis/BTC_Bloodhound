@@ -57,6 +57,7 @@ export const syncState = sqliteTable("sync_state", {
   backfillComplete: integer("backfill_complete").notNull().default(0),
   lastBackfillAuditAt: text("last_backfill_audit_at"),
   chainTxCountAtAudit: integer("chain_tx_count_at_audit"),
+  lastObservedTxCount: integer("last_observed_tx_count"),
 });
 
 export const jobs = sqliteTable("jobs", {

@@ -67,6 +67,11 @@ import {
   sliceNewerThanLastSeen,
   spendGapExceedsFloor,
 } from "./pollGap.js";
+import {
+  applyAddressStats,
+  lastObservedTxCountPatch,
+  probePollAddressStats,
+} from "./addressStats.js";
 
 /** Thrown when continuation enqueue is blocked by expand caps or queue scheduling latch. */
 export class EnqueueBlockedError extends Error {
@@ -754,6 +759,7 @@ async function auditHackerBackfill(
   address: string,
 ): Promise<void> {
   const stats = await router.withProvider((p) => p.getAddressStats(address));
+  await applyAddressStats(store, address, stats);
   const chainTxCount = stats.chain_stats.tx_count;
   const indexedTxs = await store.countIndexedTxsForHacker(address);
   await store.updateBackfillAudit(address, chainTxCount);
@@ -776,6 +782,8 @@ async function auditHackerBackfill(
 interface PollPayload extends PendingPayloadFields {
   address: string;
   pollFetched?: boolean;
+  statsFetched?: boolean;
+  observedTxCount?: number;
   newestTxid?: string;
   newestBlockHeight?: number | null;
   cursorMiss?: boolean;
@@ -793,6 +801,8 @@ function parsePollPayload(raw: Record<string, unknown>): PollPayload {
     address: raw.address as string,
     ...writePendingPayload(pending, processedIndex),
     pollFetched: raw.pollFetched as boolean | undefined,
+    statsFetched: raw.statsFetched === true,
+    observedTxCount: typeof raw.observedTxCount === "number" ? raw.observedTxCount : undefined,
     newestTxid: raw.newestTxid as string | undefined,
     newestBlockHeight: raw.newestBlockHeight as number | null | undefined,
     cursorMiss: raw.cursorMiss === true,
@@ -812,6 +822,8 @@ function toPollJobPayload(payload: PollPayload): Record<string, unknown> {
     pendingTxids: payload.pendingTxids,
     processedIndex: payload.processedIndex,
     pollFetched: payload.pollFetched,
+    ...(payload.statsFetched ? { statsFetched: true } : {}),
+    ...(payload.observedTxCount != null ? { observedTxCount: payload.observedTxCount } : {}),
     newestTxid: payload.newestTxid,
     newestBlockHeight: payload.newestBlockHeight,
     ...(payload.cursorMiss ? { cursorMiss: true } : {}),
@@ -836,6 +848,8 @@ async function pollHacker(
   let pending = readPendingRuntime(payload as unknown as Record<string, unknown>).pending;
   let processedIndex = payload.processedIndex ?? 0;
   let pollFetched = payload.pollFetched ?? false;
+  let statsFetched = payload.statsFetched === true;
+  let observedTxCount = payload.observedTxCount;
   let newestTxid = payload.newestTxid;
   let newestBlockHeight = payload.newestBlockHeight ?? null;
   let cursorMiss = payload.cursorMiss === true;
@@ -846,11 +860,35 @@ async function pollHacker(
   const pendingFields = (idx: number) => writePendingPayload(pending, idx, config);
 
   if (!pollFetched && !needsProcess && budget.canCall()) {
+    if (!statsFetched) {
+      const probe = await probePollAddressStats(store, router, address);
+      budget.consume();
+      observedTxCount = probe.observedTxCount;
+      statsFetched = true;
+      if (probe.skipTxs) {
+        await store.touchSyncPoll(address, lastObservedTxCountPatch(observedTxCount));
+        return;
+      }
+      if (limited && budget.exhausted()) {
+        await store.enqueueJob(
+          "poll_hacker_address",
+          toPollJobPayload({
+            address,
+            statsFetched: true,
+            observedTxCount,
+            pollFetched: false,
+          }),
+          JOB_PRIORITY.POLL_HACKER,
+        );
+        return;
+      }
+    }
+
     const sync = await store.getSyncState(address);
     const page = await router.withProvider((p) => p.getAddressTxs(address));
     budget.consume();
     if (page.length === 0) {
-      await store.touchSyncPoll(address);
+      await store.touchSyncPoll(address, lastObservedTxCountPatch(observedTxCount));
       return;
     }
     const { newer, lastSeenFound } = sliceNewerThanLastSeen(page, sync?.lastSeenTxid);
@@ -869,6 +907,8 @@ async function pollHacker(
         address,
         ...pendingFields(processedIndex),
         pollFetched,
+        statsFetched: true,
+        observedTxCount,
         newestTxid,
         newestBlockHeight,
       }), JOB_PRIORITY.POLL_HACKER);
@@ -898,6 +938,8 @@ async function pollHacker(
             address,
             ...pendingFields(processedIndex),
             pollFetched: true,
+            statsFetched: true,
+            observedTxCount,
             newestTxid,
             newestBlockHeight,
           }),
@@ -930,6 +972,8 @@ async function pollHacker(
         address,
         ...pendingFields(processedIndex),
         pollFetched: true,
+        statsFetched: true,
+        observedTxCount,
         newestTxid,
         newestBlockHeight,
       }),
@@ -942,6 +986,7 @@ async function pollHacker(
     await store.upsertSyncState(address, {
       lastSeenTxid: newestTxid,
       lastBlockHeight: newestBlockHeight,
+      ...lastObservedTxCountPatch(observedTxCount),
     });
   } else if (!pollFetched) {
     await store.touchSyncPoll(address);
@@ -965,6 +1010,8 @@ async function pollDownstream(
   let pending = readPendingRuntime(payload as unknown as Record<string, unknown>).pending;
   let processedIndex = payload.processedIndex ?? 0;
   let pollFetched = payload.pollFetched ?? false;
+  let statsFetched = payload.statsFetched === true;
+  let observedTxCount = payload.observedTxCount;
   let newestTxid = payload.newestTxid;
   let newestBlockHeight = payload.newestBlockHeight ?? null;
   let cursorMiss = payload.cursorMiss === true;
@@ -987,6 +1034,8 @@ async function pollDownstream(
     address,
     ...writePendingPayload(pending, idx, config),
     pollFetched,
+    statsFetched,
+    observedTxCount,
     newestTxid,
     newestBlockHeight,
     cursorMiss,
@@ -999,11 +1048,30 @@ async function pollDownstream(
   });
 
   if (!pollFetched && !needsProcess && budget.canCall()) {
+    if (!statsFetched) {
+      const probe = await probePollAddressStats(store, router, address);
+      budget.consume();
+      observedTxCount = probe.observedTxCount;
+      statsFetched = true;
+      if (probe.skipTxs) {
+        await store.touchSyncPoll(address, lastObservedTxCountPatch(observedTxCount));
+        return;
+      }
+      if (limited && budget.exhausted()) {
+        await store.enqueueJob(
+          "poll_downstream_address",
+          toPollJobPayload(pollFields(processedIndex)),
+          JOB_PRIORITY.POLL_DOWNSTREAM,
+        );
+        return;
+      }
+    }
+
     const sync = await store.getSyncState(address);
     const page = await router.withProvider((p) => p.getAddressTxs(address));
     budget.consume();
     if (page.length === 0) {
-      await store.touchSyncPoll(address);
+      await store.touchSyncPoll(address, lastObservedTxCountPatch(observedTxCount));
       return;
     }
     newestTxid = page[0]!.txid;
@@ -1041,6 +1109,8 @@ async function pollDownstream(
   ) {
     const stats = await router.withProvider((p) => p.getAddressStats(address));
     budget.consume();
+    const applied = await applyAddressStats(store, address, stats);
+    observedTxCount = applied.observedTxCount;
     gapChecked = true;
     const chainSpent =
       stats.chain_stats.spent_txo_sum + (stats.mempool_stats?.spent_txo_sum ?? 0);
@@ -1050,9 +1120,10 @@ async function pollDownstream(
         await store.upsertSyncState(address, {
           lastSeenTxid: newestTxid,
           lastBlockHeight: newestBlockHeight,
+          ...lastObservedTxCountPatch(observedTxCount),
         });
       } else {
-        await store.touchSyncPoll(address);
+        await store.touchSyncPoll(address, lastObservedTxCountPatch(observedTxCount));
       }
       return;
     }
@@ -1163,6 +1234,7 @@ async function pollDownstream(
     await store.upsertSyncState(address, {
       lastSeenTxid: newestTxid,
       lastBlockHeight: newestBlockHeight,
+      ...lastObservedTxCountPatch(observedTxCount),
     });
   } else if (!pollFetched) {
     await store.touchSyncPoll(address);
@@ -1398,13 +1470,7 @@ async function expandDownstream(
 
 async function refreshBalance(store: Store, router: ChainRouter, address: string): Promise<void> {
   const stats = await router.withProvider((p) => p.getAddressStats(address));
-  const funded = stats.chain_stats.funded_txo_sum + (stats.mempool_stats?.funded_txo_sum ?? 0);
-  const spent = stats.chain_stats.spent_txo_sum + (stats.mempool_stats?.spent_txo_sum ?? 0);
-  await store.upsertAddress({
-    address,
-    liveBalanceSats: funded - spent,
-    liveBalanceAt: new Date().toISOString(),
-  });
+  await applyAddressStats(store, address, stats);
 }
 
 async function syncColdcardwatch(

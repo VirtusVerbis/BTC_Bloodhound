@@ -141,6 +141,7 @@ describe("processJobs weight-aware pairing", () => {
       updateBackfillAudit: vi.fn(),
       upsertBackfillState: vi.fn(),
       getBackfillState: vi.fn(),
+      upsertAddress: vi.fn(),
       flushRecentHackerActivity: vi.fn(),
     } as unknown as Store;
 

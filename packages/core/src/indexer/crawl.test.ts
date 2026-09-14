@@ -284,6 +284,98 @@ describe("maintainOneHacker", () => {
       expect.objectContaining({ ...BACKFILL_DEDUPE, address: addr }),
     );
   });
+
+  it("does not enqueue refresh_live_balance when poll is due", async () => {
+    const addr = "bc1qhack";
+    const store = mockStore({
+      getAddress: vi.fn().mockResolvedValue({ address: addr, expandStatus: "expanded" }),
+      getBackfillState: vi.fn().mockResolvedValue({
+        payload: null,
+        backfillComplete: true,
+        lastBackfillAuditAt: new Date(ts).toISOString(),
+        chainTxCountAtAudit: 10,
+      }),
+      getSyncState: vi.fn().mockResolvedValue(null),
+    });
+
+    await maintainOneHacker(store, baseConfig(), { address: addr }, ts);
+
+    expect(store.enqueueJobIfAbsent).toHaveBeenCalledWith(
+      "poll_hacker_address",
+      { address: addr },
+      JOB_PRIORITY.POLL_HACKER,
+      undefined,
+      { address: addr },
+    );
+    expect(store.enqueueJobIfAbsent).not.toHaveBeenCalledWith(
+      "refresh_live_balance",
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("does not enqueue refresh_live_balance when audit is due", async () => {
+    const addr = "bc1qhack";
+    const store = mockStore({
+      getAddress: vi.fn().mockResolvedValue({ address: addr, expandStatus: "expanded" }),
+      getBackfillState: vi.fn().mockResolvedValue({
+        payload: null,
+        backfillComplete: true,
+        lastBackfillAuditAt: null,
+        chainTxCountAtAudit: null,
+      }),
+      getSyncState: vi.fn().mockResolvedValue({ lastPolledAt: new Date(ts).toISOString() }),
+    });
+
+    await maintainOneHacker(store, baseConfig(), { address: addr }, ts);
+
+    expect(store.enqueueJobIfAbsent).toHaveBeenCalledWith(
+      "audit_hacker_backfill",
+      { address: addr },
+      JOB_PRIORITY.AUDIT_HACKER_BACKFILL,
+      undefined,
+      expect.objectContaining({ ...BACKFILL_DEDUPE, address: addr }),
+    );
+    expect(store.enqueueJobIfAbsent).not.toHaveBeenCalledWith(
+      "refresh_live_balance",
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("enqueues refresh_live_balance for a backfilling hacker with stale balance", async () => {
+    const addr = "bc1qhack";
+    const store = mockStore({
+      getAddress: vi.fn().mockResolvedValue({ address: addr, expandStatus: "backfilling" }),
+      getBackfillState: vi.fn().mockResolvedValue({
+        payload: { chainCursor: "txabc", pagesExhausted: false },
+        backfillComplete: false,
+        lastBackfillAuditAt: null,
+        chainTxCountAtAudit: null,
+      }),
+    });
+
+    await maintainOneHacker(store, baseConfig(), { address: addr }, ts);
+
+    expect(store.enqueueJobIfAbsent).toHaveBeenCalledWith(
+      "refresh_live_balance",
+      { address: addr },
+      JOB_PRIORITY.REFRESH_BALANCE,
+      undefined,
+      { address: addr },
+    );
+    expect(store.enqueueJobIfAbsent).not.toHaveBeenCalledWith(
+      "poll_hacker_address",
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
 });
 
 describe("scheduleDownstreamCrawl", () => {

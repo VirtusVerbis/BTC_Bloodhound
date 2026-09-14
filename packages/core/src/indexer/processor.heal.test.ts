@@ -89,6 +89,7 @@ describe("audit_hacker_backfill", () => {
       getBackfillState: vi.fn().mockResolvedValue({ payload: null, backfillComplete: true }),
       enqueueJobIfAbsent: vi.fn(),
       enqueueJob: vi.fn(),
+      upsertAddress: vi.fn(),
       flushRecentHackerActivity: vi.fn(),
     } as unknown as Store;
 
@@ -117,6 +118,9 @@ describe("audit_hacker_backfill", () => {
     await processJob(store, router, baseConfig(), job);
 
     expect(store.updateBackfillAudit).toHaveBeenCalledWith(address, 100);
+    expect(store.upsertAddress).toHaveBeenCalledWith(
+      expect.objectContaining({ address, liveBalanceSats: 0 }),
+    );
     expect(store.setExpandStatus).toHaveBeenCalledWith(address, "backfilling");
     expect(store.enqueueJobIfAbsent).toHaveBeenCalledWith(
       "backfill_hacker_address",
@@ -135,9 +139,9 @@ describe("audit_hacker_backfill", () => {
       updateBackfillAudit: vi.fn(),
       setExpandStatus: vi.fn(),
       upsertBackfillState: vi.fn(),
-      getBackfillState: vi.fn(),
       enqueueJobIfAbsent: vi.fn(),
       enqueueJob: vi.fn(),
+      upsertAddress: vi.fn(),
       flushRecentHackerActivity: vi.fn(),
     } as unknown as Store;
 
@@ -166,6 +170,9 @@ describe("audit_hacker_backfill", () => {
     await processJob(store, router, baseConfig(), job);
 
     expect(store.upsertBackfillState).toHaveBeenCalledWith(address, null, true);
+    expect(store.upsertAddress).toHaveBeenCalledWith(
+      expect.objectContaining({ address, liveBalanceSats: 0 }),
+    );
     expect(store.enqueueJobIfAbsent).not.toHaveBeenCalled();
     expect(store.enqueueJob).not.toHaveBeenCalled();
   });

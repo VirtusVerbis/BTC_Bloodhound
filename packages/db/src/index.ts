@@ -322,6 +322,9 @@ export function runMigrations(sqlite: Database.Database): void {
   if (!syncCols.some((c) => c.name === "chain_tx_count_at_audit")) {
     sqlite.exec(`ALTER TABLE sync_state ADD COLUMN chain_tx_count_at_audit INTEGER`);
   }
+  if (!syncCols.some((c) => c.name === "last_observed_tx_count")) {
+    sqlite.exec(`ALTER TABLE sync_state ADD COLUMN last_observed_tx_count INTEGER`);
+  }
 
   const jobCols = sqlite.prepare("PRAGMA table_info(jobs)").all() as Array<{ name: string }>;
   if (!jobCols.some((c) => c.name === "started_at")) {

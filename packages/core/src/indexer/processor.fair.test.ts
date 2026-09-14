@@ -155,6 +155,7 @@ describe("processJobs fair scheduling", () => {
       getBackfillState: vi.fn(),
       enqueueJob: vi.fn(),
       setExpandStatus: vi.fn(),
+      upsertAddress: vi.fn(),
       listHackers,
       listHackersCached: listHackers,
     });
@@ -193,11 +194,18 @@ describe("processJobs fair scheduling", () => {
       getSyncState: vi.fn().mockResolvedValue(null),
       listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack" }]),
       touchSyncPoll: vi.fn(),
+      upsertAddress: vi.fn(),
     });
 
     const router = {
-      withProvider: vi.fn(async (fn: (p: { getAddressTxs: () => Promise<[]> }) => unknown) =>
-        fn({ getAddressTxs: async () => [] }),
+      withProvider: vi.fn(async (fn: (p: {
+        getAddressTxs: () => Promise<[]>;
+        getAddressStats: () => Promise<{ chain_stats: { funded_txo_sum: number; spent_txo_sum: number; tx_count: number } }>;
+      }) => unknown) =>
+        fn({
+          getAddressTxs: async () => [],
+          getAddressStats: async () => ({ chain_stats: { funded_txo_sum: 0, spent_txo_sum: 0, tx_count: 0 } }),
+        }),
       ),
     } as unknown as ChainRouter;
 
@@ -206,7 +214,7 @@ describe("processJobs fair scheduling", () => {
     expect(n).toBe(1);
     expect(claimNextJob).toHaveBeenCalled();
     expect(completeJob).toHaveBeenCalledWith(pollJob.id);
-    expect(store.touchSyncPoll).toHaveBeenCalledWith("bc1qhack");
+    expect(store.touchSyncPoll).toHaveBeenCalledWith("bc1qhack", { lastObservedTxCount: 0 });
   });
 
   it("stops claiming when deadlineMs has passed", async () => {
@@ -326,11 +334,18 @@ describe("processJobs fair scheduling", () => {
       getSyncState: vi.fn().mockResolvedValue(null),
       listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack" }]),
       touchSyncPoll: vi.fn(),
+      upsertAddress: vi.fn(),
     });
 
     const router = {
-      withProvider: vi.fn(async (fn: (p: { getAddressTxs: () => Promise<[]> }) => unknown) =>
-        fn({ getAddressTxs: async () => [] }),
+      withProvider: vi.fn(async (fn: (p: {
+        getAddressTxs: () => Promise<[]>;
+        getAddressStats: () => Promise<{ chain_stats: { funded_txo_sum: number; spent_txo_sum: number; tx_count: number } }>;
+      }) => unknown) =>
+        fn({
+          getAddressTxs: async () => [],
+          getAddressStats: async () => ({ chain_stats: { funded_txo_sum: 0, spent_txo_sum: 0, tx_count: 0 } }),
+        }),
       ),
     } as unknown as ChainRouter;
 
@@ -406,11 +421,18 @@ describe("processJobs fair scheduling", () => {
       getSyncState: vi.fn().mockResolvedValue(null),
       listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack" }]),
       touchSyncPoll: vi.fn(),
+      upsertAddress: vi.fn(),
     });
 
     const router = {
-      withProvider: vi.fn(async (fn: (p: { getAddressTxs: () => Promise<[]> }) => unknown) =>
-        fn({ getAddressTxs: async () => [] }),
+      withProvider: vi.fn(async (fn: (p: {
+        getAddressTxs: () => Promise<[]>;
+        getAddressStats: () => Promise<{ chain_stats: { funded_txo_sum: number; spent_txo_sum: number; tx_count: number } }>;
+      }) => unknown) =>
+        fn({
+          getAddressTxs: async () => [],
+          getAddressStats: async () => ({ chain_stats: { funded_txo_sum: 0, spent_txo_sum: 0, tx_count: 0 } }),
+        }),
       ),
     } as unknown as ChainRouter;
 

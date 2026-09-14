@@ -140,7 +140,7 @@ describe("poll_downstream_address gap fill", () => {
       ),
     } as unknown as ChainRouter;
 
-    await processJob(store, router, baseConfig({ maxChainCallsPerJob: 1 }), makeJob("poll_downstream_address", { address: ADDRESS }));
+    await processJob(store, router, baseConfig({ maxChainCallsPerJob: 1 }), makeJob("poll_downstream_address", { address: ADDRESS, statsFetched: true }));
 
     expect(upsertSyncState).not.toHaveBeenCalled();
     expect(store.enqueueJob).toHaveBeenCalledWith(
@@ -159,7 +159,7 @@ describe("poll_downstream_address gap fill", () => {
       },
     ]);
     const getAddressStats = vi.fn().mockResolvedValue({
-      chain_stats: { spent_txo_sum: 50_000, funded_txo_sum: 0, tx_count: 10 },
+      chain_stats: { spent_txo_sum: 50_000, funded_txo_sum: 1_050_000, tx_count: 10 },
       mempool_stats: { spent_txo_sum: 0, funded_txo_sum: 0 },
     });
     const upsertSyncState = vi.fn();
@@ -173,6 +173,7 @@ describe("poll_downstream_address gap fill", () => {
       enqueueJob: vi.fn(),
       upsertSyncState,
       touchSyncPoll: vi.fn(),
+      upsertAddress: vi.fn(),
       flushRecentHackerActivity: vi.fn(),
     } as unknown as Store;
     const router = {
@@ -188,7 +189,11 @@ describe("poll_downstream_address gap fill", () => {
     expect(upsertSyncState).toHaveBeenCalledWith(ADDRESS, {
       lastSeenTxid: "tip",
       lastBlockHeight: null,
+      lastObservedTxCount: 10,
     });
+    expect(store.upsertAddress).toHaveBeenCalledWith(
+      expect.objectContaining({ address: ADDRESS, liveBalanceSats: 1_000_000 }),
+    );
     expect(store.enqueueJob).not.toHaveBeenCalled();
   });
 
@@ -225,6 +230,7 @@ describe("poll_downstream_address gap fill", () => {
       enqueueJob: vi.fn(),
       upsertSyncState,
       touchSyncPoll: vi.fn(),
+      upsertAddress: vi.fn(),
       getTransaction: vi.fn().mockResolvedValue(null),
       flushRecentHackerActivity: vi.fn(),
     } as unknown as Store;
@@ -243,6 +249,7 @@ describe("poll_downstream_address gap fill", () => {
     expect(upsertSyncState).toHaveBeenCalledWith(ADDRESS, {
       lastSeenTxid: "tip",
       lastBlockHeight: null,
+      lastObservedTxCount: 10,
     });
   });
 });
@@ -269,11 +276,55 @@ describe("poll_hacker_address lastSeen miss", () => {
       store,
       router,
       baseConfig(),
-      makeJob("poll_hacker_address", { address: "bc1qhacker" }),
+      makeJob("poll_hacker_address", { address: "bc1qhacker", statsFetched: true }),
     );
 
     expect(upsertSyncState).not.toHaveBeenCalled();
     expect(store.enqueueJob).not.toHaveBeenCalled();
     expect(touchSyncPoll).toHaveBeenCalledWith("bc1qhacker");
+  });
+});
+
+describe("poll stats dirty-check", () => {
+  it("skips /txs when lastSeen is set and observed count is unchanged", async () => {
+    const getAddressTxs = vi.fn();
+    const getAddressStats = vi.fn().mockResolvedValue({
+      chain_stats: { funded_txo_sum: 1000, spent_txo_sum: 400, tx_count: 10 },
+    });
+    const touchSyncPoll = vi.fn();
+    const upsertAddress = vi.fn();
+    const store = {
+      getDownstreamExpandContext: vi.fn().mockResolvedValue(
+        new Map([[ADDRESS, { expandStatus: "expanded", inboundSats: 1_000_000 }]]),
+      ),
+      getAddress: vi.fn().mockResolvedValue({ hopFromHacker: 1, expandProfile: null }),
+      getSyncState: vi.fn().mockResolvedValue({ lastSeenTxid: "tip", lastObservedTxCount: 10 }),
+      enqueueJob: vi.fn(),
+      upsertSyncState: vi.fn(),
+      touchSyncPoll,
+      upsertAddress,
+      flushRecentHackerActivity: vi.fn(),
+    } as unknown as Store;
+    const router = {
+      withProvider: vi.fn(async (fn: (p: {
+        getAddressTxs: typeof getAddressTxs;
+        getAddressStats: typeof getAddressStats;
+      }) => unknown) => fn({ getAddressTxs, getAddressStats })),
+    } as unknown as ChainRouter;
+
+    await processJob(
+      store,
+      router,
+      baseConfig({ maxChainCallsPerJob: 1 }),
+      makeJob("poll_downstream_address", { address: ADDRESS }),
+    );
+
+    expect(getAddressStats).toHaveBeenCalled();
+    expect(getAddressTxs).not.toHaveBeenCalled();
+    expect(upsertAddress).toHaveBeenCalledWith(
+      expect.objectContaining({ address: ADDRESS, liveBalanceSats: 600 }),
+    );
+    expect(touchSyncPoll).toHaveBeenCalledWith(ADDRESS, { lastObservedTxCount: 10 });
+    expect(store.enqueueJob).not.toHaveBeenCalled();
   });
 });

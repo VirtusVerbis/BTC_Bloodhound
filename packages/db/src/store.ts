@@ -3205,17 +3205,20 @@ export class Store {
     return await this.db.select().from(syncState).where(eq(syncState.address, address)).get();
   }
 
-  async upsertSyncState(address: string, data: { lastSeenTxid?: string; lastBlockHeight?: number | null }) {
+  async upsertSyncState(
+    address: string,
+    data: { lastSeenTxid?: string; lastBlockHeight?: number | null; lastObservedTxCount?: number | null },
+  ) {
     await this.recordSyncPoll(address, data);
   }
 
-  async touchSyncPoll(address: string) {
-    await this.recordSyncPoll(address);
+  async touchSyncPoll(address: string, data?: { lastObservedTxCount?: number | null }) {
+    await this.recordSyncPoll(address, data);
   }
 
   private async recordSyncPoll(
     address: string,
-    data?: { lastSeenTxid?: string; lastBlockHeight?: number | null },
+    data?: { lastSeenTxid?: string; lastBlockHeight?: number | null; lastObservedTxCount?: number | null },
   ): Promise<void> {
     const addr = await this.getAddress(address);
     const existing = await this.getSyncState(address);
@@ -3233,19 +3236,22 @@ export class Store {
 
     const ts = now();
     if (existing) {
-      await this.db
-        .update(syncState)
-        .set(
-          data
-            ? {
-                lastSeenTxid: data.lastSeenTxid ?? existing.lastSeenTxid,
-                lastBlockHeight: data.lastBlockHeight ?? existing.lastBlockHeight,
-                lastPolledAt: ts,
-              }
-            : { lastPolledAt: ts },
-        )
-        .where(eq(syncState.address, address))
-        .run();
+      const patch: {
+        lastSeenTxid?: string | null;
+        lastBlockHeight?: number | null;
+        lastPolledAt: string;
+        lastObservedTxCount?: number | null;
+      } = data
+        ? {
+            lastSeenTxid: data.lastSeenTxid ?? existing.lastSeenTxid,
+            lastBlockHeight: data.lastBlockHeight ?? existing.lastBlockHeight,
+            lastPolledAt: ts,
+          }
+        : { lastPolledAt: ts };
+      if (data && data.lastObservedTxCount !== undefined) {
+        patch.lastObservedTxCount = data.lastObservedTxCount;
+      }
+      await this.db.update(syncState).set(patch).where(eq(syncState.address, address)).run();
     } else {
       await this.db
         .insert(syncState)
@@ -3254,6 +3260,7 @@ export class Store {
           lastSeenTxid: data?.lastSeenTxid ?? null,
           lastBlockHeight: data?.lastBlockHeight ?? null,
           lastPolledAt: ts,
+          lastObservedTxCount: data?.lastObservedTxCount ?? null,
         })
         .run();
     }

@@ -5,6 +5,7 @@ import {
   defaultPriorityForJobType,
   enrichQueueJob,
   listQueue,
+  previewNextCronEnqueue,
   summarizeJobPayload,
 } from "./queue.js";
 
@@ -169,6 +170,66 @@ describe("listQueue", () => {
     const result = await listQueue(store, config, { nextCron: true });
     expect(result.nextCron).toBeDefined();
     expect(result.nextCron!.note).toMatch(/scheduleDownstreamCrawl/);
+  });
+});
+
+describe("previewNextCronEnqueue hacker maintenance", () => {
+  async function setupStore() {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    return { store, sqlite };
+  }
+
+  function previewConfig(overrides: Partial<typeof config> = {}) {
+    return {
+      ...config,
+      hackerMaintenanceEveryNCrons: 1,
+      cronIntervalSec: 60,
+      balanceRefreshIntervalSec: 300,
+      backfillHealAuditIntervalSec: 86_400,
+      maxPendingAuditGlobal: 1,
+      ...overrides,
+    };
+  }
+
+  it("skips refresh_live_balance when poll is due", async () => {
+    const { store } = await setupStore();
+    await store.upsertAddress({
+      address: "bc1qhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+      hopFromHacker: 0,
+      source: "ops",
+      expandStatus: "expanded",
+    });
+    await store.upsertBackfillState("bc1qhacker", null, true);
+    await store.updateBackfillAudit("bc1qhacker", 10);
+
+    const preview = await previewNextCronEnqueue(store, previewConfig());
+
+    expect(preview.hackerMaintenance?.address).toBe("bc1qhacker");
+    expect(preview.hackerMaintenance?.wouldEnqueue).toContain("poll_hacker_address");
+    expect(preview.hackerMaintenance?.wouldEnqueue).not.toContain("refresh_live_balance");
+  });
+
+  it("still previews refresh_live_balance for a backfilling hacker", async () => {
+    const { store } = await setupStore();
+    await store.upsertAddress({
+      address: "bc1qhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+      hopFromHacker: 0,
+      source: "ops",
+      expandStatus: "backfilling",
+    });
+
+    const preview = await previewNextCronEnqueue(store, previewConfig());
+
+    expect(preview.hackerMaintenance?.address).toBe("bc1qhacker");
+    expect(preview.hackerMaintenance?.wouldEnqueue).toContain("backfill_hacker_address");
+    expect(preview.hackerMaintenance?.wouldEnqueue).toContain("refresh_live_balance");
+    expect(preview.hackerMaintenance?.wouldEnqueue).not.toContain("poll_hacker_address");
   });
 });
 

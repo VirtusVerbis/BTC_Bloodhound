@@ -157,11 +157,18 @@ describe("processJobs stopReason", () => {
       getSyncState: vi.fn().mockResolvedValue(null),
       listHackers: vi.fn().mockResolvedValue([{ address: "bc1qhack" }]),
       touchSyncPoll: vi.fn(),
+      upsertAddress: vi.fn(),
     });
 
     const router = {
-      withProvider: vi.fn(async (fn: (p: { getAddressTxs: () => Promise<[]> }) => unknown) =>
-        fn({ getAddressTxs: async () => [] }),
+      withProvider: vi.fn(async (fn: (p: {
+        getAddressTxs: () => Promise<[]>;
+        getAddressStats: () => Promise<{ chain_stats: { funded_txo_sum: number; spent_txo_sum: number; tx_count: number } }>;
+      }) => unknown) =>
+        fn({
+          getAddressTxs: async () => [],
+          getAddressStats: async () => ({ chain_stats: { funded_txo_sum: 0, spent_txo_sum: 0, tx_count: 0 } }),
+        }),
       ),
     } as unknown as ChainRouter;
 

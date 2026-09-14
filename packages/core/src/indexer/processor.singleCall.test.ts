@@ -440,7 +440,7 @@ describe("single chain call per job", () => {
       store,
       router,
       config,
-      makeJob("poll_hacker_address", { address: ADDRESS }),
+      makeJob("poll_hacker_address", { address: ADDRESS, statsFetched: true }),
     );
 
     expect(withProvider).toHaveBeenCalledTimes(1);
@@ -481,5 +481,148 @@ describe("single chain call per job", () => {
       lastBlockHeight: 99,
     });
     expect(enqueueJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips /txs when lastSeen is set and observed count is unchanged", async () => {
+    const getAddressTxs = vi.fn();
+    const getAddressStats = vi.fn().mockResolvedValue({
+      chain_stats: { funded_txo_sum: 1000, spent_txo_sum: 400, tx_count: 10 },
+    });
+    const withProvider = vi.fn(async (fn: (p: {
+      getAddressTxs: typeof getAddressTxs;
+      getAddressStats: typeof getAddressStats;
+    }) => unknown) => fn({ getAddressTxs, getAddressStats }));
+    const touchSyncPoll = vi.fn();
+    const upsertAddress = vi.fn();
+    const enqueueJob = vi.fn();
+    const store = mockStore({
+      getSyncState: vi.fn().mockResolvedValue({ lastSeenTxid: "tip", lastObservedTxCount: 10 }),
+      enqueueJob,
+      upsertSyncState: vi.fn(),
+      touchSyncPoll,
+      upsertAddress,
+    });
+
+    await processJob(
+      store,
+      { withProvider } as unknown as ChainRouter,
+      baseConfig(),
+      makeJob("poll_hacker_address", { address: ADDRESS }),
+    );
+
+    expect(getAddressStats).toHaveBeenCalled();
+    expect(getAddressTxs).not.toHaveBeenCalled();
+    expect(upsertAddress).toHaveBeenCalledWith(
+      expect.objectContaining({ address: ADDRESS, liveBalanceSats: 600 }),
+    );
+    expect(touchSyncPoll).toHaveBeenCalledWith(ADDRESS, { lastObservedTxCount: 10 });
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it("still fetches /txs when lastSeen is missing", async () => {
+    const getAddressTxs = vi.fn().mockResolvedValue([]);
+    const getAddressStats = vi.fn().mockResolvedValue({
+      chain_stats: { funded_txo_sum: 0, spent_txo_sum: 0, tx_count: 10 },
+    });
+    const withProvider = vi.fn(async (fn: (p: {
+      getAddressTxs: typeof getAddressTxs;
+      getAddressStats: typeof getAddressStats;
+    }) => unknown) => fn({ getAddressTxs, getAddressStats }));
+    const enqueueJob = vi.fn();
+    const touchSyncPoll = vi.fn();
+    const store = mockStore({
+      getSyncState: vi.fn().mockResolvedValue({ lastSeenTxid: null, lastObservedTxCount: 10 }),
+      enqueueJob,
+      upsertSyncState: vi.fn(),
+      touchSyncPoll,
+      upsertAddress: vi.fn(),
+    });
+
+    await processJob(
+      store,
+      { withProvider } as unknown as ChainRouter,
+      baseConfig(),
+      makeJob("poll_hacker_address", { address: ADDRESS }),
+    );
+
+    expect(getAddressTxs).not.toHaveBeenCalled();
+    expect(enqueueJob).toHaveBeenCalledWith(
+      "poll_hacker_address",
+      expect.objectContaining({ statsFetched: true, observedTxCount: 10, pollFetched: false }),
+      JOB_PRIORITY.POLL_HACKER,
+    );
+    expect(touchSyncPoll).not.toHaveBeenCalled();
+  });
+
+  it("still fetches /txs when stored observed count is missing", async () => {
+    const getAddressTxs = vi.fn().mockResolvedValue([]);
+    const getAddressStats = vi.fn().mockResolvedValue({
+      chain_stats: { funded_txo_sum: 0, spent_txo_sum: 0, tx_count: 10 },
+    });
+    const withProvider = vi.fn(async (fn: (p: {
+      getAddressTxs: typeof getAddressTxs;
+      getAddressStats: typeof getAddressStats;
+    }) => unknown) => fn({ getAddressTxs, getAddressStats }));
+    const enqueueJob = vi.fn();
+    const touchSyncPoll = vi.fn();
+    const store = mockStore({
+      getSyncState: vi.fn().mockResolvedValue({ lastSeenTxid: "tip", lastObservedTxCount: null }),
+      enqueueJob,
+      upsertSyncState: vi.fn(),
+      touchSyncPoll,
+      upsertAddress: vi.fn(),
+    });
+
+    await processJob(
+      store,
+      { withProvider } as unknown as ChainRouter,
+      baseConfig(),
+      makeJob("poll_hacker_address", { address: ADDRESS }),
+    );
+
+    expect(getAddressTxs).not.toHaveBeenCalled();
+    expect(enqueueJob).toHaveBeenCalledWith(
+      "poll_hacker_address",
+      expect.objectContaining({ statsFetched: true, observedTxCount: 10, pollFetched: false }),
+      JOB_PRIORITY.POLL_HACKER,
+    );
+    expect(touchSyncPoll).not.toHaveBeenCalled();
+  });
+
+  it("does not persist observed count when /txs is deferred to a continuation", async () => {
+    const getAddressTxs = vi.fn();
+    const getAddressStats = vi.fn().mockResolvedValue({
+      chain_stats: { funded_txo_sum: 0, spent_txo_sum: 0, tx_count: 11 },
+    });
+    const withProvider = vi.fn(async (fn: (p: {
+      getAddressTxs: typeof getAddressTxs;
+      getAddressStats: typeof getAddressStats;
+    }) => unknown) => fn({ getAddressTxs, getAddressStats }));
+    const enqueueJob = vi.fn();
+    const upsertSyncState = vi.fn();
+    const touchSyncPoll = vi.fn();
+    const store = mockStore({
+      getSyncState: vi.fn().mockResolvedValue({ lastSeenTxid: "tip", lastObservedTxCount: 10 }),
+      enqueueJob,
+      upsertSyncState,
+      touchSyncPoll,
+      upsertAddress: vi.fn(),
+    });
+
+    await processJob(
+      store,
+      { withProvider } as unknown as ChainRouter,
+      baseConfig(),
+      makeJob("poll_hacker_address", { address: ADDRESS }),
+    );
+
+    expect(getAddressTxs).not.toHaveBeenCalled();
+    expect(enqueueJob).toHaveBeenCalledWith(
+      "poll_hacker_address",
+      expect.objectContaining({ statsFetched: true, observedTxCount: 11, pollFetched: false }),
+      JOB_PRIORITY.POLL_HACKER,
+    );
+    expect(touchSyncPoll).not.toHaveBeenCalled();
+    expect(upsertSyncState).not.toHaveBeenCalled();
   });
 });
