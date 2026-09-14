@@ -123,6 +123,35 @@ describe("listDownstreamForPoll min expand", () => {
   });
 });
 
+describe("getDownstreamFrontier min expand", () => {
+  it("omits pending addresses below the inbound floor", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.upsertAddress({
+      address: "pending-small",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "pending",
+    });
+    await store.upsertAddress({
+      address: "pending-big",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "pending",
+    });
+    await store.addInboundSats("pending-small", 50_000);
+    await store.addInboundSats("pending-big", 150_000);
+
+    const all = await store.getDownstreamFrontier(10, 5);
+    expect(all.map((r) => r.address).sort()).toEqual(["pending-big", "pending-small"]);
+
+    const floored = await store.getDownstreamFrontier(10, 5, 100_000);
+    expect(floored.map((r) => r.address)).toEqual(["pending-big"]);
+  });
+});
+
 describe("getDownstreamExpandContext", () => {
   it("returns stored inbound_sats after an out_from_hacker upsert", async () => {
     const { sqlite, db } = openDatabase(":memory:");

@@ -127,7 +127,7 @@ describe("poll_downstream_address gap fill", () => {
       getDownstreamExpandContext: vi.fn().mockResolvedValue(
         new Map([[ADDRESS, { expandStatus: "expanded", inboundSats: 1_000_000 }]]),
       ),
-      getAddress: vi.fn().mockResolvedValue({ hopFromHacker: 1, expandProfile: null }),
+      getAddress: vi.fn().mockResolvedValue({ hopFromHacker: 1, expandProfile: null, inboundSats: 1_000_000 }),
       getSyncState: vi.fn().mockResolvedValue({ lastSeenTxid: "old-cursor" }),
       sumOutFromHacker: vi.fn().mockResolvedValue(1000),
       enqueueJob: vi.fn(),
@@ -168,7 +168,7 @@ describe("poll_downstream_address gap fill", () => {
       getDownstreamExpandContext: vi.fn().mockResolvedValue(
         new Map([[ADDRESS, { expandStatus: "expanded", inboundSats: 1_000_000 }]]),
       ),
-      getAddress: vi.fn().mockResolvedValue({ hopFromHacker: 1, expandProfile: null }),
+      getAddress: vi.fn().mockResolvedValue({ hopFromHacker: 1, expandProfile: null, inboundSats: 1_000_000 }),
       getSyncState: vi.fn().mockResolvedValue({ lastSeenTxid: "old-cursor" }),
       sumOutFromHacker: vi.fn().mockResolvedValue(1000),
       enqueueJob: vi.fn(),
@@ -225,7 +225,7 @@ describe("poll_downstream_address gap fill", () => {
       getDownstreamExpandContext: vi.fn().mockResolvedValue(
         new Map([[ADDRESS, { expandStatus: "expanded", inboundSats: 1_000_000 }]]),
       ),
-      getAddress: vi.fn().mockResolvedValue({ hopFromHacker: 1, expandProfile: null }),
+      getAddress: vi.fn().mockResolvedValue({ hopFromHacker: 1, expandProfile: null, inboundSats: 1_000_000 }),
       getSyncState: vi.fn().mockResolvedValue({ lastSeenTxid: "old-cursor" }),
       sumOutFromHacker: vi.fn().mockResolvedValue(1000),
       enqueueJob: vi.fn(),
@@ -298,7 +298,7 @@ describe("poll stats dirty-check", () => {
       getDownstreamExpandContext: vi.fn().mockResolvedValue(
         new Map([[ADDRESS, { expandStatus: "expanded", inboundSats: 1_000_000 }]]),
       ),
-      getAddress: vi.fn().mockResolvedValue({ hopFromHacker: 1, expandProfile: null }),
+      getAddress: vi.fn().mockResolvedValue({ hopFromHacker: 1, expandProfile: null, inboundSats: 1_000_000 }),
       getSyncState: vi.fn().mockResolvedValue({ lastSeenTxid: "tip", lastObservedTxCount: 10 }),
       enqueueJob: vi.fn(),
       upsertSyncState: vi.fn(),

@@ -377,14 +377,11 @@ describe("single chain call per job", () => {
     });
     const enqueueJob = vi.fn().mockResolvedValue(42);
     const store = mockStore({
-      getAddress: vi.fn().mockResolvedValue({ hopFromHacker: 1 }),
-      getDownstreamExpandContext: vi.fn().mockResolvedValue(
-        new Map([[ADDRESS, { expandStatus: "pending", inboundSats: 10_000 }]]),
-      ),
+      getAddress: vi.fn().mockResolvedValue({ hopFromHacker: 1, inboundSats: 10_000 }),
       setExpandStatus: vi.fn(),
       enqueueJob,
       getTransaction: vi.fn().mockResolvedValue(null),
-      getEdgesFromAddress: vi.fn().mockResolvedValue([]),
+      getOutEdgesFromAddress: vi.fn().mockResolvedValue([]),
       isQueueSchedulingPaused: vi.fn().mockResolvedValue(false),
     });
     const withProvider = vi.fn(async (fn: (p: { getTx: () => Promise<{ vin: unknown[]; vout: unknown[] }> }) => unknown) =>

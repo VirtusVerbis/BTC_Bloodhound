@@ -82,10 +82,7 @@ describe("poll_downstream_address min expand abort", () => {
   it("returns without chain fetch or continuation when inbound is below the floor", async () => {
     const address = "bc1qdust";
     const store = {
-      getDownstreamExpandContext: vi.fn().mockResolvedValue(
-        new Map([[address, { expandStatus: "expanded", inboundSats: 1_000 }]]),
-      ),
-      getAddress: vi.fn(),
+      getAddress: vi.fn().mockResolvedValue({ inboundSats: 1_000 }),
       getSyncState: vi.fn(),
       enqueueJob: vi.fn(),
       touchSyncPoll: vi.fn(),
@@ -115,11 +112,10 @@ describe("poll_downstream_address min expand abort", () => {
 
     await processJob(store, router, baseConfig(), job);
 
-    expect(store.getDownstreamExpandContext).toHaveBeenCalledWith([address]);
+    expect(store.getAddress).toHaveBeenCalledWith(address);
     expect(router.withProvider).not.toHaveBeenCalled();
     expect(store.enqueueJob).not.toHaveBeenCalled();
     expect(store.touchSyncPoll).not.toHaveBeenCalled();
-    expect(store.getAddress).not.toHaveBeenCalled();
   });
 });
 
@@ -128,11 +124,8 @@ describe("expand_downstream min expand abort", () => {
     const address = "bc1qdust";
     const setExpandStatus = vi.fn();
     const store = {
-      getDownstreamExpandContext: vi.fn().mockResolvedValue(
-        new Map([[address, { expandStatus: "queued", inboundSats: 1_000 }]]),
-      ),
+      getAddress: vi.fn().mockResolvedValue({ inboundSats: 1_000 }),
       setExpandStatus,
-      getAddress: vi.fn(),
       enqueueJob: vi.fn(),
       flushRecentHackerActivity: vi.fn(),
     } as unknown as Store;
@@ -160,11 +153,10 @@ describe("expand_downstream min expand abort", () => {
 
     await processJob(store, router, baseConfig(), job);
 
-    expect(store.getDownstreamExpandContext).toHaveBeenCalledWith([address]);
+    expect(store.getAddress).toHaveBeenCalledWith(address);
     expect(setExpandStatus).toHaveBeenCalledWith(address, "skipped_min");
     expect(router.fetchAddressTxPage).not.toHaveBeenCalled();
     expect(router.withProvider).not.toHaveBeenCalled();
     expect(store.enqueueJob).not.toHaveBeenCalled();
-    expect(store.getAddress).not.toHaveBeenCalled();
   });
 });

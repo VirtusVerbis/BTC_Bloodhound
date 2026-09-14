@@ -176,8 +176,7 @@ export async function buildGraph(
     });
   } else {
     const victimNodes = new Map<string, GraphNode>();
-    for (const v of await store.listVictimsForHacker(hacker, maxVictims)) {
-      if (v.amountSats < minEdgeSats) continue;
+    for (const v of await store.listVictimsForHacker(hacker, maxVictims, minEdgeSats)) {
       const id = v.address;
       let node = victimNodes.get(id);
       if (!node) {
@@ -209,7 +208,11 @@ export async function buildGraph(
     }
   }
 
-  const victimSet = await store.getVictimAddressSetForHacker(hacker, Math.max(maxVictims, 1000));
+  const victimSet = await store.getVictimAddressSetForHacker(
+    hacker,
+    Math.max(maxVictims, 1000),
+    minEdgeSats,
+  );
 
   const outEdges = (await store.getOutEdgesFromAddress(hacker, {
     minEdgeSats,
@@ -233,14 +236,10 @@ export async function buildGraph(
       const row = level1AddrMap.get(id);
       return (row?.hopFromHacker ?? 1) < depth;
     });
-    const edgesByParent = await store.getEdgesFromAddressesMap(expandableParents);
     for (const parentId of expandableParents) {
       if (addressLookupBudget() <= 0) break;
       const childEdges = filterDownstreamEdgesExcludingVictims(
-        (edgesByParent.get(parentId) ?? [])
-          .filter((ce) => ce.direction === "out_from_hacker" && ce.amountSats >= minEdgeSats)
-          .sort((a, b) => b.amountSats - a.amountSats)
-          .slice(0, maxOutputs),
+        await store.getOutEdgesFromAddress(parentId, { minEdgeSats, limit: maxOutputs }),
         victimSet,
       );
       const childGraphEdges = childEdges.map((ce) => mapDbEdgeToGraph(parentId, ce.toAddress, ce));

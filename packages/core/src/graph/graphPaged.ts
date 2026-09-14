@@ -135,8 +135,7 @@ async function appendVictimsSection(
 
   const maxVictims = options.maxVictims ?? 100;
   const victimNodes = new Map<string, GraphNode>();
-  for (const v of await store.listVictimsForHacker(hacker, maxVictims)) {
-    if (v.amountSats < minEdgeSats) continue;
+  for (const v of await store.listVictimsForHacker(hacker, maxVictims, minEdgeSats)) {
     const id = v.address;
     let node = victimNodes.get(id);
     if (!node) {
@@ -237,6 +236,7 @@ export async function buildGraphL1Page(
   const victimSet = await store.getVictimAddressSetForHacker(
     hacker,
     Math.max(options.maxVictims ?? 100, 1000),
+    minEdgeSats,
   );
 
   const totalL1 = isFirstPage
@@ -349,6 +349,7 @@ export async function buildGraphL2Page(
   const victimSet = await store.getVictimAddressSetForHacker(
     token.hacker,
     Math.max(token.maxPerParent * token.parents.length, 100),
+    token.minEdgeSats,
   );
   const expandableParents = token.parents.filter((id: string) => {
     const row = parentAddrMap.get(id);

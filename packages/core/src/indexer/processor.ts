@@ -1002,8 +1002,8 @@ async function pollDownstream(
 ): Promise<void> {
   const payload = parsePollPayload(rawPayload);
   const address = payload.address;
-  const expandCtx = (await store.getDownstreamExpandContext([address])).get(address);
-  if (!qualifiesForExpand(expandCtx?.inboundSats ?? 0, config.minExpandSats)) {
+  const addr = await store.getAddress(address);
+  if (!qualifiesForExpand(addr?.inboundSats ?? 0, config.minExpandSats)) {
     return;
   }
 
@@ -1021,8 +1021,6 @@ async function pollDownstream(
   let pagesExhausted = payload.pagesExhausted === true;
   let pagesFetched = payload.pagesFetched ?? 0;
   let fillUntilTxid = payload.fillUntilTxid;
-
-  const addr = await store.getAddress(address);
   const hop = addr?.hopFromHacker ?? 0;
   const expandProfile = addr?.expandProfile ?? null;
   const budget = createChainCallBudget(config.maxChainCallsPerJob);
@@ -1268,8 +1266,8 @@ async function expandDownstream(
   const jobSubreq = options?.jobSubreq;
   const cpuGuard = options?.cpuGuard;
   const address = rawPayload.address as string;
-  const expandCtx = (await store.getDownstreamExpandContext([address])).get(address);
-  if (!qualifiesForExpand(expandCtx?.inboundSats ?? 0, config.minExpandSats)) {
+  const addr = await store.getAddress(address);
+  if (!qualifiesForExpand(addr?.inboundSats ?? 0, config.minExpandSats)) {
     await store.setExpandStatus(address, SKIPPED_MIN_STATUS);
     return;
   }
@@ -1286,8 +1284,6 @@ async function expandDownstream(
   let traceEdgesPending = rawPayload.traceEdgesPending as boolean | undefined;
   let traceEdgeTotal = rawPayload.traceEdgeTotal as number | undefined;
   let traceEdgesFlat = rawPayload.traceEdgesFlat as HackTraceEdgeDraft[] | undefined;
-
-  const addr = await store.getAddress(address);
   const hop = addr?.hopFromHacker ?? 0;
   const expandProfile = addr?.expandProfile ?? null;
   const opsFields = expandOpsFields(rawPayload);
@@ -1464,7 +1460,11 @@ async function expandDownstream(
   }
 
   if ((hop ?? 0) + 1 >= config.maxCrawlDepth) {
-    for (const e of await store.getEdgesFromAddress(address)) {
+    const children = await store.getOutEdgesFromAddress(address, {
+      minEdgeSats: config.minExpandSats,
+      limit: 10_000,
+    });
+    for (const e of children) {
       await store.upsertAddress({
         address: e.toAddress,
         expandStatus: "max_depth",

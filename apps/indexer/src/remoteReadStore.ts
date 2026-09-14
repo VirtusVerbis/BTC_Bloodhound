@@ -351,15 +351,19 @@ FROM addresses WHERE is_flagged_hacker = 1 ORDER BY total_received_sats DESC;`,
     };
   }
 
-  async getDownstreamFrontier(limit: number, maxDepth: number) {
+  async getDownstreamFrontier(limit: number, maxDepth: number, minExpandSats = 0) {
+    const depth = Math.floor(maxDepth);
+    const cap = Math.max(0, Math.floor(limit));
+    const floor = Math.max(0, Math.floor(minExpandSats));
+    const amountClause = floor > 0 ? `\n  AND inbound_sats >= ${floor}` : "";
     return this.client
       .query(`
 SELECT address FROM addresses
 WHERE (role = 'downstream' OR role = 'hacker')
   AND expand_status = 'pending'
-  AND hop_from_hacker < ${Math.floor(maxDepth)}
+  AND hop_from_hacker < ${depth}${amountClause}
 ORDER BY hop_from_hacker ASC, last_seen_at ASC
-LIMIT ${Math.max(0, Math.floor(limit))};
+LIMIT ${cap};
 `)
       .map((row) => ({ address: str(row.address) }));
   }

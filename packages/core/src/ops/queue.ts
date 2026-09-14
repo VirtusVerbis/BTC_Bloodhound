@@ -361,7 +361,11 @@ export async function previewNextCronEnqueue(store: Store, config: AppConfig): P
     }
   }
 
-  const frontier = await store.getDownstreamFrontier(config.crawlEnqueuePerCron, config.maxCrawlDepth);
+  const frontier = await store.getDownstreamFrontier(
+    config.crawlEnqueuePerCron,
+    config.maxCrawlDepth,
+    config.minExpandSats,
+  );
   const expandDownstream: NextCronPreview["expandDownstream"] = [];
   for (const row of frontier) {
     if (await store.hasPendingJob("expand_downstream", row.address)) continue;

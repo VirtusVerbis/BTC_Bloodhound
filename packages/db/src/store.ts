@@ -1375,7 +1375,11 @@ export class Store {
     return { childCount: row?.count ?? 0, totalSats: row?.total ?? 0 };
   }
 
-  async listVictimsForHacker(hacker: string, limit = 100) {
+  async listVictimsForHacker(hacker: string, limit = 100, minEdgeSats?: number) {
+    const conditions = [eq(edges.toAddress, hacker), eq(edges.direction, "in_to_hacker")];
+    if (minEdgeSats != null) {
+      conditions.push(gte(edges.amountSats, minEdgeSats));
+    }
     return await this.db
       .select({
         address: edges.fromAddress,
@@ -1384,18 +1388,28 @@ export class Store {
         blockTime: edges.blockTime,
       })
       .from(edges)
-      .where(and(eq(edges.toAddress, hacker), eq(edges.direction, "in_to_hacker")))
+      .where(and(...conditions))
       .orderBy(desc(edges.amountSats))
       .limit(limit)
       .all();
   }
 
   /** Distinct victim addresses with in_to_hacker edges into this hacker (for graph filtering). */
-  async getVictimAddressSetForHacker(hacker: string, limit = 1000): Promise<Set<string>> {
+  async getVictimAddressSetForHacker(
+    hacker: string,
+    limit = 1000,
+    minEdgeSats?: number,
+  ): Promise<Set<string>> {
+    const conditions = [eq(edges.toAddress, hacker), eq(edges.direction, "in_to_hacker")];
+    if (minEdgeSats != null) {
+      conditions.push(gte(edges.amountSats, minEdgeSats));
+    }
     const rows = await this.db
-      .selectDistinct({ address: edges.fromAddress })
+      .select({ address: edges.fromAddress })
       .from(edges)
-      .where(and(eq(edges.toAddress, hacker), eq(edges.direction, "in_to_hacker")))
+      .where(and(...conditions))
+      .groupBy(edges.fromAddress)
+      .orderBy(desc(sql`max(${edges.amountSats})`))
       .limit(limit)
       .all();
     return new Set(rows.map((row) => row.address));
@@ -1465,6 +1479,7 @@ export class Store {
           sql`${edges.toAddress} IN (
             SELECT DISTINCT v.from_address FROM edges v
             WHERE v.to_address = ${hacker} AND v.direction = 'in_to_hacker'
+              AND v.amount_sats >= ${floor}
           )`,
         ),
       )
@@ -3856,17 +3871,18 @@ export class Store {
     return count;
   }
 
-  async getDownstreamFrontier(limit: number, maxDepth: number) {
+  async getDownstreamFrontier(limit: number, maxDepth: number, minExpandSats = 0) {
+    const floor = Math.max(0, Math.floor(minExpandSats));
+    const conditions = [
+      or(eq(addresses.role, "downstream"), eq(addresses.role, "hacker")),
+      eq(addresses.expandStatus, "pending"),
+      sql`${addresses.hopFromHacker} < ${maxDepth}`,
+    ];
+    if (floor > 0) conditions.push(gte(addresses.inboundSats, floor));
     return await this.db
       .select({ address: addresses.address })
       .from(addresses)
-      .where(
-        and(
-          or(eq(addresses.role, "downstream"), eq(addresses.role, "hacker")),
-          eq(addresses.expandStatus, "pending"),
-          sql`${addresses.hopFromHacker} < ${maxDepth}`,
-        ),
-      )
+      .where(and(...conditions))
       .orderBy(asc(addresses.hopFromHacker), asc(addresses.lastSeenAt))
       .limit(limit)
       .all();
