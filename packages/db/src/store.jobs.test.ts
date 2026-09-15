@@ -436,6 +436,47 @@ describe("jobs hot indexes", () => {
     expect(names.has("idx_jobs_pending_due")).toBe(true);
     expect(names.has("idx_jobs_active_type")).toBe(true);
     expect(names.has("idx_jobs_active_type_addr")).toBe(true);
+    expect(names.has("idx_jobs_pending_ingest_due")).toBe(true);
+    expect(names.has("idx_jobs_pending_run_after")).toBe(true);
+    const txIndexes = sqlite.prepare("PRAGMA index_list(transactions)").all() as Array<{ name: string }>;
+    expect(txIndexes.some((i) => i.name === "idx_transactions_missing_op_return_height")).toBe(true);
+    expect(txIndexes.some((i) => i.name === "idx_transactions_missing_op_return")).toBe(false);
+  });
+
+  it("uses ingest and pending-due indexes for hot query shapes", () => {
+    const { sqlite } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const ingestPlan = sqlite
+      .prepare(
+        `EXPLAIN QUERY PLAN
+         SELECT id, type, payload_json, status, priority, run_after, created_at, reclaim_count
+         FROM jobs INDEXED BY idx_jobs_pending_ingest_due
+         WHERE status = 'pending'
+           AND run_after <= ?
+           AND type IN ('backfill_hacker_address', 'audit_hacker_backfill', 'expand_downstream')
+         ORDER BY priority DESC, run_after ASC, created_at ASC
+         LIMIT 32`,
+      )
+      .all("2026-01-01T00:00:00.000Z") as Array<{ detail: string }>;
+    expect(ingestPlan.map((p) => p.detail).join("\n")).toMatch(/idx_jobs_pending_ingest_due/);
+
+    const duePlan = sqlite
+      .prepare(
+        `EXPLAIN QUERY PLAN
+         SELECT COUNT(*) FROM jobs INDEXED BY idx_jobs_pending_run_after
+         WHERE status = 'pending' AND run_after <= ?`,
+      )
+      .all("2026-01-01T00:00:00.000Z") as Array<{ detail: string }>;
+    expect(duePlan.map((p) => p.detail).join("\n")).toMatch(/idx_jobs_pending_run_after/);
+
+    const activePlan = sqlite
+      .prepare(
+        `EXPLAIN QUERY PLAN
+         SELECT 1 FROM jobs INDEXED BY idx_jobs_active_type
+         WHERE type = ? AND status IN ('pending', 'running') LIMIT 1`,
+      )
+      .all("process_tx") as Array<{ detail: string }>;
+    expect(activePlan.map((p) => p.detail).join("\n")).toMatch(/idx_jobs_active_type/);
   });
 });
 

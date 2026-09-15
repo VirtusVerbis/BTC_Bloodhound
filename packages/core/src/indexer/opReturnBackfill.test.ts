@@ -88,7 +88,7 @@ describe("backfill_op_return job", () => {
       .fn()
       .mockResolvedValueOnce(["tx1", "tx2"])
       .mockResolvedValueOnce(["tx2"]);
-    const countTransactionsMissingOpReturn = vi.fn().mockResolvedValue(1);
+    const hasTransactionsMissingOpReturn = vi.fn().mockResolvedValue(true);
     const upsertTransaction = vi.fn();
     const getTransaction = vi
       .fn()
@@ -97,7 +97,7 @@ describe("backfill_op_return job", () => {
 
     const store = {
       listTxidsMissingOpReturn,
-      countTransactionsMissingOpReturn,
+      hasTransactionsMissingOpReturn,
       enqueueJobIfAbsent,
       getTransaction,
       upsertTransaction,

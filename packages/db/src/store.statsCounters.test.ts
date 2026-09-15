@@ -82,4 +82,28 @@ describe("scheduler stats counters", () => {
     expect(state?.downstreamTreeMaxDepth).toBe(5);
     expect(state?.downstreamTreeCount).toBe(1);
   });
+
+  it("reconcileStatsCounters leaves incremental edge totals unchanged", async () => {
+    const { store } = await openStore();
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "bc1qa",
+        toAddress: "bc1qb",
+        txid: "tx1",
+        amountSats: 1000,
+        direction: "in_to_hacker",
+      },
+      {
+        fromAddress: "bc1qb",
+        toAddress: "bc1qc",
+        txid: "tx2",
+        amountSats: 500,
+        direction: "out_from_hacker",
+      },
+    ]);
+    await store.reconcileStatsCounters();
+    const stats = await store.computeStatsCounts();
+    expect(stats.totalInSats).toBe(1000);
+    expect(stats.totalOutSats).toBe(500);
+  });
 });

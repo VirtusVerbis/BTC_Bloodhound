@@ -181,6 +181,7 @@ function mockStore(overrides: Partial<Store> = {}): Store {
     pruneOrphanSyncState: vi.fn().mockResolvedValue({ affected: 0, batches: 0, complete: true }),
     updateSchedulerState: vi.fn().mockResolvedValue(undefined),
     countTransactionsMissingOpReturn: vi.fn().mockResolvedValue(0),
+    hasTransactionsMissingOpReturn: vi.fn().mockResolvedValue(false),
     ...overrides,
   } as unknown as Store;
 }

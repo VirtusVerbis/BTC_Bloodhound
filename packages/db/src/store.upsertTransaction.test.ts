@@ -38,4 +38,12 @@ describe("upsertTransaction", () => {
     const row = await db.select().from(transactions).where(eq(transactions.txid, "abc123")).get();
     expect(row?.opReturnDisplay).toBe("filled");
   });
+
+  it("hasTransactionsMissingOpReturn is true only while a null display remains", async () => {
+    expect(await store.hasTransactionsMissingOpReturn()).toBe(false);
+    await store.upsertTransaction({ txid: "missing", opReturnDisplay: null });
+    expect(await store.hasTransactionsMissingOpReturn()).toBe(true);
+    await store.upsertTransaction({ txid: "missing", opReturnDisplay: "note" });
+    expect(await store.hasTransactionsMissingOpReturn()).toBe(false);
+  });
 });

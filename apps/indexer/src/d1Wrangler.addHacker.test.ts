@@ -35,6 +35,7 @@ describe("addHackerRemote", () => {
     expect(writtenSql).toContain("INSERT INTO addresses");
     expect(writtenSql).toContain("INSERT INTO jobs");
     expect(writtenSql).toContain("pending_job_count");
+    expect(writtenSql).toContain("active_backfill_count");
     expect(writtenSql).toContain("'has spaces'");
     expect(writtenSql).toContain(`'${VALID_ADDRESS}'`);
     expect(writtenSql).toContain("'admin'");

@@ -107,3 +107,88 @@ describe("pending job count", () => {
     expect(await readCounter(store)).toBe(1);
   });
 });
+
+describe("active job type counters", () => {
+  async function openStore() {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    return { sqlite, store: new Store(db) };
+  }
+
+  async function readActive(store: Store) {
+    const state = await store.getSchedulerState();
+    return {
+      expand: state?.activeExpandCount ?? 0,
+      backfill: state?.activeBackfillCount ?? 0,
+      audit: state?.activeAuditCount ?? 0,
+      processTx: state?.activeProcessTxCount ?? 0,
+    };
+  }
+
+  it("increments on enqueue and is unchanged by claim or fail", async () => {
+    const { store } = await openStore();
+    await store.enqueueJob("process_tx", { txid: "a" }, 1);
+    expect(await readActive(store)).toEqual({ expand: 0, backfill: 0, audit: 0, processTx: 1 });
+    expect(await store.countActiveJobs("process_tx")).toBe(1);
+
+    const claimed = await store.claimNextJob();
+    expect(claimed).not.toBeNull();
+    expect(await readActive(store)).toEqual({ expand: 0, backfill: 0, audit: 0, processTx: 1 });
+
+    await store.failJob(claimed!.id, "boom");
+    expect(await readActive(store)).toEqual({ expand: 0, backfill: 0, audit: 0, processTx: 1 });
+  });
+
+  it("decrements on complete", async () => {
+    const { store } = await openStore();
+    const id = await store.enqueueJob("expand_downstream", { address: "bc1qa" }, 8);
+    expect((await readActive(store)).expand).toBe(1);
+    await store.completeJob(id!);
+    expect((await readActive(store)).expand).toBe(0);
+    expect(await store.countActiveJobs("expand_downstream")).toBe(0);
+  });
+
+  it("tracks backfill and audit types separately", async () => {
+    const { store } = await openStore();
+    await store.enqueueJob("backfill_hacker_address", { address: "bc1qb" }, 10);
+    await store.enqueueJob("audit_hacker_backfill", { address: "bc1qc" }, 9);
+    expect(await readActive(store)).toEqual({ expand: 0, backfill: 1, audit: 1, processTx: 0 });
+  });
+
+  it("reconcileActiveJobCounts repairs drift", async () => {
+    const { sqlite, store } = await openStore();
+    await store.enqueueJob("process_tx", { txid: "a" }, 1);
+    sqlite.prepare("UPDATE scheduler_state SET active_process_tx_count = 0 WHERE id = 1").run();
+    expect(await store.countActiveJobs("process_tx")).toBe(0);
+    await store.reconcileCheapCounters();
+    expect(await store.countActiveJobs("process_tx")).toBe(1);
+  });
+
+  it("deleteActiveJobs zeroes cached type counters", async () => {
+    const { store } = await openStore();
+    await store.enqueueJob("process_tx", { txid: "a" }, 1);
+    await store.enqueueJob("expand_downstream", { address: "bc1qa" }, 8);
+    await store.deleteActiveJobs();
+    expect(await readActive(store)).toEqual({ expand: 0, backfill: 0, audit: 0, processTx: 0 });
+  });
+
+  it("deleteActiveJobsForAddress decrements matching type counters", async () => {
+    const { store } = await openStore();
+    await store.enqueueJob("poll_hacker_address", { address: "bc1qa" }, 1);
+    await store.enqueueJob("expand_downstream", { address: "bc1qa" }, 8);
+    await store.enqueueJob("expand_downstream", { address: "bc1qb" }, 8);
+    await store.deleteActiveJobsForAddress("bc1qa");
+    expect((await readActive(store)).expand).toBe(1);
+  });
+
+  it("does not increment when enqueueIfAbsent skips a duplicate", async () => {
+    const { store } = await openStore();
+    const first = await store.enqueueJobIfAbsent("backfill_hacker_address", { address: "bc1qd" }, 10);
+    const second = await store.enqueueJobIfAbsent("backfill_hacker_address", { address: "bc1qd" }, 10, undefined, {
+      address: "bc1qd",
+    });
+    expect(first).not.toBeNull();
+    expect(second).toBeNull();
+    expect((await readActive(store)).backfill).toBe(1);
+  });
+});

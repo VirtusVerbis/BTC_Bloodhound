@@ -1636,8 +1636,8 @@ async function backfillOpReturn(
     processed++;
   }
 
-  const remaining = await store.countTransactionsMissingOpReturn();
-  if (remaining > 0 && !jobSubreq?.exhausted() && !cpuGuard?.exceeded()) {
+  const remaining = await store.hasTransactionsMissingOpReturn();
+  if (remaining && !jobSubreq?.exhausted() && !cpuGuard?.exceeded()) {
     await store.enqueueJobIfAbsent(
       "backfill_op_return",
       {},
@@ -1647,7 +1647,7 @@ async function backfillOpReturn(
     );
   }
 
-  return processed > 0 ? { continued: remaining > 0 } : undefined;
+  return processed > 0 ? { continued: remaining } : undefined;
 }
 
 export async function processJob(

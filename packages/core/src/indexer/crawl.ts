@@ -244,8 +244,8 @@ export async function scheduleDownstreamCrawl(
     enqueueCache.queueDepth < config.maxQueueDepth &&
     !scheduleBudgetLow(budget, reserve)
   ) {
-    const missingOpReturn = await store.countTransactionsMissingOpReturn();
-    if (missingOpReturn > 0) {
+    const missingOpReturn = await store.hasTransactionsMissingOpReturn();
+    if (missingOpReturn) {
       await store.enqueueJobIfAbsent(
         "backfill_op_return",
         {},

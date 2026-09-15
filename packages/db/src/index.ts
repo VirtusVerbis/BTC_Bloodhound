@@ -415,9 +415,10 @@ export function runMigrations(sqlite: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_edges_to_dir ON edges(to_address, direction);
   `);
   sqlite.exec(`
-    CREATE INDEX IF NOT EXISTS idx_transactions_missing_op_return
-      ON transactions(txid) WHERE op_return_display IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_transactions_missing_op_return_height
+      ON transactions(block_height, txid) WHERE op_return_display IS NULL;
   `);
+  sqlite.exec(`DROP INDEX IF EXISTS idx_transactions_missing_op_return;`);
   sqlite.exec(`
     CREATE INDEX IF NOT EXISTS idx_addresses_crawl_pending
       ON addresses(role, hop_from_hacker)
@@ -484,6 +485,17 @@ export function runMigrations(sqlite: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_jobs_active_type_addr
       ON jobs(type, json_extract(payload_json, '$.address'))
       WHERE status IN ('pending', 'running');
+  `);
+  sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_jobs_pending_ingest_due
+      ON jobs(priority DESC, run_after, created_at)
+      WHERE status = 'pending'
+        AND type IN ('backfill_hacker_address', 'audit_hacker_backfill', 'expand_downstream');
+  `);
+  sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_jobs_pending_run_after
+      ON jobs(run_after)
+      WHERE status = 'pending';
   `);
 
   if (!schedulerCols.some((c) => c.name === "sync_snapshot_dirty")) {
@@ -558,6 +570,32 @@ export function runMigrations(sqlite: Database.Database): void {
       UPDATE scheduler_state SET pending_job_count = (
         SELECT COUNT(*) FROM jobs WHERE status = 'pending'
       ) WHERE id = 1
+    `);
+  }
+  if (!schedulerCols.some((c) => c.name === "active_expand_count")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN active_expand_count INTEGER NOT NULL DEFAULT 0`);
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN active_backfill_count INTEGER NOT NULL DEFAULT 0`);
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN active_audit_count INTEGER NOT NULL DEFAULT 0`);
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN active_process_tx_count INTEGER NOT NULL DEFAULT 0`);
+    sqlite.exec(`
+      UPDATE scheduler_state SET
+        active_expand_count = (
+          SELECT COUNT(*) FROM jobs
+          WHERE type = 'expand_downstream' AND status IN ('pending', 'running')
+        ),
+        active_backfill_count = (
+          SELECT COUNT(*) FROM jobs
+          WHERE type = 'backfill_hacker_address' AND status IN ('pending', 'running')
+        ),
+        active_audit_count = (
+          SELECT COUNT(*) FROM jobs
+          WHERE type = 'audit_hacker_backfill' AND status IN ('pending', 'running')
+        ),
+        active_process_tx_count = (
+          SELECT COUNT(*) FROM jobs
+          WHERE type = 'process_tx' AND status IN ('pending', 'running')
+        )
+      WHERE id = 1
     `);
   }
   sqlite.exec(`

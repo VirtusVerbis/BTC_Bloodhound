@@ -61,6 +61,37 @@ const INGEST_JOB_TYPES = [
   "expand_downstream",
 ] as const;
 
+function jobTypeInSql(types: readonly string[]) {
+  const list = types.map((t) => `'${t.replace(/'/g, "''")}'`).join(", ");
+  return sql`${jobs.type} IN (${sql.raw(list)})`;
+}
+
+/** Literal predicates so SQLite can use partial indexes (bound `status = ?` cannot). */
+const JOB_STATUS_PENDING_SQL = sql`${jobs.status} = 'pending'`;
+const JOB_STATUS_ACTIVE_SQL = sql`${jobs.status} IN ('pending', 'running')`;
+const INGEST_JOB_TYPE_SQL = jobTypeInSql(INGEST_JOB_TYPES);
+
+type CachedActiveJobCountField =
+  | "activeExpandCount"
+  | "activeBackfillCount"
+  | "activeAuditCount"
+  | "activeProcessTxCount";
+
+function cachedActiveJobCountField(type: string): CachedActiveJobCountField | null {
+  switch (type) {
+    case "expand_downstream":
+      return "activeExpandCount";
+    case "backfill_hacker_address":
+      return "activeBackfillCount";
+    case "audit_hacker_backfill":
+      return "activeAuditCount";
+    case "process_tx":
+      return "activeProcessTxCount";
+    default:
+      return null;
+  }
+}
+
 const MAINT_COSMETIC_JOB_TYPES = [
   "poll_hacker_address",
   "poll_downstream_address",
@@ -546,32 +577,29 @@ export class Store {
     const payloadJson = JSON.stringify(payload);
     const continuation = isIngestContinuation(payloadJson);
 
-    if (type === "expand_downstream") {
-      const address = expandPayloadAddress(payload);
-      if (address) {
-        const perAddr = await this.countActiveJobsForAddress("expand_downstream", address);
-        if (perAddr >= this.maxPendingExpandPerAddress) return false;
-      }
-      const globalExpand = await this.countActiveJobs("expand_downstream");
-      if (globalExpand >= this.maxPendingExpandGlobal) return false;
-    }
-
-    if (type === "backfill_hacker_address" && !continuation) {
-      const globalBackfill = await this.countActiveJobs("backfill_hacker_address");
-      if (globalBackfill >= this.maxPendingBackfillGlobal) return false;
-    }
-
-    if (type === "audit_hacker_backfill") {
-      const globalAudit = await this.countActiveJobs("audit_hacker_backfill");
-      if (globalAudit >= this.maxPendingAuditGlobal) return false;
-    }
-
     const state = await this.getSchedulerState();
     const schedulingPaused = (state?.queueSchedulingPaused ?? 0) !== 0;
     if (schedulingPaused) {
       if (type === "expand_downstream") return false;
       if (type === "backfill_hacker_address" && continuation) return true;
       return false;
+    }
+
+    if (type === "expand_downstream") {
+      if ((state?.activeExpandCount ?? 0) >= this.maxPendingExpandGlobal) return false;
+      const address = expandPayloadAddress(payload);
+      if (address) {
+        const perAddr = await this.countActiveJobsForAddress("expand_downstream", address);
+        if (perAddr >= this.maxPendingExpandPerAddress) return false;
+      }
+    }
+
+    if (type === "backfill_hacker_address" && !continuation) {
+      if ((state?.activeBackfillCount ?? 0) >= this.maxPendingBackfillGlobal) return false;
+    }
+
+    if (type === "audit_hacker_backfill") {
+      if ((state?.activeAuditCount ?? 0) >= this.maxPendingAuditGlobal) return false;
     }
 
     const depth = state?.pendingJobCount ?? 0;
@@ -1193,6 +1221,16 @@ export class Store {
       .where(isNull(transactions.opReturnDisplay))
       .get();
     return Number(row?.count ?? 0);
+  }
+
+  async hasTransactionsMissingOpReturn(): Promise<boolean> {
+    const row = await this.db
+      .select({ txid: transactions.txid })
+      .from(transactions)
+      .where(isNull(transactions.opReturnDisplay))
+      .limit(1)
+      .get();
+    return row != null;
   }
 
   async getOpReturnDisplayByTxids(txids: string[]): Promise<Map<string, string>> {
@@ -1962,7 +2000,7 @@ export class Store {
         createdAt: now(),
       })
       .run();
-    await this.adjustPendingJobCount(1);
+    await this.afterJobInserted(type);
     return lastInsertId(result as { lastInsertRowid?: number | bigint; meta?: { last_row_id?: number } });
   }
 
@@ -2004,75 +2042,59 @@ export class Store {
     if (changesCount(result as { changes?: number; meta?: { changes?: number } }) === 0) {
       return null;
     }
-    await this.adjustPendingJobCount(1);
+    await this.afterJobInserted(type);
     return lastInsertId(result as { lastInsertRowid?: number | bigint; meta?: { last_row_id?: number } });
   }
 
   async countActiveJobs(type: string) {
+    const field = cachedActiveJobCountField(type);
+    if (field) {
+      const state = await this.getSchedulerState();
+      return Number(state?.[field] ?? 0);
+    }
     const row = await this.db
       .select({ count: sql<number>`count(*)` })
       .from(jobs)
-      .where(
-        and(
-          eq(jobs.type, type),
-          inArray(jobs.status, [...ACTIVE_JOB_STATUSES]),
-        ),
-      )
+      .where(and(eq(jobs.type, type), JOB_STATUS_ACTIVE_SQL))
       .get();
     return row?.count ?? 0;
   }
 
   async hasActiveJob(type: string): Promise<boolean> {
     const row = await this.db
-      .select({ id: jobs.id })
+      .select({ ok: sql`1` })
       .from(jobs)
-      .where(
-        and(
-          eq(jobs.type, type),
-          inArray(jobs.status, [...ACTIVE_JOB_STATUSES]),
-        ),
-      )
+      .where(and(eq(jobs.type, type), JOB_STATUS_ACTIVE_SQL))
       .limit(1)
       .get();
     return row != null;
   }
 
   async countActiveJobsForAddress(type: string, address: string): Promise<number> {
-    const row = await this.db
-      .select({ count: sql<number>`count(*)` })
+    const cap =
+      type === "expand_downstream" ? this.maxPendingExpandPerAddress + 1 : Number.MAX_SAFE_INTEGER;
+    const rows = await this.db
+      .select({ ok: sql`1` })
       .from(jobs)
-      .where(
-        and(
-          eq(jobs.type, type),
-          inArray(jobs.status, [...ACTIVE_JOB_STATUSES]),
-          jobPayloadAddressEq(address),
-        ),
-      )
-      .get();
-    return Number(row?.count ?? 0);
+      .where(and(eq(jobs.type, type), JOB_STATUS_ACTIVE_SQL, jobPayloadAddressEq(address)))
+      .limit(cap)
+      .all();
+    return rows.length;
   }
 
   async hasPendingJob(type: string, address?: string) {
-    if (!address) {
-      return !!(await this.db
-        .select()
-        .from(jobs)
-        .where(and(eq(jobs.type, type), inArray(jobs.status, [...ACTIVE_JOB_STATUSES])))
-        .get());
+    const conditions = [eq(jobs.type, type), JOB_STATUS_ACTIVE_SQL];
+    if (address) {
+      // Address must be pre-validated by API; bind as parameter (no raw SQL concat of user input).
+      conditions.push(jobPayloadAddressEq(address));
     }
-    // Address must be pre-validated by API; bind as parameter (no raw SQL concat of user input).
-    const pending = await this.db
-      .select()
+    const row = await this.db
+      .select({ ok: sql`1` })
       .from(jobs)
-      .where(
-        and(
-          eq(jobs.type, type),
-          inArray(jobs.status, [...ACTIVE_JOB_STATUSES]),
-          jobPayloadAddressEq(address),
-        ),
-      )
+      .where(and(...conditions))
+      .limit(1)
       .get();
-    return !!pending;
+    return row != null;
   }
 
   /** Raise priority (and optionally stamp ops opsPriority) on pending expand_downstream for one address. */
@@ -2088,7 +2110,7 @@ export class Store {
       .where(
         and(
           eq(jobs.type, "expand_downstream"),
-          eq(jobs.status, "pending"),
+          JOB_STATUS_PENDING_SQL,
           jobPayloadAddressEq(address),
         ),
       )
@@ -2106,7 +2128,7 @@ export class Store {
       const result = await this.db
         .update(jobs)
         .set({ priority, payloadJson })
-        .where(and(eq(jobs.id, row.id), eq(jobs.status, "pending")))
+        .where(and(eq(jobs.id, row.id), JOB_STATUS_PENDING_SQL))
         .run();
       if (changesCount(result as { changes?: number; meta?: { changes?: number } }) > 0) {
         jobIds.push(row.id);
@@ -2167,7 +2189,7 @@ export class Store {
     const claimed = await this.db
       .update(jobs)
       .set({ status: "running", startedAt: ts, completedAt: null })
-      .where(and(eq(jobs.id, id), eq(jobs.status, "pending")))
+      .where(and(eq(jobs.id, id), JOB_STATUS_PENDING_SQL))
       .run();
     if (changesCount(claimed as { changes?: number; meta?: { changes?: number } }) === 0) {
       return null;
@@ -2189,7 +2211,7 @@ export class Store {
         createdAt: jobs.createdAt,
       })
       .from(jobs)
-      .where(and(eq(jobs.status, "pending"), lte(jobs.runAfter, ts)))
+      .where(and(JOB_STATUS_PENDING_SQL, lte(jobs.runAfter, ts)))
       .orderBy(...jobClaimOrderBy(ageBoost, ts))
       .limit(1)
       .get();
@@ -2206,9 +2228,9 @@ export class Store {
     const ts = now();
     const types = opts?.eligibleTypes ?? MAINT_COSMETIC_JOB_TYPES;
     const conditions = [
-      eq(jobs.status, "pending"),
+      JOB_STATUS_PENDING_SQL,
       lte(jobs.runAfter, ts),
-      inArray(jobs.type, [...types]),
+      jobTypeInSql(types),
       gte(jobWaitSecExpr(ts), minWaitSec),
     ];
     const excludeIds = opts?.excludeIds ?? [];
@@ -2229,19 +2251,30 @@ export class Store {
   /** Runnable pending ingest jobs in priority order (read-only peek for tick planning). */
   async listPendingIngestCandidates(limit = 32): Promise<Job[]> {
     const ts = now();
-    return await this.db
-      .select()
+    const rows = await this.db
+      .select({
+        id: jobs.id,
+        type: jobs.type,
+        payloadJson: jobs.payloadJson,
+        status: jobs.status,
+        priority: jobs.priority,
+        runAfter: jobs.runAfter,
+        createdAt: jobs.createdAt,
+        reclaimCount: jobs.reclaimCount,
+      })
       .from(jobs)
-      .where(
-        and(
-          eq(jobs.status, "pending"),
-          lte(jobs.runAfter, ts),
-          inArray(jobs.type, [...INGEST_JOB_TYPES]),
-        ),
-      )
+      .where(and(JOB_STATUS_PENDING_SQL, lte(jobs.runAfter, ts), INGEST_JOB_TYPE_SQL))
       .orderBy(desc(jobs.priority), asc(jobs.runAfter), asc(jobs.createdAt))
       .limit(limit)
       .all();
+    return rows.map((row) => ({
+      ...row,
+      attempts: 0,
+      lastError: null,
+      startedAt: null,
+      completedAt: null,
+      reclaimProgressJson: null,
+    }));
   }
 
   /** Claim a specific ingest job by id (atomic pending → running). */
@@ -2253,9 +2286,9 @@ export class Store {
       .where(
         and(
           eq(jobs.id, id),
-          eq(jobs.status, "pending"),
+          JOB_STATUS_PENDING_SQL,
           lte(jobs.runAfter, ts),
-          inArray(jobs.type, [...INGEST_JOB_TYPES]),
+          INGEST_JOB_TYPE_SQL,
         ),
       )
       .get();
@@ -2318,6 +2351,9 @@ export class Store {
       .run();
     if (job?.status === "pending") {
       await this.adjustPendingJobCount(-1);
+    }
+    if (job?.status === "pending" || job?.status === "running") {
+      await this.adjustActiveJobCount(job.type, -1);
     }
     if (job) {
       await this.maybeUpdateLastCompletedJobCache({
@@ -2496,7 +2532,7 @@ export class Store {
       .from(jobs)
       .where(
         and(
-          eq(jobs.status, "pending"),
+          JOB_STATUS_PENDING_SQL,
           lte(jobs.runAfter, ts),
           or(
             sql`${eff} > ${targetEff}`,
@@ -2514,7 +2550,7 @@ export class Store {
     const row = await this.db
       .select({ count: sql<number>`count(*)` })
       .from(jobs)
-      .where(and(eq(jobs.status, "pending"), lte(jobs.runAfter, ts)))
+      .where(and(JOB_STATUS_PENDING_SQL, lte(jobs.runAfter, ts)))
       .get();
     return row?.count ?? 0;
   }
@@ -2526,7 +2562,7 @@ export class Store {
   }
 
   async getActiveJobSummary(filters?: { statuses?: string[]; type?: string }) {
-    const statuses = filters?.statuses ?? ["pending", "running"];
+    const statuses = filters?.statuses ?? [...ACTIVE_JOB_STATUSES];
     const conditions = [inArray(jobs.status, statuses)];
     if (filters?.type) conditions.push(eq(jobs.type, filters.type));
     return await this.db
@@ -2594,6 +2630,47 @@ export class Store {
       SET pending_job_count = MAX(0, pending_job_count + ${delta})
       WHERE id = 1
     `);
+  }
+
+  private async afterJobInserted(type: string): Promise<void> {
+    await this.adjustPendingJobCount(1);
+    await this.adjustActiveJobCount(type, 1);
+  }
+
+  private async adjustActiveJobCount(type: string, delta: number): Promise<void> {
+    if (delta === 0) return;
+    switch (type) {
+      case "expand_downstream":
+        await this.db.run(sql`
+          UPDATE scheduler_state
+          SET active_expand_count = MAX(0, active_expand_count + ${delta})
+          WHERE id = 1
+        `);
+        return;
+      case "backfill_hacker_address":
+        await this.db.run(sql`
+          UPDATE scheduler_state
+          SET active_backfill_count = MAX(0, active_backfill_count + ${delta})
+          WHERE id = 1
+        `);
+        return;
+      case "audit_hacker_backfill":
+        await this.db.run(sql`
+          UPDATE scheduler_state
+          SET active_audit_count = MAX(0, active_audit_count + ${delta})
+          WHERE id = 1
+        `);
+        return;
+      case "process_tx":
+        await this.db.run(sql`
+          UPDATE scheduler_state
+          SET active_process_tx_count = MAX(0, active_process_tx_count + ${delta})
+          WHERE id = 1
+        `);
+        return;
+      default:
+        return;
+    }
   }
 
   async markJobSnapshotDirty(): Promise<void> {
@@ -2799,16 +2876,40 @@ export class Store {
     const row = await this.db
       .select({ count: sql<number>`count(*)` })
       .from(jobs)
-      .where(eq(jobs.status, "pending"))
+      .where(JOB_STATUS_PENDING_SQL)
       .get();
     const count = row?.count ?? 0;
     await this.updateSchedulerState({ pendingJobCount: count });
     return count;
   }
 
+  async reconcileActiveJobCounts(): Promise<void> {
+    await this.db.run(sql`
+      UPDATE scheduler_state SET
+        active_expand_count = (
+          SELECT COUNT(*) FROM jobs
+          WHERE type = 'expand_downstream' AND status IN ('pending', 'running')
+        ),
+        active_backfill_count = (
+          SELECT COUNT(*) FROM jobs
+          WHERE type = 'backfill_hacker_address' AND status IN ('pending', 'running')
+        ),
+        active_audit_count = (
+          SELECT COUNT(*) FROM jobs
+          WHERE type = 'audit_hacker_backfill' AND status IN ('pending', 'running')
+        ),
+        active_process_tx_count = (
+          SELECT COUNT(*) FROM jobs
+          WHERE type = 'process_tx' AND status IN ('pending', 'running')
+        )
+      WHERE id = 1
+    `);
+  }
+
   async reconcileCheapCounters(): Promise<void> {
     await this.reconcileCrawlPendingCount();
     await this.reconcilePendingJobCount();
+    await this.reconcileActiveJobCounts();
   }
 
   async reconcileStatsCounters(): Promise<void> {
@@ -2822,16 +2923,6 @@ export class Store {
       .select({ count: sql<number>`count(*)` })
       .from(addresses)
       .where(and(eq(addresses.isFlaggedHacker, true), gt(addresses.totalReceivedSats, 0)))
-      .get();
-    const totalIn = await this.db
-      .select({ total: sql<number>`coalesce(sum(${edges.amountSats}), 0)` })
-      .from(edges)
-      .where(eq(edges.direction, "in_to_hacker"))
-      .get();
-    const totalOut = await this.db
-      .select({ total: sql<number>`coalesce(sum(${edges.amountSats}), 0)` })
-      .from(edges)
-      .where(eq(edges.direction, "out_from_hacker"))
       .get();
     const expanded = await this.db
       .select({ count: sql<number>`count(*)` })
@@ -2855,8 +2946,6 @@ export class Store {
     await this.updateSchedulerState({
       victimCount: victims?.count ?? 0,
       hackerActiveCount: hackers?.count ?? 0,
-      totalInSats: totalIn?.total ?? 0,
-      totalOutSats: totalOut?.total ?? 0,
       crawlExpandedCount: expanded?.count ?? 0,
       crawlMaxHopReached: maxHop?.max ?? 0,
       downstreamTreeCount: tree?.count ?? 0,
@@ -2910,6 +2999,10 @@ export class Store {
     maintenanceRunJson?: string | null;
     crawlPendingCount?: number;
     pendingJobCount?: number;
+    activeExpandCount?: number;
+    activeBackfillCount?: number;
+    activeAuditCount?: number;
+    activeProcessTxCount?: number;
     syncSnapshotDirty?: number;
     monitorSnapshotDirty?: number;
     downstreamPollDueCount?: number;
@@ -4703,21 +4796,25 @@ LIMIT ${remaining}
   }
 
   async deleteActiveJobsForAddress(address: string): Promise<number> {
-    const pendingRow = await this.db
-      .select({ count: sql<number>`count(*)` })
+    const rows = await this.db
+      .select({ type: jobs.type, status: jobs.status })
       .from(jobs)
-      .where(and(eq(jobs.status, "pending"), jobPayloadAddressEq(address)))
-      .get();
+      .where(and(JOB_STATUS_ACTIVE_SQL, jobPayloadAddressEq(address)))
+      .all();
     const result = await this.db
       .delete(jobs)
-      .where(
-        and(
-          inArray(jobs.status, [...ACTIVE_JOB_STATUSES]),
-          jobPayloadAddressEq(address),
-        ),
-      )
+      .where(and(JOB_STATUS_ACTIVE_SQL, jobPayloadAddressEq(address)))
       .run();
-    await this.adjustPendingJobCount(-(pendingRow?.count ?? 0));
+    let pendingDelta = 0;
+    const activeByType = new Map<string, number>();
+    for (const row of rows) {
+      if (row.status === "pending") pendingDelta -= 1;
+      activeByType.set(row.type, (activeByType.get(row.type) ?? 0) - 1);
+    }
+    await this.adjustPendingJobCount(pendingDelta);
+    for (const [type, delta] of activeByType) {
+      await this.adjustActiveJobCount(type, delta);
+    }
     return changesCount(result as { changes?: number; meta?: { changes?: number } });
   }
 
@@ -4725,7 +4822,7 @@ LIMIT ${remaining}
     const pendingRow = await this.db
       .select({ count: sql<number>`count(*)` })
       .from(jobs)
-      .where(eq(jobs.status, "pending"))
+      .where(JOB_STATUS_PENDING_SQL)
       .get();
     const runningRow = await this.db
       .select({ count: sql<number>`count(*)` })
@@ -4734,11 +4831,14 @@ LIMIT ${remaining}
       .get();
     const pending = pendingRow?.count ?? 0;
     const running = runningRow?.count ?? 0;
-    await this.db
-      .delete(jobs)
-      .where(inArray(jobs.status, [...ACTIVE_JOB_STATUSES]))
-      .run();
-    await this.updateSchedulerState({ pendingJobCount: 0 });
+    await this.db.delete(jobs).where(JOB_STATUS_ACTIVE_SQL).run();
+    await this.updateSchedulerState({
+      pendingJobCount: 0,
+      activeExpandCount: 0,
+      activeBackfillCount: 0,
+      activeAuditCount: 0,
+      activeProcessTxCount: 0,
+    });
     return { deleted: pending + running, pending, running };
   }
 }

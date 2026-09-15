@@ -120,6 +120,18 @@ export class RemoteReadStore {
   }
 
   async countActiveJobs(type: string) {
+    if (
+      type === "expand_downstream" ||
+      type === "backfill_hacker_address" ||
+      type === "audit_hacker_backfill" ||
+      type === "process_tx"
+    ) {
+      const state = await this.getSchedulerState();
+      if (type === "expand_downstream") return state?.activeExpandCount ?? 0;
+      if (type === "backfill_hacker_address") return state?.activeBackfillCount ?? 0;
+      if (type === "audit_hacker_backfill") return state?.activeAuditCount ?? 0;
+      return state?.activeProcessTxCount ?? 0;
+    }
     const row = this.client.query(
       `SELECT COUNT(*) AS count FROM jobs WHERE type = ${sqlString(type)} AND status IN ('pending', 'running');`,
     )[0];
@@ -166,6 +178,10 @@ export class RemoteReadStore {
       mempoolRetryAfterAt: row.mempool_retry_after_at != null ? str(row.mempool_retry_after_at) : null,
       queueSchedulingPaused: num(row.queue_scheduling_paused),
       pendingJobCount: num(row.pending_job_count),
+      activeExpandCount: num(row.active_expand_count),
+      activeBackfillCount: num(row.active_backfill_count),
+      activeAuditCount: num(row.active_audit_count),
+      activeProcessTxCount: num(row.active_process_tx_count),
       backfillHealAuditIndex: num(row.backfill_heal_audit_index),
       hackerPollIndex: num(row.hacker_poll_index),
       maintenanceCronCounter: num(row.maintenance_cron_counter),

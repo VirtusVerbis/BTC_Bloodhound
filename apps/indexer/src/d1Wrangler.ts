@@ -32,9 +32,13 @@ function jobPayloadAddressEqSql(address: string): string {
 }
 
 function pendingJobCountBackfillSql(): string {
-  return `UPDATE scheduler_state SET pending_job_count = (
-  SELECT COUNT(*) FROM jobs WHERE status = 'pending'
-) WHERE id = 1;`;
+  return `UPDATE scheduler_state SET
+  pending_job_count = (SELECT COUNT(*) FROM jobs WHERE status = 'pending'),
+  active_expand_count = (SELECT COUNT(*) FROM jobs WHERE type = 'expand_downstream' AND status IN ('pending', 'running')),
+  active_backfill_count = (SELECT COUNT(*) FROM jobs WHERE type = 'backfill_hacker_address' AND status IN ('pending', 'running')),
+  active_audit_count = (SELECT COUNT(*) FROM jobs WHERE type = 'audit_hacker_backfill' AND status IN ('pending', 'running')),
+  active_process_tx_count = (SELECT COUNT(*) FROM jobs WHERE type = 'process_tx' AND status IN ('pending', 'running'))
+WHERE id = 1;`;
 }
 
 type Row = Record<string, unknown>;
