@@ -416,6 +416,34 @@ export type MaintenancePhase =
   | "rate_limits"
   | "sync_state_orphans";
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/** True when prune has never run, or last run is at least `intervalDays` ago. */
+export function isPruneDue(
+  lastPrunedAt: string | null | undefined,
+  intervalDays: number,
+  nowMs = Date.now(),
+): boolean {
+  if (intervalDays <= 0) return false;
+  if (!lastPrunedAt) return true;
+  const lastMs = new Date(lastPrunedAt).getTime();
+  if (!Number.isFinite(lastMs)) return true;
+  return nowMs - lastMs >= intervalDays * MS_PER_DAY;
+}
+
+/** Next prune instant: last run + interval, or now if never-run / overdue. */
+export function nextPruneAtIso(
+  lastPrunedAt: string | null | undefined,
+  intervalDays: number,
+  nowMs = Date.now(),
+): string {
+  if (!lastPrunedAt) return new Date(nowMs).toISOString();
+  const lastMs = new Date(lastPrunedAt).getTime();
+  if (!Number.isFinite(lastMs)) return new Date(nowMs).toISOString();
+  const nextMs = lastMs + Math.max(1, intervalDays) * MS_PER_DAY;
+  return new Date(Math.max(nextMs, nowMs)).toISOString();
+}
+
 export interface MaintenanceRunProgress {
   phase?: MaintenancePhase;
   jobsDeleted?: number;
@@ -469,6 +497,7 @@ export interface MaintenanceStatus {
   intervalDays: number;
   ticksUntilPrune: number | null;
   nextPruneAt: string | null;
+  remaining?: MaintenanceWorkEstimate;
 }
 
 function maintenanceShouldStop(opts: MaintenanceBatchOpts): boolean {
@@ -488,7 +517,7 @@ function parseMaintenanceRunJson(raw: string | null | undefined): MaintenanceRun
 }
 
 function retentionCutoffIso(retentionDays: number): string {
-  const ms = Math.max(1, retentionDays) * 24 * 60 * 60 * 1000;
+  const ms = Math.max(1, retentionDays) * MS_PER_DAY;
   return new Date(Date.now() - ms).toISOString();
 }
 
@@ -3726,7 +3755,7 @@ export class Store {
     const batchSize = opts.batchSize ?? 500;
     const maxBatches = opts.maxBatchesPerRun ?? 20;
     const maxDeletes = opts.maxPerRun ?? 10_000;
-    const cutoff = retentionCutoffIso(opts.retentionDays ?? 5);
+    const cutoff = retentionCutoffIso(opts.retentionDays ?? 3);
     let batches = 0;
     let affected = 0;
     while (batches < maxBatches && affected < maxDeletes) {
@@ -3830,14 +3859,14 @@ export class Store {
     const enabled = config.jobPruneEnabled;
     const pending = (scheduler?.maintenancePrunePending ?? 0) !== 0;
     const progressRaw = parseMaintenanceRunJson(scheduler?.maintenanceRunJson);
-    const intervalTicks = Math.max(1, config.jobPruneIntervalDays) * 1440;
-    const counter = scheduler?.maintenanceCronCounter ?? 0;
-    const ticksUntil =
+    const nextPruneAt =
       !enabled || pending
         ? null
-        : intervalTicks - (counter % intervalTicks);
-    const nextPruneAt =
-      ticksUntil == null ? null : new Date(nowMs + ticksUntil * 60_000).toISOString();
+        : nextPruneAtIso(scheduler?.lastDoneJobsPrunedAt, config.jobPruneIntervalDays, nowMs);
+    const ticksUntil =
+      nextPruneAt == null
+        ? null
+        : Math.max(0, Math.ceil((new Date(nextPruneAt).getTime() - nowMs) / 60_000));
 
     let status: MaintenanceStatusValue = "disabled";
     if (enabled) {

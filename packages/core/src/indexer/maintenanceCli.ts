@@ -119,7 +119,6 @@ export async function runMaintenanceCli(
 ): Promise<MaintenanceCliResult> {
   const tickMs = opts.tickMs ?? DEFAULT_TICK_MS;
   const budget = createUnlimitedSubrequestBudget();
-  const forceDueCounter = Math.max(1, config.jobPruneIntervalDays) * 1440;
 
   const estimate = await store.estimateMaintenanceWork({
     jobDoneRetentionDays: config.jobDoneRetentionDays,
@@ -202,12 +201,13 @@ export async function runMaintenanceCli(
   };
 
   while (!aborted) {
+    const schedulerTick = (await store.getSchedulerState())?.maintenanceCronCounter ?? 1;
     const result = await runScheduledMaintenance(
       store,
       config,
       budget,
-      forceDueCounter,
-      { skipNonCritical: false, deadlineMs: Date.now() + tickMs },
+      schedulerTick,
+      { skipNonCritical: false, forceDue: true, deadlineMs: Date.now() + tickMs },
     );
 
     session.backfillUpdated += result.backfillUpdated;

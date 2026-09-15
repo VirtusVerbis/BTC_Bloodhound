@@ -1,10 +1,11 @@
-import type { MaintenanceRunProgress, Store } from "@cointrace/db";
+import { isPruneDue, type MaintenanceRunProgress, type Store } from "@cointrace/db";
 import type { AppConfig } from "../config.js";
 import type { SubrequestBudget } from "./subrequestBudget.js";
 
 export interface ScheduledMaintenanceOpts {
   deadlineMs?: number;
   skipNonCritical: boolean;
+  forceDue?: boolean;
 }
 
 export interface ScheduledMaintenanceResult {
@@ -42,6 +43,20 @@ function parseProgress(raw: string | null | undefined): MaintenanceRunProgress |
   }
 }
 
+function pruneIsDue(
+  config: AppConfig,
+  lastPrunedAt: string | null | undefined,
+  prunePending: boolean,
+  forceDue: boolean | undefined,
+): boolean {
+  if (!config.jobPruneEnabled) return false;
+  return (
+    forceDue === true ||
+    prunePending ||
+    isPruneDue(lastPrunedAt, config.jobPruneIntervalDays)
+  );
+}
+
 export async function runScheduledMaintenance(
   store: Store,
   config: AppConfig,
@@ -59,7 +74,27 @@ export async function runScheduledMaintenance(
     prunePending: false,
   };
 
-  if (opts.skipNonCritical || (await store.isD1QuotaBlocked("write"))) {
+  if (await store.isD1QuotaBlocked("write")) {
+    return result;
+  }
+
+  const state = await store.getSchedulerState();
+  const prunePending = (state?.maintenancePrunePending ?? 0) !== 0;
+  const due = pruneIsDue(config, state?.lastDoneJobsPrunedAt, prunePending, opts.forceDue);
+  let progress: MaintenanceRunProgress = prunePending
+    ? (parseProgress(state?.maintenanceRunJson) ?? { startedAt: new Date().toISOString() })
+    : { startedAt: new Date().toISOString() };
+
+  if (opts.skipNonCritical) {
+    if (due) {
+      if (!prunePending) {
+        await store.updateSchedulerState({
+          maintenancePrunePending: 1,
+          maintenanceRunJson: JSON.stringify(progress),
+        });
+      }
+      result.prunePending = true;
+    }
     return result;
   }
 
@@ -71,12 +106,6 @@ export async function runScheduledMaintenance(
     remainingBatches: batchesLeft,
     remainingWrites: writesLeft,
   });
-
-  const state = await store.getSchedulerState();
-  const prunePending = (state?.maintenancePrunePending ?? 0) !== 0;
-  let progress: MaintenanceRunProgress = prunePending
-    ? (parseProgress(state?.maintenanceRunJson) ?? { startedAt: new Date().toISOString() })
-    : { startedAt: new Date().toISOString() };
 
   const backfill = await store.backfillDoneJobCompletedAt({
     ...batchOpts(),
@@ -102,15 +131,11 @@ export async function runScheduledMaintenance(
     await store.reconcileCheapCounters();
   }
 
-  const pruneDueTick =
-    config.jobPruneIntervalDays > 0 &&
-    maintenanceCronCounter % (config.jobPruneIntervalDays * 1440) === 0;
   const nullCompletedAt = await store.countDoneJobsWithNullCompletedAt();
-  const shouldPrune =
-    config.jobPruneEnabled && nullCompletedAt === 0 && (prunePending || pruneDueTick);
+  const shouldPrune = due && nullCompletedAt === 0;
 
   if (!shouldPrune) {
-    if (prunePending && nullCompletedAt > 0) {
+    if (due && nullCompletedAt > 0) {
       await store.updateSchedulerState({
         maintenancePrunePending: 1,
         maintenanceRunJson: JSON.stringify(
@@ -192,12 +217,8 @@ export async function runScheduledMaintenance(
     await store.updateSchedulerState({
       maintenancePrunePending: 0,
       maintenanceRunJson: null,
-      lastDoneJobsPrunedAt:
-        result.jobsDeleted > 0 ? ts : (state?.lastDoneJobsPrunedAt ?? undefined),
-      lastHousekeepingAt:
-        result.rateLimitsDeleted > 0 || result.syncStateOrphansDeleted > 0
-          ? ts
-          : (state?.lastHousekeepingAt ?? undefined),
+      lastDoneJobsPrunedAt: ts,
+      lastHousekeepingAt: ts,
     });
   } else {
     await store.updateSchedulerState({

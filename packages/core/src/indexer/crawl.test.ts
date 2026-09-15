@@ -180,6 +180,8 @@ function mockStore(overrides: Partial<Store> = {}): Store {
     pruneStaleRateLimits: vi.fn().mockResolvedValue({ affected: 0, batches: 0, complete: true }),
     pruneOrphanSyncState: vi.fn().mockResolvedValue({ affected: 0, batches: 0, complete: true }),
     updateSchedulerState: vi.fn().mockResolvedValue(undefined),
+    reconcileCheapCounters: vi.fn().mockResolvedValue(undefined),
+    reconcileStatsCounters: vi.fn().mockResolvedValue(undefined),
     countTransactionsMissingOpReturn: vi.fn().mockResolvedValue(0),
     hasTransactionsMissingOpReturn: vi.fn().mockResolvedValue(false),
     ...overrides,
@@ -647,6 +649,7 @@ describe("scheduleDownstreamCrawl", () => {
     expect(stats.pollEnqueued).toBe(0);
     expect(store.getCrawlEnqueueCandidates).not.toHaveBeenCalled();
     expect(store.listDownstreamForPoll).not.toHaveBeenCalled();
+    expect(store.pruneDoneJobs).toHaveBeenCalledOnce();
     expect(store.maybeRefreshSyncSnapshot).toHaveBeenCalledOnce();
     expect(store.enqueueJobIfAbsent).not.toHaveBeenCalledWith(
       "poll_hacker_address",

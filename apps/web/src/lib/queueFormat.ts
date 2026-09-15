@@ -1,5 +1,6 @@
 import { truncateAddress } from "./api";
 import type { QueueJob, QueueJobClass } from "./queueApi";
+import type { MaintenanceStatus } from "../components/MonitoringIndicator";
 
 export function jobRunnableAtMs(job: Pick<QueueJob, "createdAt" | "runAfter">): number {
   const created = new Date(job.createdAt).getTime();
@@ -163,4 +164,138 @@ export function formatRunningElapsed(startedAt: string | null, nowMs: number): s
   const minutes = Math.floor(totalSec / 60);
   const seconds = Math.round(totalSec % 60);
   return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+function formatCount(n: number): string {
+  const abs = Math.abs(Math.round(n));
+  const withCommas = String(abs).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return n < 0 ? `-${withCommas}` : withCommas;
+}
+
+function formatRelativeTime(iso: string | null | undefined, nowMs: number): string {
+  if (!iso) return "—";
+  const ms = new Date(iso).getTime();
+  if (!Number.isFinite(ms)) return "—";
+  const sec = Math.max(0, Math.floor((nowMs - ms) / 1000));
+  if (sec < 60) return `${sec}s ago`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+  return `${Math.floor(sec / 86400)}d ago`;
+}
+
+function formatPruneEta(sec: number): string {
+  if (sec <= 0) return "now";
+  const days = Math.floor(sec / 86400);
+  const hours = Math.floor((sec % 86400) / 3600);
+  const minutes = Math.floor((sec % 3600) / 60);
+  if (days > 0) return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+  if (hours > 0) return minutes > 0 ? `${hours}h ${String(minutes).padStart(2, "0")}m` : `${hours}h`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${sec}s`;
+}
+
+function maintenancePhaseLabel(phase?: string): string {
+  switch (phase) {
+    case "backfill_completed_at":
+      return "backfilling job timestamps";
+    case "prune_done_jobs":
+      return "pruning done jobs";
+    case "rate_limits":
+      return "cleaning rate limits";
+    case "sync_state_orphans":
+      return "cleaning orphan sync state";
+    default:
+      return "maintenance";
+  }
+}
+
+function remainingForPhase(phase: string | undefined, remaining: MaintenanceStatus["remaining"]): number | undefined {
+  if (!remaining) return undefined;
+  switch (phase) {
+    case "backfill_completed_at":
+      return remaining.backfill;
+    case "prune_done_jobs":
+      return remaining.pruneJobs;
+    case "rate_limits":
+      return remaining.rateLimits;
+    case "sync_state_orphans":
+      return remaining.syncOrphans;
+    default:
+      return remaining.total;
+  }
+}
+
+function doneForPhase(phase: string | undefined, progress: MaintenanceStatus["progress"]): number | undefined {
+  if (!progress) return undefined;
+  switch (phase) {
+    case "backfill_completed_at":
+      return progress.completedAtBackfillUpdated;
+    case "prune_done_jobs":
+      return progress.jobsDeleted;
+    case "rate_limits":
+      return progress.rateLimitsDeleted;
+    case "sync_state_orphans":
+      return progress.syncStateOrphansDeleted;
+    default:
+      return undefined;
+  }
+}
+
+function doneUnit(phase: string | undefined): string {
+  switch (phase) {
+    case "backfill_completed_at":
+      return "backfilled";
+    case "rate_limits":
+      return "rate limits";
+    case "sync_state_orphans":
+      return "orphans";
+    default:
+      return "deleted";
+  }
+}
+
+export function formatMaintenanceLine(maintenance: MaintenanceStatus, nowMs: number): string {
+  if (!maintenance.enabled || maintenance.status === "disabled") {
+    return "Auto-prune: off";
+  }
+  if (maintenance.status === "running" || maintenance.pending) {
+    if (!maintenance.phase) {
+      return "Auto-prune: waiting to resume";
+    }
+    const phase = maintenancePhaseLabel(maintenance.phase);
+    const parts: string[] = [`Auto-prune: running — ${phase}`];
+    const done = doneForPhase(maintenance.phase, maintenance.progress);
+    if (done) parts.push(`${formatCount(done)} ${doneUnit(maintenance.phase)}`);
+    const left = remainingForPhase(maintenance.phase, maintenance.remaining);
+    if (left != null && left > 0) parts.push(`~${formatCount(left)} left`);
+    return parts.join(" · ");
+  }
+  const last = maintenance.lastPrunedAt
+    ? `last run ${formatRelativeTime(maintenance.lastPrunedAt, nowMs)}`
+    : "scheduled";
+  let next = "";
+  if (maintenance.nextPruneAt) {
+    const sec = Math.max(0, Math.ceil((new Date(maintenance.nextPruneAt).getTime() - nowMs) / 1000));
+    next = ` · next ~${formatPruneEta(sec)}`;
+  }
+  return `Auto-prune: ${last}${next} (${maintenance.retentionDays}d retention, every ${maintenance.intervalDays}d)`;
+}
+
+export function formatMaintenanceTooltip(maintenance: MaintenanceStatus, nowMs: number): string {
+  const lines = [
+    `Retention: ${maintenance.retentionDays}d`,
+    `Interval: every ${maintenance.intervalDays}d`,
+    `Last run: ${maintenance.lastPrunedAt ? formatRelativeTime(maintenance.lastPrunedAt, nowMs) : "never"}`,
+  ];
+  if (maintenance.nextPruneAt && !maintenance.pending) {
+    const sec = Math.max(0, Math.ceil((new Date(maintenance.nextPruneAt).getTime() - nowMs) / 1000));
+    lines.push(`Next run: ~${formatPruneEta(sec)}`);
+  }
+  const r = maintenance.remaining;
+  if (r) {
+    lines.push(
+      `Remaining: timestamps ${formatCount(r.backfill)}, jobs ${formatCount(r.pruneJobs)}, rate limits ${formatCount(r.rateLimits)}, orphans ${formatCount(r.syncOrphans)}`,
+    );
+  }
+  return lines.join("\n");
 }

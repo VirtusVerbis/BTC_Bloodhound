@@ -229,105 +229,98 @@ export async function scheduleDownstreamCrawl(
   }
 
   try {
-    if (skipNonCritical) {
-      return { ...emptyStats, skipNonCritical, maintTick: isMaintTick, throttled };
-    }
-
-    if (throttled) {
-      return { ...emptyStats, skipNonCritical: false, maintTick: isMaintTick, throttled };
-    }
-
-    if (
-    isOpReturnMaintTick &&
-    !skipNonCritical &&
-    !enqueueCache.queueSchedulingPaused &&
-    enqueueCache.queueDepth < config.maxQueueDepth &&
-    !scheduleBudgetLow(budget, reserve)
-  ) {
-    const missingOpReturn = await store.hasTransactionsMissingOpReturn();
-    if (missingOpReturn) {
-      await store.enqueueJobIfAbsent(
-        "backfill_op_return",
-        {},
-        JOB_PRIORITY.REFRESH_BALANCE,
-        undefined,
-        { dedupeTypes: ["backfill_op_return"] },
-      );
-    }
-  }
-
-  const hackersForCrawl = hackers;
-  if (hackersForCrawl.length > 0) {
-    const idx = await store.claimNextHackerPollIndex(hackersForCrawl.length);
-    const picked = hackersForCrawl[idx]!;
-    if (!enqueueCache.queueSchedulingPaused) {
-      const activeBackfills = await store.countActiveJobs("backfill_hacker_address");
-      if (activeBackfills < config.maxPendingBackfillGlobal) {
-        const addr = await store.getAddress(picked.address);
-        const status = addr?.expandStatus;
-        if (status === "pending" || status === "backfilling") {
-          await enqueueBackfillResume(store, picked.address);
+    if (!skipNonCritical && !throttled) {
+      if (
+        isOpReturnMaintTick &&
+        !enqueueCache.queueSchedulingPaused &&
+        enqueueCache.queueDepth < config.maxQueueDepth &&
+        !scheduleBudgetLow(budget, reserve)
+      ) {
+        const missingOpReturn = await store.hasTransactionsMissingOpReturn();
+        if (missingOpReturn) {
+          await store.enqueueJobIfAbsent(
+            "backfill_op_return",
+            {},
+            JOB_PRIORITY.REFRESH_BALANCE,
+            undefined,
+            { dedupeTypes: ["backfill_op_return"] },
+          );
         }
       }
-    }
-    const frontier = await store.getCrawlEnqueueCandidates(
-      picked.address,
-      config.crawlEnqueuePerCron,
-      config.maxCrawlDepth,
-      config.minExpandSats,
-    );
-    for (const row of frontier) {
-      const jobId = await store.enqueueJobIfAbsent(
-        "expand_downstream",
-        { address: row.address, cron: true },
-        JOB_PRIORITY.CRON_EXPAND,
-        undefined,
-        { address: row.address },
+
+      const hackersForCrawl = hackers;
+      if (hackersForCrawl.length > 0) {
+        const idx = await store.claimNextHackerPollIndex(hackersForCrawl.length);
+        const picked = hackersForCrawl[idx]!;
+        if (!enqueueCache.queueSchedulingPaused) {
+          const activeBackfills = await store.countActiveJobs("backfill_hacker_address");
+          if (activeBackfills < config.maxPendingBackfillGlobal) {
+            const addr = await store.getAddress(picked.address);
+            const status = addr?.expandStatus;
+            if (status === "pending" || status === "backfilling") {
+              await enqueueBackfillResume(store, picked.address);
+            }
+          }
+        }
+        const frontier = await store.getCrawlEnqueueCandidates(
+          picked.address,
+          config.crawlEnqueuePerCron,
+          config.maxCrawlDepth,
+          config.minExpandSats,
+        );
+        for (const row of frontier) {
+          const jobId = await store.enqueueJobIfAbsent(
+            "expand_downstream",
+            { address: row.address, cron: true },
+            JOB_PRIORITY.CRON_EXPAND,
+            undefined,
+            { address: row.address },
+          );
+          if (jobId != null) {
+            crawlEnqueued++;
+            await store.setExpandStatus(row.address, "queued");
+          }
+        }
+      }
+
+      const pollCandidates = await store.listDownstreamForPoll(
+        config.downstreamPollEnqueuePerCron,
+        config.maxCrawlDepth,
+        config.downstreamPollIntervalSec,
+        config.minExpandSats,
       );
-      if (jobId != null) {
-        crawlEnqueued++;
-        await store.setExpandStatus(row.address, "queued");
+      for (const row of pollCandidates) {
+        const jobId = await store.enqueueJobIfAbsent(
+          "poll_downstream_address",
+          { address: row.address },
+          JOB_PRIORITY.POLL_DOWNSTREAM,
+          undefined,
+          { address: row.address },
+        );
+        if (jobId != null) pollEnqueued++;
       }
     }
-  }
 
-  const pollCandidates = await store.listDownstreamForPoll(
-    config.downstreamPollEnqueuePerCron,
-    config.maxCrawlDepth,
-    config.downstreamPollIntervalSec,
-    config.minExpandSats,
-  );
-  for (const row of pollCandidates) {
-    const jobId = await store.enqueueJobIfAbsent(
-      "poll_downstream_address",
-      { address: row.address },
-      JOB_PRIORITY.POLL_DOWNSTREAM,
-      undefined,
-      { address: row.address },
-    );
-    if (jobId != null) pollEnqueued++;
-  }
+    const maintenance = await runScheduledMaintenance(store, config, budget, tick, {
+      deadlineMs: scheduleOpts?.deadlineMs,
+      skipNonCritical,
+    });
+    if (scheduleOpts?.jobDetails) {
+      logCronDetail(
+        true,
+        formatMaintenanceLogLine(maintenance),
+        scheduleOpts.logColor ?? false,
+        scheduleOpts.logColorMode,
+      );
+    }
 
-  const maintenance = await runScheduledMaintenance(store, config, budget, tick, {
-    deadlineMs: scheduleOpts?.deadlineMs,
-    skipNonCritical,
-  });
-  if (scheduleOpts?.jobDetails) {
-    logCronDetail(
-      true,
-      formatMaintenanceLogLine(maintenance),
-      scheduleOpts.logColor ?? false,
-      scheduleOpts.logColorMode,
-    );
-  }
-
-  return {
-    skipNonCritical,
-    crawlEnqueued,
-    pollEnqueued,
-    maintTick: isMaintTick,
-    throttled: false,
-  };
+    return {
+      skipNonCritical,
+      crawlEnqueued,
+      pollEnqueued,
+      maintTick: isMaintTick,
+      throttled,
+    };
   } finally {
     await store.ensureDownstreamTreeDepth(config.maxCrawlDepth).catch((err: unknown) => {
       console.error("ensureDownstreamTreeDepth failed", err);

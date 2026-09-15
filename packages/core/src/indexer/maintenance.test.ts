@@ -97,6 +97,108 @@ describe("runScheduledMaintenance", () => {
     expect(result.jobsDeleted).toBe(0);
     expect(result.prunePending).toBe(true);
   });
+
+  it("starts prune from stale lastDoneJobsPrunedAt even when cron counter is not a multiple", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const id = await store.enqueueJob("process_tx", { txid: "old" }, 1);
+    await store.completeJob(id);
+    sqlite
+      .prepare("UPDATE jobs SET completed_at = ? WHERE id = ?")
+      .run("2020-01-01T00:00:00.000Z", id);
+
+    const stale = new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString();
+    await store.updateSchedulerState({ lastDoneJobsPrunedAt: stale });
+
+    const result = await runScheduledMaintenance(
+      store,
+      testConfig({ jobPruneEnabled: true, jobPruneIntervalDays: 3 }),
+      createUnlimitedSubrequestBudget(),
+      3,
+      { skipNonCritical: false },
+    );
+
+    expect(result.jobsDeleted).toBe(1);
+    expect(result.prunePending).toBe(false);
+    expect((await store.getSchedulerState())?.lastDoneJobsPrunedAt).toBeTruthy();
+  });
+
+  it("latches pending when due but skipNonCritical", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    const pruneSpy = vi.spyOn(store, "pruneDoneJobs");
+
+    const stale = new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString();
+    await store.updateSchedulerState({ lastDoneJobsPrunedAt: stale });
+
+    const result = await runScheduledMaintenance(
+      store,
+      testConfig({ jobPruneEnabled: true, jobPruneIntervalDays: 3 }),
+      createUnlimitedSubrequestBudget(),
+      3,
+      { skipNonCritical: true },
+    );
+
+    expect(pruneSpy).not.toHaveBeenCalled();
+    expect(result.prunePending).toBe(true);
+    expect((await store.getSchedulerState())?.maintenancePrunePending).toBe(1);
+  });
+
+  it("stamps lastDoneJobsPrunedAt when a due run deletes nothing", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const result = await runScheduledMaintenance(
+      store,
+      testConfig({ jobPruneEnabled: true }),
+      createUnlimitedSubrequestBudget(),
+      1,
+      { skipNonCritical: false },
+    );
+
+    expect(result.jobsDeleted).toBe(0);
+    expect(result.prunePending).toBe(false);
+    const last = (await store.getSchedulerState())?.lastDoneJobsPrunedAt;
+    expect(last).toBeTruthy();
+  });
+
+  it("does not prune when last run is within the interval unless forceDue", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const id = await store.enqueueJob("process_tx", { txid: "old" }, 1);
+    await store.completeJob(id);
+    sqlite
+      .prepare("UPDATE jobs SET completed_at = ? WHERE id = ?")
+      .run("2020-01-01T00:00:00.000Z", id);
+
+    await store.updateSchedulerState({ lastDoneJobsPrunedAt: new Date().toISOString() });
+    const pruneSpy = vi.spyOn(store, "pruneDoneJobs");
+
+    const skipped = await runScheduledMaintenance(
+      store,
+      testConfig({ jobPruneEnabled: true, jobPruneIntervalDays: 3 }),
+      createUnlimitedSubrequestBudget(),
+      1,
+      { skipNonCritical: false },
+    );
+    expect(skipped.jobsDeleted).toBe(0);
+    expect(pruneSpy).not.toHaveBeenCalled();
+
+    const forced = await runScheduledMaintenance(
+      store,
+      testConfig({ jobPruneEnabled: true, jobPruneIntervalDays: 3 }),
+      createUnlimitedSubrequestBudget(),
+      1,
+      { skipNonCritical: false, forceDue: true },
+    );
+    expect(forced.jobsDeleted).toBe(1);
+  });
 });
 
 describe("runMaintenanceCli", () => {

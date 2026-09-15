@@ -486,6 +486,22 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
       console.error("sync/status isRebuildActive failed", err);
     }
 
+    const maintenance = store.buildMaintenanceStatus(scheduler, {
+      jobPruneEnabled: config.jobPruneEnabled,
+      jobDoneRetentionDays: config.jobDoneRetentionDays,
+      jobPruneIntervalDays: config.jobPruneIntervalDays,
+    });
+    if (maintenance.pending) {
+      try {
+        maintenance.remaining = await store.estimateMaintenanceWork({
+          jobDoneRetentionDays: config.jobDoneRetentionDays,
+          rateLimitPruneInactiveDays: config.rateLimitPruneInactiveDays,
+        });
+      } catch (err) {
+        console.error("sync/status estimateMaintenanceWork failed", err);
+      }
+    }
+
     return c.json({
       cfWorkersTier: config.cfWorkersTier,
       queueDepth,
@@ -496,11 +512,7 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
       lastProviderUsed: scheduler?.lastProviderUsed ?? null,
       rebuildActive,
       pendingProcessTx,
-      maintenance: store.buildMaintenanceStatus(scheduler, {
-        jobPruneEnabled: config.jobPruneEnabled,
-        jobDoneRetentionDays: config.jobDoneRetentionDays,
-        jobPruneIntervalDays: config.jobPruneIntervalDays,
-      }),
+      maintenance,
       ...crawl,
       ...monitor,
       ...monitoring,

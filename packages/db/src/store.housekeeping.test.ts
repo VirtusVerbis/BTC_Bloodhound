@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openDatabase, runMigrations, Store } from "./index.js";
+import { openDatabase, runMigrations, Store, isPruneDue, nextPruneAtIso } from "./index.js";
 
 describe("last completed job cache", () => {
   it("getLastCompletedJobSummary returns latest done job with completed_at", async () => {
@@ -158,12 +158,21 @@ describe("maintenance batch orchestrators", () => {
     expect(sqlite.prepare("SELECT address FROM sync_state").all()).toEqual([{ address: "bc1qlive" }]);
   });
 
-  it("buildMaintenanceStatus computes next prune tick", () => {
+  it("isPruneDue uses last-run wall clock", () => {
+    const now = Date.parse("2026-01-10T00:00:00.000Z");
+    expect(isPruneDue(null, 3, now)).toBe(true);
+    expect(isPruneDue("2026-01-07T00:00:00.000Z", 3, now)).toBe(true);
+    expect(isPruneDue("2026-01-08T00:00:00.000Z", 3, now)).toBe(false);
+    expect(isPruneDue("2026-01-09T00:00:00.000Z", 3, now)).toBe(false);
+  });
+
+  it("buildMaintenanceStatus computes next prune from last run", () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);
     const store = new Store(db);
+    const nowMs = Date.parse("2026-01-02T12:00:00.000Z");
 
-    const status = store.buildMaintenanceStatus(
+    const neverRun = store.buildMaintenanceStatus(
       {
         id: 1,
         maintenanceCronCounter: 100,
@@ -172,12 +181,29 @@ describe("maintenance batch orchestrators", () => {
         lastHousekeepingAt: null,
         maintenanceRunJson: null,
       } as Awaited<ReturnType<Store["getSchedulerState"]>>,
-      { jobPruneEnabled: true, jobDoneRetentionDays: 5, jobPruneIntervalDays: 5 },
-      Date.parse("2026-01-01T12:00:00.000Z"),
+      { jobPruneEnabled: true, jobDoneRetentionDays: 3, jobPruneIntervalDays: 3 },
+      nowMs,
     );
-    expect(status.status).toBe("scheduled");
-    expect(status.ticksUntilPrune).toBe(5 * 1440 - 100);
-    expect(status.nextPruneAt).toBeTruthy();
+    expect(neverRun.status).toBe("scheduled");
+    expect(neverRun.ticksUntilPrune).toBe(0);
+    expect(neverRun.nextPruneAt).toBe(new Date(nowMs).toISOString());
+
+    const idle = store.buildMaintenanceStatus(
+      {
+        id: 1,
+        maintenanceCronCounter: 100,
+        maintenancePrunePending: 0,
+        lastDoneJobsPrunedAt: "2026-01-01T12:00:00.000Z",
+        lastHousekeepingAt: null,
+        maintenanceRunJson: null,
+      } as Awaited<ReturnType<Store["getSchedulerState"]>>,
+      { jobPruneEnabled: true, jobDoneRetentionDays: 3, jobPruneIntervalDays: 3 },
+      nowMs,
+    );
+    expect(idle.status).toBe("idle");
+    expect(idle.nextPruneAt).toBe("2026-01-04T12:00:00.000Z");
+    expect(idle.ticksUntilPrune).toBe(2 * 1440);
+    expect(nextPruneAtIso("2026-01-01T12:00:00.000Z", 3, nowMs)).toBe("2026-01-04T12:00:00.000Z");
   });
 
   it("estimateMaintenanceWork counts rows per maintenance phase", async () => {

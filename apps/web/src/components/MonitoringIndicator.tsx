@@ -56,6 +56,13 @@ export interface MaintenanceStatus {
   intervalDays: number;
   ticksUntilPrune: number | null;
   nextPruneAt: string | null;
+  remaining?: {
+    backfill: number;
+    pruneJobs: number;
+    rateLimits: number;
+    syncOrphans: number;
+    total: number;
+  };
 }
 
 function formatLocal(iso: string | null | undefined) {

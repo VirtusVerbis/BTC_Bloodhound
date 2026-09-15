@@ -4,11 +4,14 @@ import {
   formatJobPriorityBadge,
   formatJobTypeLabel,
   formatJobWaitDuration,
+  formatMaintenanceLine,
+  formatMaintenanceTooltip,
   formatRunningElapsed,
   formatSnapshotAge,
   jobClassBorderClass,
 } from "./queueFormat";
 import type { QueueJob } from "./queueApi";
+import type { MaintenanceStatus } from "../components/MonitoringIndicator";
 
 function sampleJob(overrides: Partial<QueueJob> = {}): QueueJob {
   return {
@@ -209,5 +212,79 @@ describe("formatJobPriorityBadge", () => {
     expect(badge.label).toBe("pri 3 → 7");
     expect(badge.boosted).toBe(true);
     expect(badge.title).toBe("Base priority 3 · age boost +4 · effective 7");
+  });
+});
+
+function sampleMaintenance(overrides: Partial<MaintenanceStatus> = {}): MaintenanceStatus {
+  return {
+    enabled: true,
+    status: "idle",
+    pending: false,
+    lastPrunedAt: "2026-01-01T00:00:00.000Z",
+    lastHousekeepingAt: null,
+    retentionDays: 3,
+    intervalDays: 3,
+    ticksUntilPrune: 2880,
+    nextPruneAt: "2026-01-04T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+describe("formatMaintenanceLine", () => {
+  const now = Date.parse("2026-01-02T00:00:00.000Z");
+
+  it("shows last run and next ETA when idle", () => {
+    expect(formatMaintenanceLine(sampleMaintenance(), now)).toBe(
+      "Auto-prune: last run 1d ago · next ~2d (3d retention, every 3d)",
+    );
+  });
+
+  it("shows waiting to resume when pending with no phase", () => {
+    expect(
+      formatMaintenanceLine(
+        sampleMaintenance({ status: "running", pending: true, phase: undefined, nextPruneAt: null }),
+        now,
+      ),
+    ).toBe("Auto-prune: waiting to resume");
+  });
+
+  it("shows running progress with remaining", () => {
+    expect(
+      formatMaintenanceLine(
+        sampleMaintenance({
+          status: "running",
+          pending: true,
+          phase: "prune_done_jobs",
+          nextPruneAt: null,
+          progress: { jobsDeleted: 12400 },
+          remaining: { backfill: 0, pruneJobs: 67000, rateLimits: 0, syncOrphans: 0, total: 67000 },
+        }),
+        now,
+      ),
+    ).toBe("Auto-prune: running — pruning done jobs · 12,400 deleted · ~67,000 left");
+  });
+
+  it("returns off when disabled", () => {
+    expect(formatMaintenanceLine(sampleMaintenance({ enabled: false, status: "disabled" }), now)).toBe(
+      "Auto-prune: off",
+    );
+  });
+});
+
+describe("formatMaintenanceTooltip", () => {
+  const now = Date.parse("2026-01-02T00:00:00.000Z");
+
+  it("includes retention, interval, last run, and remaining", () => {
+    const tip = formatMaintenanceTooltip(
+      sampleMaintenance({
+        pending: true,
+        remaining: { backfill: 2, pruneJobs: 10, rateLimits: 1, syncOrphans: 0, total: 13 },
+      }),
+      now,
+    );
+    expect(tip).toContain("Retention: 3d");
+    expect(tip).toContain("Interval: every 3d");
+    expect(tip).toContain("Last run: 1d ago");
+    expect(tip).toContain("Remaining: timestamps 2, jobs 10, rate limits 1, orphans 0");
   });
 });
