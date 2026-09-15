@@ -70,6 +70,7 @@ function jobTypeInSql(types: readonly string[]) {
 const JOB_STATUS_PENDING_SQL = sql`${jobs.status} = 'pending'`;
 const JOB_STATUS_ACTIVE_SQL = sql`${jobs.status} IN ('pending', 'running')`;
 const INGEST_JOB_TYPE_SQL = jobTypeInSql(INGEST_JOB_TYPES);
+const EDGE_DIRECTION_OUT_SQL = sql`${edges.direction} = 'out_from_hacker'`;
 
 type CachedActiveJobCountField =
   | "activeExpandCount"
@@ -1533,10 +1534,21 @@ export class Store {
 
     const collected: Edge[] = [];
     for (const toAddress of unique) {
-      const conditions = [eq(edges.toAddress, toAddress), eq(edges.direction, "out_from_hacker")];
+      const conditions = [eq(edges.toAddress, toAddress), EDGE_DIRECTION_OUT_SQL];
       if (floor > 0) conditions.push(gte(edges.amountSats, floor));
       const rows = await this.db
-        .select()
+        .select({
+          id: edges.id,
+          fromAddress: edges.fromAddress,
+          toAddress: edges.toAddress,
+          txid: edges.txid,
+          amountSats: edges.amountSats,
+          blockTime: edges.blockTime,
+          hopFromHacker: edges.hopFromHacker,
+          direction: edges.direction,
+          edgeKind: edges.edgeKind,
+          fanoutMetaJson: sql<string | null>`NULL`,
+        })
         .from(edges)
         .where(and(...conditions))
         .orderBy(desc(edges.amountSats), asc(edges.fromAddress))

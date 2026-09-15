@@ -167,6 +167,7 @@ describe("victim address helpers", () => {
         amountSats: 3_400_000_000,
         direction: "out_from_hacker",
         edgeKind: "victim_dust",
+        fanoutMetaJson: JSON.stringify({ outputCount: 9 }),
       },
       {
         fromAddress: "down1",
@@ -189,6 +190,7 @@ describe("victim address helpers", () => {
     expect(refunds).toHaveLength(1);
     expect(refunds[0]!.txid).toBe("tx_refund");
     expect(refunds[0]!.amountSats).toBe(3_400_000_000);
+    expect(refunds[0]!.fanoutMetaJson).toBeNull();
 
     const viaSet = await store.listVictimRefundsForHacker("hack1", {
       minEdgeSats: 100_000,
