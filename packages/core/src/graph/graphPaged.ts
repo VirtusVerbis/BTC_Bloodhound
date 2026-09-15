@@ -3,7 +3,7 @@ import { bundleParallelEdges, mapDbEdgeToGraph } from "./graphEdges.js";
 import type { GraphEdge, GraphNode, GraphResult } from "./builder.js";
 import { enrichNodesWithOpReturn } from "./graphOpReturn.js";
 import { appendVictimRefunds } from "./graphRefunds.js";
-import { filterDownstreamEdgesExcludingVictims } from "./graphVictims.js";
+import { excludeEdgesToHackerVictims } from "./graphVictims.js";
 import {
   decodeL1Cursor,
   decodeL2Cursor,
@@ -235,12 +235,6 @@ export async function buildGraphL1Page(
     await appendVictimsSection(store, hacker, hackerId, nodes, edges, seen, options);
   }
 
-  const victimSet = await store.getVictimAddressSetForHacker(
-    hacker,
-    Math.max(options.maxVictims ?? 100, 1000),
-    minEdgeSats,
-  );
-
   const totalL1 = isFirstPage
     ? await store.countOutEdgesFromAddress(hacker, { minEdgeSats })
     : null;
@@ -255,7 +249,7 @@ export async function buildGraphL1Page(
           after: after ?? undefined,
         })
       : [];
-  outEdges = outEdges.filter((e) => !victimSet.has(e.toAddress));
+  outEdges = await excludeEdgesToHackerVictims(store, outEdges, hacker, minEdgeSats);
 
   const hackerOutGraphEdges = outEdges.map((e) => mapDbEdgeToGraph(hackerId, e.toAddress, e));
   const bundledHackerOut = bundleParallelEdges(hackerOutGraphEdges, graphBundleMinEdges);
@@ -273,9 +267,12 @@ export async function buildGraphL1Page(
   }
 
   if (isFirstPage) {
+    const refundVictims = [
+      ...await store.getVictimAddressSetForHacker(hacker, VICTIM_REFUND_PROBE_LIMIT, minEdgeSats),
+    ];
     await appendVictimRefunds(store, hacker, nodes, edges, seen, {
       minEdgeSats,
-      victimAddresses: [...victimSet].slice(0, VICTIM_REFUND_PROBE_LIMIT),
+      victimAddresses: refundVictims,
     });
   }
 
@@ -384,11 +381,6 @@ export async function buildGraphL2Page(
   if (options.cursor && !l2Cursor) throw new Error("invalid cursor");
 
   const parentAddrMap = await store.getAddressesMap(token.parents);
-  const victimSet = await store.getVictimAddressSetForHacker(
-    token.hacker,
-    Math.max(token.maxPerParent * token.parents.length, 100),
-    token.minEdgeSats,
-  );
   const allExpandable = token.parents.filter((id: string) => {
     const row = parentAddrMap.get(id);
     return (row?.hopFromHacker ?? 1) < token.maxGraphDepth;
@@ -446,13 +438,15 @@ export async function buildGraphL2Page(
       ? Math.min(spendFanoutTopK + 1, remainingPage, remainingParent)
       : Math.min(remainingPage, remainingParent);
 
-    const childEdges = filterDownstreamEdgesExcludingVictims(
+    const childEdges = await excludeEdgesToHackerVictims(
+      store,
       await store.getOutEdgesFromAddress(parentId, {
         minEdgeSats: token.minEdgeSats,
         limit: fetchLimit,
         after: edgeAfter,
       }),
-      victimSet,
+      token.hacker,
+      token.minEdgeSats,
     );
 
     if (childEdges.length === 0) {

@@ -103,6 +103,48 @@ describe("victim address helpers", () => {
     );
   });
 
+  it("filterVictimTargetsOfHacker keeps this-hacker payers above the floor", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "victim_here",
+        toAddress: "hack1",
+        txid: "tx_here",
+        amountSats: 200_000,
+        direction: "in_to_hacker",
+      },
+      {
+        fromAddress: "victim_dust",
+        toAddress: "hack1",
+        txid: "tx_dust",
+        amountSats: 500,
+        direction: "in_to_hacker",
+      },
+      {
+        fromAddress: "victim_other",
+        toAddress: "hack2",
+        txid: "tx_other",
+        amountSats: 300_000,
+        direction: "in_to_hacker",
+      },
+    ]);
+
+    expect(await store.filterVictimTargetsOfHacker([], "hack1", 100_000)).toEqual(new Set());
+    expect(
+      await store.filterVictimTargetsOfHacker(
+        ["victim_here", "victim_dust", "victim_other", "random_down"],
+        "hack1",
+        100_000,
+      ),
+    ).toEqual(new Set(["victim_here"]));
+    expect(
+      await store.filterVictimTargetsOfHacker(["victim_dust"], "hack1"),
+    ).toEqual(new Set(["victim_dust"]));
+  });
+
   it("listHackersForVictim batches address lookups", async () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);

@@ -7,7 +7,7 @@ import { captureOpReturnForTx, type CaptureOpReturnOpts } from "../indexer/opRet
 import { bundleParallelEdges, mapDbEdgeToGraph, victimReturnEdgeKind, type EdgeKind } from "./graphEdges.js";
 import { enrichNodesWithOpReturn } from "./graphOpReturn.js";
 import { appendVictimRefunds } from "./graphRefunds.js";
-import { filterDownstreamEdgesExcludingVictims } from "./graphVictims.js";
+import { excludeEdgesToHackerVictims } from "./graphVictims.js";
 import { DEFAULT_MIN_EXPAND_SATS, DEFAULT_MIN_VICTIM_INGEST_SATS, expandStatusToWrite, qualifiesForExpand } from "./expandSkip.js";
 
 export interface HackTraceOptions {
@@ -207,16 +207,15 @@ export async function buildGraph(
     }
   }
 
-  const victimSet = await store.getVictimAddressSetForHacker(
+  const outEdges = await excludeEdgesToHackerVictims(
+    store,
+    await store.getOutEdgesFromAddress(hacker, {
+      minEdgeSats,
+      limit: maxOutputs,
+    }),
     hacker,
-    Math.max(maxVictims, 1000),
     minEdgeSats,
   );
-
-  const outEdges = (await store.getOutEdgesFromAddress(hacker, {
-    minEdgeSats,
-    limit: maxOutputs,
-  })).filter((e) => !victimSet.has(e.toAddress));
 
   const hackerOutGraphEdges = outEdges.map((e) =>
     mapDbEdgeToGraph(hackerId, e.toAddress, e),
@@ -237,9 +236,11 @@ export async function buildGraph(
     });
     for (const parentId of expandableParents) {
       if (addressLookupBudget() <= 0) break;
-      const childEdges = filterDownstreamEdgesExcludingVictims(
+      const childEdges = await excludeEdgesToHackerVictims(
+        store,
         await store.getOutEdgesFromAddress(parentId, { minEdgeSats, limit: maxOutputs }),
-        victimSet,
+        hacker,
+        minEdgeSats,
       );
       const childGraphEdges = childEdges.map((ce) => mapDbEdgeToGraph(parentId, ce.toAddress, ce));
       const bundledChild = bundleParallelEdges(childGraphEdges, graphBundleMinEdges);
@@ -284,7 +285,9 @@ export async function buildGraph(
 
   await appendVictimRefunds(store, hacker, nodes, edges, seen, {
     minEdgeSats,
-    victimAddresses: victimFilter ? [victimFilter] : [...victimSet].slice(0, VICTIM_REFUND_PROBE_LIMIT),
+    victimAddresses: victimFilter
+      ? [victimFilter]
+      : [...await store.getVictimAddressSetForHacker(hacker, VICTIM_REFUND_PROBE_LIMIT, minEdgeSats)],
   });
 
   await enrichNodesWithOpReturn(store, nodes);

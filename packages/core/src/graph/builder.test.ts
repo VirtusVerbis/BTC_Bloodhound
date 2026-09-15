@@ -785,6 +785,53 @@ describe("buildGraphL1Page pagination", () => {
     expect(l2.nodes.some((n) => n.id === victim)).toBe(false);
   });
 
+  it("buildGraphL1Page does not treat a large out to this hacker's victim as downstream", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    const victim = "bc1qvictim_as_out";
+    const down1 = "bc1qdown_keep";
+
+    await store.upsertAddressesBatch([
+      { address: "hack1", role: "hacker", isFlaggedHacker: true, hopFromHacker: 0 },
+      { address: victim, role: "victim", source: "derived" },
+      { address: down1, role: "downstream", source: "derived", hopFromHacker: 1 },
+    ]);
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: victim,
+        toAddress: "hack1",
+        txid: "tx_theft",
+        amountSats: 5_000_000,
+        direction: "in_to_hacker",
+      },
+      {
+        fromAddress: "hack1",
+        toAddress: victim,
+        txid: "tx_back",
+        amountSats: 2_000_000,
+        direction: "out_from_hacker",
+      },
+      {
+        fromAddress: "hack1",
+        toAddress: down1,
+        txid: "tx_sweep",
+        amountSats: 1_000_000,
+        direction: "out_from_hacker",
+      },
+    ]);
+
+    const page = await buildGraphL1Page(store, "hack1", {
+      limit: 10,
+      maxDownstream: 100,
+      minEdgeSats: 100_000,
+      maxGraphDepth: 2,
+    });
+    expect(page.edges.some((e) => e.source === "hack1" && e.target === victim)).toBe(false);
+    expect(page.nodes.some((n) => n.id === victim && n.type === "downstream")).toBe(false);
+    expect(page.edges.some((e) => e.source === "hack1" && e.target === down1)).toBe(true);
+  });
+
   it("buildGraph and L1 still return when listVictimRefundsForHacker throws", async () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);

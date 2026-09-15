@@ -1506,6 +1506,35 @@ export class Store {
   }
 
   /**
+   * Subset of addresses that sent in_to_hacker into this hacker (optional amount floor).
+   * Point-lookup by from_address IN (...); does not scan the hacker's full inbound set.
+   */
+  async filterVictimTargetsOfHacker(
+    addresses: string[],
+    hacker: string,
+    minEdgeSats?: number,
+  ): Promise<Set<string>> {
+    const unique = [...new Set(addresses)].filter(Boolean);
+    const out = new Set<string>();
+    if (unique.length === 0) return out;
+    for (const chunk of chunkArray(unique, D1_IN_CLAUSE_CHUNK_SIZE)) {
+      const conditions = [
+        inArray(edges.fromAddress, chunk),
+        eq(edges.toAddress, hacker),
+        eq(edges.direction, "in_to_hacker"),
+      ];
+      if (minEdgeSats != null) conditions.push(gte(edges.amountSats, minEdgeSats));
+      const rows = await this.db
+        .selectDistinct({ fromAddress: edges.fromAddress })
+        .from(edges)
+        .where(and(...conditions))
+        .all();
+      for (const row of rows) out.add(row.fromAddress);
+    }
+    return out;
+  }
+
+  /**
    * Payments back to this hacker's known victims at or above minEdgeSats.
    * One indexed read per destination (idx_edges_to_out_amount), not edge_kind,
    * so historical victim_dust refunds are included. Hard-capped for D1.
