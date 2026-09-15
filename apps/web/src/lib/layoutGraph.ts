@@ -385,12 +385,13 @@ export function layoutGraph(
     ? { ...anchorRaw, position: { x: 0, y: 0 } }
     : { id: "__anchor__", type: "hacker", position: { x: 0, y: 0 }, data: {} };
 
-  const downstream = nodes.filter((n) => n.type === "downstream");
+  const downstream = nodes.filter((n) => n.type === "downstream" || n.type === "fanoutCluster");
   const miscNodes = nodes.filter(
     (n) =>
       n.type !== "victim" &&
       n.type !== "victimCluster" &&
       n.type !== "downstream" &&
+      n.type !== "fanoutCluster" &&
       n.id !== anchor.id,
   );
 

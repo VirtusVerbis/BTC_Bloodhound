@@ -296,4 +296,17 @@ describe("layoutGraph integration", () => {
     const laid = layoutGraph(nodes, edges);
     assertPairwiseNonOverlap(laid);
   });
+
+  it("places fanout cluster in the hop-2 grid", () => {
+    const nodes = [
+      anchor,
+      node("d1", "downstream", { hopFromHacker: 1, incomingSats: 5000 }),
+      node("fanout:d1", "fanoutCluster", { hopFromHacker: 2, childCount: 40, totalSats: 1000 }),
+    ];
+    const edges = [edge("e1", "hack", "d1"), edge("e2", "d1", "fanout:d1")];
+    const laid = layoutGraph(nodes, edges);
+    const hop1 = laid.find((n) => n.id === "d1")!;
+    const cluster = laid.find((n) => n.id === "fanout:d1")!;
+    expect(cluster.position.x).toBeGreaterThan(hop1.position.x);
+  });
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   computeLoadPercent,
   mergeGraphPages,
+  omitGraphNodeIds,
   shouldResumeL1,
   shouldReexpandL2,
 } from "./graphLoader";
@@ -23,6 +24,23 @@ describe("mergeGraphPages", () => {
     ]);
     expect(merged.nodes).toHaveLength(3);
     expect(merged.edges).toHaveLength(2);
+  });
+});
+
+describe("omitGraphNodeIds", () => {
+  it("drops a node and its incident edges", () => {
+    const omitted = omitGraphNodeIds(
+      {
+        nodes: [
+          { id: "hack", type: "hacker", label: "H", role: "hacker" },
+          { id: "fanout:d1", type: "fanoutCluster", label: "Fanout", role: "downstream", childCount: 9 },
+        ],
+        edges: [{ id: "e1", source: "hack", target: "fanout:d1", txid: "", amount: 1, time: null }],
+      },
+      ["fanout:d1"],
+    );
+    expect(omitted.nodes.map((n) => n.id)).toEqual(["hack"]);
+    expect(omitted.edges).toHaveLength(0);
   });
 });
 
@@ -72,10 +90,24 @@ describe("computeLoadPercent", () => {
         loadedL1: 100,
         totalL1: 100,
         maxDownstream: 100,
-        completedL2Tokens: 1,
-        totalL2Tokens: 2,
-        l2TokenProgress: 0,
+        completedL2Tokens: 0,
+        totalL2Tokens: 1,
+        l2TokenProgress: 8 / 16,
       }),
     ).toBe(80);
+  });
+
+  it("advances L2 percent with parent progress instead of a 80% plateau", () => {
+    expect(
+      computeLoadPercent({
+        phase: "l2",
+        loadedL1: 16,
+        totalL1: 16,
+        maxDownstream: 100,
+        completedL2Tokens: 0,
+        totalL2Tokens: 1,
+        l2TokenProgress: 4 / 16,
+      }),
+    ).toBe(70);
   });
 });

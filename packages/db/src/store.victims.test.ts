@@ -93,6 +93,9 @@ describe("victim address helpers", () => {
       new Set(["hack1"]),
     );
     expect(victims).toEqual(new Set(["victim_x"]));
+    expect(await store.filterKnownVictimAddresses(["victim_x", "random_down"])).toEqual(
+      new Set(["victim_x"]),
+    );
   });
 
   it("listHackersForVictim batches address lookups", async () => {

@@ -33,6 +33,7 @@ export type GraphNodeData = {
   opReturnLabel?: string;
   showOpReturnLabel?: boolean;
   onExpandVictims?: () => void;
+  onExpandFanout?: () => void;
 };
 
 const handleStyle = { background: "#f7931a", width: 6, height: 6, border: "none" };
@@ -146,6 +147,32 @@ export function VictimClusterNode({ data }: NodeProps) {
   );
 }
 
+export function FanoutClusterNode({ data }: NodeProps) {
+  const d = data as GraphNodeData;
+  return (
+    <div className="node-card default">
+      <Handle type="target" id="target" position={Position.Left} style={handleStyle} />
+      <Handle type="source" id="source" position={Position.Right} style={handleStyle} />
+      <div className="node-badge">FANOUT</div>
+      <div>
+        {d.childCount ?? 0} more outputs
+        {d.totalSats != null && d.totalSats > 0 ? (
+          <>
+            {" "}
+            · {satsToBtc(d.totalSats)} BTC
+            <UsdUnderBtc sats={d.totalSats} />
+          </>
+        ) : null}
+      </div>
+      <div className="node-actions nodrag">
+        <button type="button" onClick={d.onExpandFanout}>
+          Expand
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function VictimNode({ data }: NodeProps) {
   const d = data as GraphNodeData;
   return (
@@ -170,5 +197,6 @@ export const nodeTypes = {
   hacker: HackerNode,
   downstream: DownstreamNode,
   victimCluster: VictimClusterNode,
+  fanoutCluster: FanoutClusterNode,
   victim: VictimNode,
 };

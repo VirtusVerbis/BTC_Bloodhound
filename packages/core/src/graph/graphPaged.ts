@@ -29,6 +29,8 @@ export interface GraphL2PageMeta {
   done: boolean;
   nextCursor: string | null;
   loadedL2: number;
+  l2ParentsDone?: number;
+  l2ParentCount?: number;
 }
 
 export interface GraphL1PageResult extends GraphResult {
@@ -322,6 +324,38 @@ export async function buildGraphL1Page(
   };
 }
 
+function fanoutClusterId(parentId: string): string {
+  return `fanout:${parentId}`;
+}
+
+function appendFanoutCluster(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  parentId: string,
+  parentHop: number,
+  childCount: number,
+  totalSats: number,
+): void {
+  const clusterId = fanoutClusterId(parentId);
+  nodes.push({
+    id: clusterId,
+    type: "fanoutCluster",
+    label: "Fanout",
+    role: "downstream",
+    childCount,
+    totalSats,
+    hopFromHacker: parentHop + 1,
+  });
+  edges.push({
+    id: `${parentId}->${clusterId}`,
+    source: parentId,
+    target: clusterId,
+    txid: "",
+    amount: totalSats,
+    time: null,
+  });
+}
+
 export async function buildGraphL2Page(
   store: Store,
   l2TokenRaw: string,
@@ -330,6 +364,8 @@ export async function buildGraphL2Page(
     cursor?: string | null;
     loadedL2?: number;
     maxDownstreamOverride?: number;
+    spendFanoutTopK?: number;
+    expandParent?: string | null;
   },
 ): Promise<GraphL2PageResult> {
   const nodes: GraphNode[] = [];
@@ -341,6 +377,8 @@ export async function buildGraphL2Page(
     options.maxDownstreamOverride != null
       ? Math.max(1, Math.floor(options.maxDownstreamOverride))
       : token.maxPerParent;
+  const spendFanoutTopK = Math.max(1, Math.floor(options.spendFanoutTopK ?? 5));
+  const expandParent = options.expandParent?.trim() || null;
 
   const l2Cursor = options.cursor ? decodeL2Cursor(options.cursor) : null;
   if (options.cursor && !l2Cursor) throw new Error("invalid cursor");
@@ -351,12 +389,16 @@ export async function buildGraphL2Page(
     Math.max(token.maxPerParent * token.parents.length, 100),
     token.minEdgeSats,
   );
-  const expandableParents = token.parents.filter((id: string) => {
+  const allExpandable = token.parents.filter((id: string) => {
     const row = parentAddrMap.get(id);
     return (row?.hopFromHacker ?? 1) < token.maxGraphDepth;
   });
+  const expandableParents = expandParent
+    ? allExpandable.filter((id) => id === expandParent)
+    : allExpandable;
 
   let parentIndex = l2Cursor?.parentIndex ?? 0;
+  let loadedFromParent = l2Cursor?.loadedFromParent ?? 0;
   let edgeAfter =
     l2Cursor?.toAddress
       ? { amountSats: l2Cursor.amountSats, toAddress: l2Cursor.toAddress }
@@ -364,77 +406,157 @@ export async function buildGraphL2Page(
   let addedThisPage = 0;
   let nextCursor: string | null = null;
 
+  const emitChildren = async (
+    parentId: string,
+    bundledChild: ReturnType<typeof bundleParallelEdges>,
+    cap?: number,
+  ): Promise<number> => {
+    const slice = cap != null ? bundledChild.slice(0, cap) : bundledChild;
+    const childIds = slice.map((ge) => ge.target);
+    const childAddrMap = await store.getAddressesMap(childIds);
+    let added = 0;
+    for (const cge of slice) {
+      const cid = cge.target;
+      if (!seen.has(cid)) {
+        nodes.push(downstreamNodeFromAddress(cid, childAddrMap.get(cid), cge.amount));
+        seen.add(cid);
+      }
+      edges.push(cge);
+      added++;
+    }
+    return added;
+  };
+
   while (parentIndex < expandableParents.length && addedThisPage < options.limit) {
     const parentId = expandableParents[parentIndex]!;
-    const remaining = options.limit - addedThisPage;
+    const remainingPage = options.limit - addedThisPage;
+    const remainingParent = maxPerParent - loadedFromParent;
+    if (remainingParent <= 0) {
+      parentIndex++;
+      loadedFromParent = 0;
+      edgeAfter = undefined;
+      continue;
+    }
+
+    const parentRow = parentAddrMap.get(parentId);
+    const isFanout = parentRow?.expandProfile === "spend_fanout";
+    const collapseFanout =
+      isFanout && expandParent == null && loadedFromParent === 0 && !edgeAfter;
+    const fetchLimit = collapseFanout
+      ? Math.min(spendFanoutTopK + 1, remainingPage, remainingParent)
+      : Math.min(remainingPage, remainingParent);
+
     const childEdges = filterDownstreamEdgesExcludingVictims(
       await store.getOutEdgesFromAddress(parentId, {
         minEdgeSats: token.minEdgeSats,
-        limit: Math.min(maxPerParent, remaining),
+        limit: fetchLimit,
         after: edgeAfter,
       }),
       victimSet,
     );
-    // Filtered edges still consume DB limit slots; cursor may skip victim-dust rows.
 
     if (childEdges.length === 0) {
       parentIndex++;
+      loadedFromParent = 0;
       edgeAfter = undefined;
       continue;
     }
 
     const childGraphEdges = childEdges.map((ce) => mapDbEdgeToGraph(parentId, ce.toAddress, ce));
     const bundledChild = bundleParallelEdges(childGraphEdges, token.graphBundleMinEdges);
-    const childIds = bundledChild.map((ge) => ge.target);
-    const childAddrMap = await store.getAddressesMap(childIds);
 
-    for (const cge of bundledChild) {
-      const cid = cge.target;
-      const child = childAddrMap.get(cid);
-      if (!seen.has(cid)) {
-        nodes.push(downstreamNodeFromAddress(cid, child, cge.amount));
-        seen.add(cid);
+    if (collapseFanout) {
+      const topK = bundledChild.slice(0, spendFanoutTopK);
+      const added = await emitChildren(parentId, topK);
+      addedThisPage += added;
+      loadedFromParent += added;
+
+      const totalOut = await store.countOutEdgesFromAddress(parentId, {
+        minEdgeSats: token.minEdgeSats,
+      });
+      const remainingCount = Math.max(0, totalOut - added);
+      if (remainingCount > 0 && addedThisPage < options.limit) {
+        const topKSum = topK.reduce((sum, ge) => sum + ge.amount, 0);
+        const fanoutTotal = parseFanoutMeta(parentRow?.fanoutMetaJson)?.totalOutSats;
+        const remainingSats =
+          fanoutTotal != null ? Math.max(0, fanoutTotal - topKSum) : 0;
+        appendFanoutCluster(
+          nodes,
+          edges,
+          parentId,
+          parentRow?.hopFromHacker ?? 1,
+          remainingCount,
+          remainingSats,
+        );
+        addedThisPage++;
       }
-      edges.push(cge);
-      addedThisPage++;
-      if (addedThisPage >= options.limit) break;
+
+      parentIndex++;
+      loadedFromParent = 0;
+      edgeAfter = undefined;
+      continue;
     }
 
-    if (addedThisPage >= options.limit) {
-      const lastRaw = childEdges[childEdges.length - 1]!;
-      const hitParentCap = childEdges.length >= Math.min(maxPerParent, remaining);
-      if (hitParentCap) {
-        nextCursor = encodeL2Cursor({
-          parentIndex,
-          amountSats: lastRaw.amountSats,
-          toAddress: lastRaw.toAddress,
-        });
-      } else {
-        nextCursor = encodeL2Cursor({
-          parentIndex: parentIndex + 1,
-          amountSats: 0,
-          toAddress: "",
-        });
-      }
-      break;
-    }
+    const addCap = Math.min(bundledChild.length, remainingPage, remainingParent);
+    const added = await emitChildren(parentId, bundledChild, addCap);
+    addedThisPage += added;
+    loadedFromParent += added;
 
-    if (childEdges.length >= Math.min(maxPerParent, remaining)) {
-      const last = childEdges[childEdges.length - 1]!;
+    const lastRaw = childEdges[Math.min(childEdges.length, addCap) - 1] ?? childEdges[childEdges.length - 1]!;
+    const fetchedFull = childEdges.length >= fetchLimit;
+    const parentCapped = loadedFromParent >= maxPerParent;
+    const pageFull = addedThisPage >= options.limit;
+
+    if (pageFull && !parentCapped && fetchedFull) {
       nextCursor = encodeL2Cursor({
         parentIndex,
-        amountSats: last.amountSats,
-        toAddress: last.toAddress,
+        amountSats: lastRaw.amountSats,
+        toAddress: lastRaw.toAddress,
+        loadedFromParent,
       });
       break;
     }
 
-    parentIndex++;
-    edgeAfter = undefined;
+    if (parentCapped || !fetchedFull) {
+      if (expandParent && parentCapped) {
+        const totalOut = await store.countOutEdgesFromAddress(parentId, {
+          minEdgeSats: token.minEdgeSats,
+        });
+        const remainingCount = Math.max(0, totalOut - loadedFromParent);
+        if (remainingCount > 0 && addedThisPage < options.limit) {
+          appendFanoutCluster(
+            nodes,
+            edges,
+            parentId,
+            parentRow?.hopFromHacker ?? 1,
+            remainingCount,
+            0,
+          );
+          addedThisPage++;
+        }
+      }
+      parentIndex++;
+      loadedFromParent = 0;
+      edgeAfter = undefined;
+      continue;
+    }
+
+    edgeAfter = { amountSats: lastRaw.amountSats, toAddress: lastRaw.toAddress };
+  }
+
+  if (nextCursor == null && parentIndex < expandableParents.length) {
+    nextCursor = encodeL2Cursor({
+      parentIndex,
+      amountSats: edgeAfter?.amountSats ?? 0,
+      toAddress: edgeAfter?.toAddress ?? "",
+      loadedFromParent,
+    });
   }
 
   const done = nextCursor === null && parentIndex >= expandableParents.length;
   const loadedL2 = (options.loadedL2 ?? 0) + addedThisPage;
+  const l2ParentsDone = done ? expandableParents.length : parentIndex;
+  const l2ParentCount = expandableParents.length;
 
   await enrichNodesWithOpReturn(store, nodes);
 
@@ -447,6 +569,8 @@ export async function buildGraphL2Page(
       done,
       nextCursor: done ? null : nextCursor,
       loadedL2,
+      l2ParentsDone,
+      l2ParentCount,
     },
   };
 }

@@ -73,8 +73,17 @@ function applyMaxDownstream(graph: ApiGraphResponse, maxDownstream: number): Api
   for (const id of keptL1) keepNodeIds.add(id);
 
   for (const e of graph.edges) {
-    if (keptL1.has(e.source) && graph.nodes.find((n) => n.id === e.target)?.type === "downstream") {
-      keepNodeIds.add(e.target);
+    if (keptL1.has(e.source)) {
+      const target = graph.nodes.find((n) => n.id === e.target);
+      if (target?.type === "downstream" || target?.type === "fanoutCluster") {
+        keepNodeIds.add(e.target);
+      }
+    }
+  }
+  for (const n of graph.nodes) {
+    if (n.type === "fanoutCluster" && n.id.startsWith("fanout:")) {
+      const parent = n.id.slice("fanout:".length);
+      if (keepNodeIds.has(parent)) keepNodeIds.add(n.id);
     }
   }
 

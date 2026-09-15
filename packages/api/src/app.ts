@@ -309,6 +309,7 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
           maxDownstreamOverrideRaw != null && Number.isFinite(Number(maxDownstreamOverrideRaw))
             ? clampInt(Number(maxDownstreamOverrideRaw), 1, config.maxGraphDownstream)
             : undefined;
+        const expandParent = c.req.query("expand_parent")?.trim() || undefined;
         try {
           return c.json(
             await buildGraphL2Page(store, l2Token, {
@@ -316,6 +317,8 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
               cursor,
               loadedL2,
               maxDownstreamOverride,
+              spendFanoutTopK: config.spendFanoutTopK,
+              expandParent,
             }),
           );
         } catch (err) {

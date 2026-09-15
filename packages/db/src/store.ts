@@ -1472,14 +1472,28 @@ export class Store {
       conditions.push(gte(edges.amountSats, minEdgeSats));
     }
     const rows = await this.db
-      .select({ address: edges.fromAddress })
+      .selectDistinct({ address: edges.fromAddress })
       .from(edges)
       .where(and(...conditions))
-      .groupBy(edges.fromAddress)
-      .orderBy(desc(sql`max(${edges.amountSats})`))
       .limit(limit)
       .all();
     return new Set(rows.map((row) => row.address));
+  }
+
+  /** Addresses in the list that have any in_to_hacker edge (known victims). */
+  async filterKnownVictimAddresses(addresses: string[]): Promise<Set<string>> {
+    const unique = [...new Set(addresses)].filter(Boolean);
+    const out = new Set<string>();
+    if (unique.length === 0) return out;
+    for (const chunk of chunkArray(unique, D1_IN_CLAUSE_CHUNK_SIZE)) {
+      const rows = await this.db
+        .selectDistinct({ fromAddress: edges.fromAddress })
+        .from(edges)
+        .where(and(inArray(edges.fromAddress, chunk), eq(edges.direction, "in_to_hacker")))
+        .all();
+      for (const row of rows) out.add(row.fromAddress);
+    }
+    return out;
   }
 
   /**
@@ -1827,6 +1841,139 @@ export class Store {
     return txids;
   }
 
+  /** Spend-side txids keyed by from_address, latest first, deduped, capped per address. */
+  async listSpendTxidsByAddress(
+    spenderAddresses: string[],
+    limitPer = OP_RETURN_SPEND_TX_LIMIT,
+  ): Promise<Map<string, string[]>> {
+    const unique = [...new Set(spenderAddresses)].filter(Boolean);
+    const byAddr = new Map<string, string[]>();
+    if (unique.length === 0) return byAddr;
+
+    const sqlLimit = Math.max(limitPer * 3, limitPer);
+    type SpendRow = {
+      fromAddress: string;
+      txid: string;
+      txBlockHeight: number | null;
+      txBlockTime: string | null;
+      edgeBlockTime: string | null;
+    };
+    const rows: SpendRow[] = [];
+    for (const chunk of chunkArray(unique, D1_IN_CLAUSE_CHUNK_SIZE)) {
+      const part = await this.db
+        .select({
+          fromAddress: edges.fromAddress,
+          txid: edges.txid,
+          txBlockHeight: transactions.blockHeight,
+          txBlockTime: transactions.blockTime,
+          edgeBlockTime: edges.blockTime,
+        })
+        .from(edges)
+        .leftJoin(transactions, eq(edges.txid, transactions.txid))
+        .where(inArray(edges.fromAddress, chunk))
+        .orderBy(
+          desc(sql`coalesce(${transactions.blockHeight}, 0)`),
+          desc(sql`coalesce(${transactions.blockTime}, ${edges.blockTime}, '')`),
+        )
+        .limit(sqlLimit * chunk.length)
+        .all();
+      rows.push(...part);
+    }
+
+    rows.sort((a, b) => {
+      const heightA = a.txBlockHeight ?? 0;
+      const heightB = b.txBlockHeight ?? 0;
+      if (heightB !== heightA) return heightB - heightA;
+      const timeA = a.txBlockTime ?? a.edgeBlockTime ?? "";
+      const timeB = b.txBlockTime ?? b.edgeBlockTime ?? "";
+      return timeB.localeCompare(timeA);
+    });
+
+    const seen = new Map<string, Set<string>>();
+    for (const row of rows) {
+      const list = byAddr.get(row.fromAddress) ?? [];
+      if (list.length >= limitPer) continue;
+      const used = seen.get(row.fromAddress) ?? new Set<string>();
+      if (used.has(row.txid)) continue;
+      used.add(row.txid);
+      seen.set(row.fromAddress, used);
+      list.push(row.txid);
+      byAddr.set(row.fromAddress, list);
+    }
+    return byAddr;
+  }
+
+  /** Incoming funding txids keyed by to_address, latest first, deduped, capped per address. */
+  async listIncomingOutFromHackerTxidsByAddress(
+    addresses: string[],
+    limitPer = OP_RETURN_SPEND_TX_LIMIT,
+  ): Promise<Map<string, string[]>> {
+    const unique = [...new Set(addresses)].filter(Boolean);
+    const byAddr = new Map<string, string[]>();
+    if (unique.length === 0) return byAddr;
+
+    const sqlLimit = Math.max(limitPer * 3, limitPer);
+    type InRow = {
+      toAddress: string;
+      txid: string;
+      txBlockHeight: number | null;
+      txBlockTime: string | null;
+      edgeBlockTime: string | null;
+    };
+    const rows: InRow[] = [];
+    for (const chunk of chunkArray(unique, D1_IN_CLAUSE_CHUNK_SIZE)) {
+      const part = await this.db
+        .select({
+          toAddress: edges.toAddress,
+          txid: edges.txid,
+          txBlockHeight: transactions.blockHeight,
+          txBlockTime: transactions.blockTime,
+          edgeBlockTime: edges.blockTime,
+        })
+        .from(edges)
+        .leftJoin(transactions, eq(edges.txid, transactions.txid))
+        .where(
+          and(
+            inArray(edges.toAddress, chunk),
+            eq(edges.direction, "out_from_hacker"),
+            or(
+              isNull(edges.edgeKind),
+              and(ne(edges.edgeKind, "victim_dust"), ne(edges.edgeKind, "victim_refund")),
+            ),
+          ),
+        )
+        .orderBy(
+          desc(sql`coalesce(${transactions.blockHeight}, 0)`),
+          desc(sql`coalesce(${transactions.blockTime}, ${edges.blockTime}, '')`),
+        )
+        .limit(sqlLimit * chunk.length)
+        .all();
+      rows.push(...part);
+    }
+
+    rows.sort((a, b) => {
+      const heightA = a.txBlockHeight ?? 0;
+      const heightB = b.txBlockHeight ?? 0;
+      if (heightB !== heightA) return heightB - heightA;
+      const timeA = a.txBlockTime ?? a.edgeBlockTime ?? "";
+      const timeB = b.txBlockTime ?? b.edgeBlockTime ?? "";
+      return timeB.localeCompare(timeA);
+    });
+
+    const seen = new Map<string, Set<string>>();
+    for (const row of rows) {
+      const list = byAddr.get(row.toAddress) ?? [];
+      if (list.length >= limitPer) continue;
+      const used = seen.get(row.toAddress) ?? new Set<string>();
+      if (used.has(row.txid)) continue;
+      used.add(row.txid);
+      seen.set(row.toAddress, used);
+      list.push(row.txid);
+      byAddr.set(row.toAddress, list);
+    }
+    return byAddr;
+  }
+
   async resolveOpReturnFromSpenders(
     spenderAddresses: string[],
   ): Promise<{ opReturn: string | null; opReturnTxid: string | null }> {
@@ -1909,6 +2056,65 @@ export class Store {
     }
 
     return { opReturn: null, opReturnTruncated: false, opReturnTxid: null };
+  }
+
+  async resolveOpReturnForAddresses(addresses: string[]): Promise<
+    Map<string, { opReturn: string | null; opReturnTruncated: boolean; opReturnTxid: string | null }>
+  > {
+    const unique = [...new Set(addresses)].filter(Boolean);
+    const result = new Map<
+      string,
+      { opReturn: string | null; opReturnTruncated: boolean; opReturnTxid: string | null }
+    >();
+    const empty = { opReturn: null, opReturnTruncated: false, opReturnTxid: null };
+    for (const addr of unique) result.set(addr, empty);
+    if (unique.length === 0) return result;
+
+    const addrMap = await this.getAddressesMap(unique);
+    const spendByAddr = await this.listSpendTxidsByAddress(unique);
+    const spendDisplays = await this.getOpReturnDisplayByTxids([...spendByAddr.values()].flat());
+
+    const segmentsByAddr = new Map<string, OpReturnSegment[]>();
+    for (const addr of unique) {
+      const segs: OpReturnSegment[] = [];
+      for (const txid of spendByAddr.get(addr) ?? []) {
+        const text = spendDisplays.get(txid);
+        if (text) {
+          segs.push({ text, txid, kind: "own" });
+          break;
+        }
+      }
+      segmentsByAddr.set(addr, segs);
+    }
+
+    const downstreamAddrs = unique.filter((addr) => addrMap.get(addr)?.role === "downstream");
+    const victims = await this.filterKnownVictimAddresses(downstreamAddrs);
+    const incomingCandidates = downstreamAddrs.filter((addr) => !victims.has(addr));
+    const incomingByAddr = await this.listIncomingOutFromHackerTxidsByAddress(incomingCandidates);
+    const inDisplays = await this.getOpReturnDisplayByTxids([...incomingByAddr.values()].flat());
+    for (const addr of incomingCandidates) {
+      const segs = segmentsByAddr.get(addr) ?? [];
+      for (const txid of incomingByAddr.get(addr) ?? []) {
+        const text = inDisplays.get(txid);
+        if (text) {
+          segs.push({ text, txid, kind: "incoming" });
+          break;
+        }
+      }
+      segmentsByAddr.set(addr, segs);
+    }
+
+    for (const addr of unique) {
+      const segs = dedupeOpReturnSegments(segmentsByAddr.get(addr) ?? []);
+      if (segs.length === 0) continue;
+      const combined = combineOpReturnSegments(segs);
+      result.set(addr, {
+        opReturn: combined.opReturn,
+        opReturnTruncated: combined.opReturnTruncated,
+        opReturnTxid: combined.opReturnTxid,
+      });
+    }
+    return result;
   }
 
   async getAddressDetail(address: string) {

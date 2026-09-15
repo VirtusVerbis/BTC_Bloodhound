@@ -784,6 +784,133 @@ describe("buildGraphL1Page pagination", () => {
     expect(l2.edges.some((e) => e.target === victim)).toBe(false);
     expect(l2.nodes.some((n) => n.id === victim)).toBe(false);
   });
+
+  it("buildGraphL2Page fills one page across multiple parents", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    await store.upsertAddressesBatch([
+      { address: "hack1", role: "hacker", isFlaggedHacker: true, hopFromHacker: 0 },
+      { address: "down1", role: "downstream", source: "derived", hopFromHacker: 1 },
+      { address: "down2", role: "downstream", source: "derived", hopFromHacker: 1 },
+      { address: "c1a", role: "downstream", source: "derived", hopFromHacker: 2 },
+      { address: "c1b", role: "downstream", source: "derived", hopFromHacker: 2 },
+      { address: "c2a", role: "downstream", source: "derived", hopFromHacker: 2 },
+      { address: "c2b", role: "downstream", source: "derived", hopFromHacker: 2 },
+    ]);
+    await store.upsertEdgesBatch([
+      { fromAddress: "hack1", toAddress: "down1", txid: "t1", amountSats: 5000, direction: "out_from_hacker" },
+      { fromAddress: "hack1", toAddress: "down2", txid: "t2", amountSats: 4000, direction: "out_from_hacker" },
+      { fromAddress: "down1", toAddress: "c1a", txid: "t3", amountSats: 2000, direction: "out_from_hacker" },
+      { fromAddress: "down1", toAddress: "c1b", txid: "t4", amountSats: 1500, direction: "out_from_hacker" },
+      { fromAddress: "down2", toAddress: "c2a", txid: "t5", amountSats: 1800, direction: "out_from_hacker" },
+      { fromAddress: "down2", toAddress: "c2b", txid: "t6", amountSats: 1200, direction: "out_from_hacker" },
+    ]);
+
+    const l1 = await buildGraphL1Page(store, "hack1", {
+      limit: 10,
+      maxDownstream: 100,
+      minEdgeSats: 0,
+      maxGraphDepth: 2,
+    });
+    const l2 = await buildGraphL2Page(store, l1.l2Token!, { limit: 50 });
+    expect(l2.page.done).toBe(true);
+    expect(l2.page.nextCursor).toBeNull();
+    expect(l2.nodes.filter((n) => n.type === "downstream")).toHaveLength(4);
+    expect(l2.page.l2ParentsDone).toBe(2);
+    expect(l2.page.l2ParentCount).toBe(2);
+  });
+
+  it("buildGraphL2Page caps children per parent across the page", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    await store.upsertAddressesBatch([
+      { address: "hack1", role: "hacker", isFlaggedHacker: true, hopFromHacker: 0 },
+      { address: "down1", role: "downstream", source: "derived", hopFromHacker: 1 },
+      ...Array.from({ length: 12 }, (_, i) => ({
+        address: `child${i}`,
+        role: "downstream" as const,
+        source: "derived" as const,
+        hopFromHacker: 2,
+      })),
+    ]);
+    await store.upsertEdgesBatch([
+      { fromAddress: "hack1", toAddress: "down1", txid: "th", amountSats: 50_000, direction: "out_from_hacker" },
+      ...Array.from({ length: 12 }, (_, i) => ({
+        fromAddress: "down1",
+        toAddress: `child${i}`,
+        txid: `tc${i}`,
+        amountSats: 12_000 - i,
+        direction: "out_from_hacker" as const,
+      })),
+    ]);
+
+    const l1 = await buildGraphL1Page(store, "hack1", {
+      limit: 10,
+      maxDownstream: 5,
+      minEdgeSats: 0,
+      maxGraphDepth: 2,
+    });
+    const l2 = await buildGraphL2Page(store, l1.l2Token!, { limit: 50 });
+    expect(l2.page.done).toBe(true);
+    expect(l2.nodes.filter((n) => n.type === "downstream")).toHaveLength(5);
+  });
+
+  it("collapses spend_fanout parents to top-K plus cluster and expands on demand", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    await store.upsertAddressesBatch([
+      { address: "hack1", role: "hacker", isFlaggedHacker: true, hopFromHacker: 0 },
+      { address: "down1", role: "downstream", source: "derived", hopFromHacker: 1 },
+      ...Array.from({ length: 12 }, (_, i) => ({
+        address: `fout${i}`,
+        role: "downstream" as const,
+        source: "derived" as const,
+        hopFromHacker: 2,
+      })),
+    ]);
+    await store.setExpandProfile("down1", "spend_fanout", {
+      fanoutMetaJson: JSON.stringify({
+        txid: "fanouttx",
+        outputCount: 12,
+        totalOutSats: 12_000,
+        topOutputs: [],
+      }),
+    });
+    await store.upsertEdgesBatch([
+      { fromAddress: "hack1", toAddress: "down1", txid: "th", amountSats: 20_000, direction: "out_from_hacker" },
+      ...Array.from({ length: 12 }, (_, i) => ({
+        fromAddress: "down1",
+        toAddress: `fout${i}`,
+        txid: `tf${i}`,
+        amountSats: 2000 - i,
+        direction: "out_from_hacker" as const,
+      })),
+    ]);
+
+    const l1 = await buildGraphL1Page(store, "hack1", {
+      limit: 10,
+      maxDownstream: 100,
+      minEdgeSats: 0,
+      maxGraphDepth: 2,
+    });
+    const l2 = await buildGraphL2Page(store, l1.l2Token!, { limit: 50, spendFanoutTopK: 5 });
+    expect(l2.nodes.filter((n) => n.type === "downstream")).toHaveLength(5);
+    const cluster = l2.nodes.find((n) => n.type === "fanoutCluster");
+    expect(cluster?.id).toBe("fanout:down1");
+    expect(cluster?.childCount).toBeGreaterThanOrEqual(7);
+    expect(l2.page.done).toBe(true);
+
+    const expanded = await buildGraphL2Page(store, l1.l2Token!, {
+      limit: 50,
+      spendFanoutTopK: 5,
+      expandParent: "down1",
+    });
+    expect(expanded.nodes.filter((n) => n.type === "downstream").length).toBeGreaterThanOrEqual(12);
+    expect(expanded.nodes.some((n) => n.type === "fanoutCluster")).toBe(false);
+  });
 });
 
 describe("applyHackTraceEdgesChunk graph activity", () => {

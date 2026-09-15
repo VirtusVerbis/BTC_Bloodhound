@@ -16,6 +16,7 @@ export interface L2CursorPayload {
   parentIndex: number;
   amountSats: number;
   toAddress: string;
+  loadedFromParent?: number;
 }
 
 function encodeBase64Url(value: unknown): string {
@@ -104,13 +105,18 @@ export function decodeL2Cursor(token: string): L2CursorPayload | null {
     !parsed ||
     !Number.isFinite(parsed.parentIndex) ||
     !Number.isFinite(parsed.amountSats) ||
-    !isNonEmptyString(parsed.toAddress)
+    typeof parsed.toAddress !== "string"
   ) {
     return null;
   }
+  const loadedFromParent =
+    parsed.loadedFromParent != null && Number.isFinite(parsed.loadedFromParent)
+      ? Math.max(0, Math.floor(parsed.loadedFromParent))
+      : 0;
   return {
     parentIndex: Math.max(0, Math.floor(parsed.parentIndex)),
     amountSats: Math.floor(parsed.amountSats),
     toAddress: parsed.toAddress,
+    loadedFromParent,
   };
 }

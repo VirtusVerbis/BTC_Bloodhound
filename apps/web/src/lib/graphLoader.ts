@@ -66,6 +66,8 @@ export interface ApiGraphResponse {
     loadedL1?: number;
     loadedL2?: number;
     loadId?: string;
+    l2ParentsDone?: number;
+    l2ParentCount?: number;
   };
   l2Token?: string | null;
 }
@@ -89,6 +91,7 @@ export interface LoadHackerGraphParams {
 
 export interface LoadHackerGraphOptions {
   onProgress?: (progress: GraphLoadProgress) => void;
+  onPartialGraph?: (graph: ApiGraphResponse) => void;
   signal?: { generation: number; current: () => number };
 }
 
@@ -106,11 +109,33 @@ export function mergeGraphPages(
     for (const node of page.nodes) nodeById.set(node.id, node);
     for (const edge of page.edges) edgeById.set(edge.id, edge);
   }
-  return {
+  return rollupHackerOpReturn({
     nodes: [...nodeById.values()],
     edges: [...edgeById.values()],
     mode: "hacker",
+  });
+}
+
+export function omitGraphNodeIds(graph: ApiGraphResponse, ids: Iterable<string>): ApiGraphResponse {
+  const drop = new Set(ids);
+  if (drop.size === 0) return graph;
+  const nodes = graph.nodes.filter((n) => !drop.has(n.id));
+  const nodeIds = new Set(nodes.map((n) => n.id));
+  return {
+    ...graph,
+    nodes,
+    edges: graph.edges.filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target)),
   };
+}
+
+function rollupHackerOpReturn(graph: ApiGraphResponse): ApiGraphResponse {
+  const hacker = graph.nodes.find((n) => n.type === "hacker");
+  if (!hacker || hacker.opReturn) return graph;
+  const from = graph.nodes.find((n) => n.type === "downstream" && n.opReturn);
+  if (!from?.opReturn) return graph;
+  hacker.opReturn = from.opReturn;
+  hacker.opReturnLabel = from.opReturnLabel;
+  return graph;
 }
 
 export function computeLoadPercent(opts: {
@@ -173,6 +198,7 @@ async function fetchL1Pages(
   opts: {
     start?: GraphL1State;
     onProgress?: (progress: GraphLoadProgress) => void;
+    onPage?: (page: ApiGraphResponse, pages: ApiGraphResponse[]) => void;
     signal?: LoadHackerGraphOptions["signal"];
     totalL1?: number | null;
     completedL2Tokens?: number;
@@ -220,6 +246,8 @@ async function fetchL1Pages(
     loadedL1 = page.page?.loadedL1 ?? loadedL1;
     if (page.l2Token) l2Tokens.push(page.l2Token);
 
+    opts.onPage?.(page, pages);
+
     report({
       phase: "l1",
       loaded: loadedL1,
@@ -256,6 +284,7 @@ async function fetchL2ForToken(
     start?: GraphL2Session;
     oldMaxDownstream: number;
     onProgress?: (progress: GraphLoadProgress) => void;
+    onPage?: (page: ApiGraphResponse, pages: ApiGraphResponse[]) => void;
     signal?: LoadHackerGraphOptions["signal"];
     loadedL1: number;
     totalL1: number | null;
@@ -293,10 +322,16 @@ async function fetchL2ForToken(
     l2Done = page.page?.done ?? true;
     l2Cursor = page.page?.nextCursor ?? null;
 
+    opts.onPage?.(page, pages);
+
+    const parentCount = page.page?.l2ParentCount ?? 0;
+    const parentsDone = page.page?.l2ParentsDone ?? 0;
+    const l2TokenProgress = l2Done ? 1 : parentCount > 0 ? Math.min(1, parentsDone / parentCount) : 0;
+
     report({
       phase: "l2",
       loaded: loadedL2,
-      total: null,
+      total: parentCount || null,
       percent: computeLoadPercent({
         phase: "l2",
         loadedL1: opts.loadedL1,
@@ -304,7 +339,7 @@ async function fetchL2ForToken(
         maxDownstream: params.maxDownstream,
         completedL2Tokens: opts.completedL2Tokens,
         totalL2Tokens: opts.totalL2Tokens,
-        l2TokenProgress: l2Done ? 1 : 0.5,
+        l2TokenProgress,
       }),
       message: "Loading hop 2",
     });
@@ -330,9 +365,14 @@ async function loadHackerGraphInternal(
       ? opts.prevState.l1
       : undefined;
 
+  const emitPartial = (parts: ApiGraphResponse[]) => {
+    opts?.onPartialGraph?.(mergeGraphPages(parts));
+  };
+
   const { pages: l1Pages, l1, l2Tokens: newL2Tokens, totalL1 } = await fetchL1Pages(params, {
     start: l1Start,
     onProgress: report,
+    onPage: (_page, pages) => emitPartial([...prevPages, ...pages]),
     signal: opts?.signal,
   });
 
@@ -370,6 +410,7 @@ async function loadHackerGraphInternal(
       start,
       oldMaxDownstream: opts?.prevState?.params.maxDownstream ?? params.maxDownstream,
       onProgress: report,
+      onPage: (_page, pages) => emitPartial([...prevPages, ...l1Pages, ...l2Pages, ...pages]),
       signal: opts?.signal,
       loadedL1: l1.loadedL1,
       totalL1,
@@ -420,4 +461,46 @@ export async function loadHackerGraphPaginatedResume(
   opts?: LoadHackerGraphOptions,
 ): Promise<LoadHackerGraphResult> {
   return loadHackerGraphInternal(params, { ...opts, prevState });
+}
+
+export async function loadFanoutExpand(
+  params: {
+    hacker: string;
+    l2Token: string;
+    expandParent: string;
+    pageSize: number;
+    maxDownstream: number;
+    loadId?: string;
+  },
+  opts?: LoadHackerGraphOptions,
+): Promise<ApiGraphResponse> {
+  const pages: ApiGraphResponse[] = [];
+  let cursor: string | null = null;
+  let loadedL2 = 0;
+  let done = false;
+
+  do {
+    throwIfAborted(opts?.signal);
+    const search = new URLSearchParams({
+      paginated: "1",
+      phase: "l2",
+      hacker: params.hacker,
+      l2_token: params.l2Token,
+      expand_parent: params.expandParent,
+      limit: String(params.pageSize),
+      loaded_l2: String(loadedL2),
+      max_downstream: String(params.maxDownstream),
+    });
+    if (params.loadId) search.set("load_id", params.loadId);
+    if (cursor) search.set("cursor", cursor);
+
+    const page = await fetchGraphPage(search);
+    pages.push(page);
+    loadedL2 = page.page?.loadedL2 ?? loadedL2;
+    done = page.page?.done ?? true;
+    cursor = page.page?.nextCursor ?? null;
+    opts?.onPartialGraph?.(mergeGraphPages(pages));
+  } while (!done && cursor);
+
+  return mergeGraphPages(pages);
 }

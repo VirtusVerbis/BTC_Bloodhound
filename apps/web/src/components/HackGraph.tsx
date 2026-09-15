@@ -19,6 +19,7 @@ import {
   getCachedGraphLoadState,
   graphCacheKey,
   setCachedGraphLoadState,
+  type GraphLoadState,
 } from "../lib/graphCache";
 import {
   canResumeDownstream,
@@ -27,8 +28,11 @@ import {
   type GraphLoadParams,
 } from "../lib/graphFilter";
 import {
+  loadFanoutExpand,
   loadHackerGraphPaginated,
   loadHackerGraphPaginatedResume,
+  mergeGraphPages,
+  omitGraphNodeIds,
   type ApiGraphEdge,
   type ApiGraphNode,
   type ApiGraphResponse,
@@ -150,6 +154,7 @@ function GraphKeyboardShortcuts() {
 function minimapNodeColor(node: Node) {
   if (node.type === "hacker") return "#e53935";
   if (node.type === "victim" || node.type === "victimCluster") return "#f7931a";
+  if (node.type === "fanoutCluster") return "#c47d1a";
   return "#555";
 }
 
@@ -183,6 +188,9 @@ export function HackGraph({
   const loadGenerationRef = useRef(0);
   const lastGraphKeyRef = useRef<string | null>(null);
   const lastLoadedParamsRef = useRef<GraphLoadParams | null>(null);
+  const graphStateRef = useRef<GraphLoadState | null>(null);
+  const expandFanoutRef = useRef<(parentId: string) => void>(() => {});
+  const graphLoadingRef = useRef(false);
   const prevExpandRef = useRef(expandVictims);
   const pendingFitRef = useRef(false);
   const graphDataRef = useRef<{
@@ -218,6 +226,7 @@ export function HackGraph({
     setEdges([]);
     setGraphError(null);
     setGraphLoading(false);
+    graphLoadingRef.current = false;
     setGraphLoadProgress(null);
   }, [flowKey, setNodes, setEdges]);
 
@@ -229,6 +238,7 @@ export function HackGraph({
     positionsRef.current = {};
     graphDataRef.current = null;
     lastLoadedParamsRef.current = null;
+    graphStateRef.current = null;
     setVictimSort("btc-desc");
     victimSortRef.current = "btc-desc";
     pendingFitRef.current = true;
@@ -269,11 +279,13 @@ export function HackGraph({
         type:
           n.type === "victimCluster"
             ? "victimCluster"
-            : n.type === "hacker"
-              ? "hacker"
-              : n.type === "victim"
-                ? "victim"
-                : "downstream",
+            : n.type === "fanoutCluster"
+              ? "fanoutCluster"
+              : n.type === "hacker"
+                ? "hacker"
+                : n.type === "victim"
+                  ? "victim"
+                  : "downstream",
         data: {
           type: n.type,
           label: n.label,
@@ -297,6 +309,13 @@ export function HackGraph({
             n.type === "victimCluster"
               ? () => window.dispatchEvent(new CustomEvent("cointrace-expand-victims"))
               : undefined,
+          onExpandFanout:
+            n.type === "fanoutCluster"
+              ? () => {
+                  const parent = n.id.startsWith("fanout:") ? n.id.slice("fanout:".length) : "";
+                  if (parent) expandFanoutRef.current(parent);
+                }
+              : undefined,
         } satisfies GraphNodeData,
         position: positionsRef.current[n.id] ?? { x: 0, y: 0 },
       }));
@@ -314,6 +333,62 @@ export function HackGraph({
     },
     [victimSearch, onHackerChange, showLabels, applyLayout],
   );
+
+  const expandFanoutParent = useCallback(
+    async (parentId: string) => {
+      const state = graphStateRef.current;
+      if (!state || !parentId || graphLoadingRef.current) return;
+      const clusterId = `fanout:${parentId}`;
+      for (const session of state.l2Sessions) {
+        try {
+          const expanded = await loadFanoutExpand({
+            hacker,
+            l2Token: session.l2Token,
+            expandParent: parentId,
+            pageSize: graphPageSize,
+            maxDownstream: maxDownstreamNodes,
+            loadId: state.l1.loadId,
+          });
+          if (expanded.nodes.length === 0 && expanded.edges.length === 0) continue;
+          let merged = mergeGraphPages([state.response, expanded]);
+          if (!expanded.nodes.some((n) => n.id === clusterId)) {
+            merged = omitGraphNodeIds(merged, [clusterId]);
+          }
+          const nextState: GraphLoadState = { ...state, response: merged };
+          graphStateRef.current = nextState;
+          setCachedGraphLoadState(
+            graphCacheKey({
+              hacker,
+              victimSearch,
+              minEdgeSats,
+              maxVictimNodes,
+              maxDownstreamNodes,
+              expandVictims,
+            }),
+            nextState,
+          );
+          applyApiGraph(merged);
+          return;
+        } catch {
+          continue;
+        }
+      }
+    },
+    [
+      hacker,
+      victimSearch,
+      minEdgeSats,
+      maxVictimNodes,
+      maxDownstreamNodes,
+      expandVictims,
+      graphPageSize,
+      applyApiGraph,
+    ],
+  );
+
+  expandFanoutRef.current = (parentId: string) => {
+    expandFanoutParent(parentId).catch(console.error);
+  };
 
   const loadGraph = useCallback(
     async (opts?: { expandVictims?: boolean; skipCache?: boolean }) => {
@@ -361,8 +436,10 @@ export function HackGraph({
             applyApiGraph(cachedState.response);
             lastGraphKeyRef.current = key;
             lastLoadedParamsRef.current = cachedState.params;
+            graphStateRef.current = cachedState;
           }
           setGraphLoading(false);
+          graphLoadingRef.current = false;
           setGraphLoadProgress(null);
           return;
         }
@@ -376,7 +453,9 @@ export function HackGraph({
             applyApiGraph(filtered);
             lastGraphKeyRef.current = key;
             lastLoadedParamsRef.current = loadParams;
+            graphStateRef.current = trimmedState;
             setGraphLoading(false);
+            graphLoadingRef.current = false;
             setGraphLoadProgress(null);
             return;
           }
@@ -384,6 +463,7 @@ export function HackGraph({
       }
 
       setGraphLoading(true);
+      graphLoadingRef.current = true;
       setGraphLoadProgress({ phase: "l1", loaded: 0, total: null, percent: 0, message: "Loading" });
 
       const loaderOpts = {
@@ -391,6 +471,10 @@ export function HackGraph({
           if (generation === loadGenerationRef.current) {
             setGraphLoadProgress(progress);
           }
+        },
+        onPartialGraph: (partial: ApiGraphResponse) => {
+          if (generation !== loadGenerationRef.current) return;
+          applyApiGraph(partial);
         },
         signal: {
           generation,
@@ -422,17 +506,20 @@ export function HackGraph({
             graph = result.graph;
             setCachedGraphLoadState(key, result.state);
             lastLoadedParamsRef.current = result.state.params;
+            graphStateRef.current = result.state;
           } else {
             const result = await loadHackerGraphPaginated(paginatedParams, loaderOpts);
             graph = result.graph;
             setCachedGraphLoadState(key, result.state);
             lastLoadedParamsRef.current = result.state.params;
+            graphStateRef.current = result.state;
           }
         } else {
           const result = await loadHackerGraphPaginated(paginatedParams, loaderOpts);
           graph = result.graph;
           setCachedGraphLoadState(key, result.state);
           lastLoadedParamsRef.current = result.state.params;
+          graphStateRef.current = result.state;
         }
       } catch (e) {
         if (generation !== loadGenerationRef.current) return;
@@ -450,6 +537,7 @@ export function HackGraph({
           );
         }
         setGraphLoading(false);
+        graphLoadingRef.current = false;
         setGraphLoadProgress(null);
         return;
       }
@@ -467,6 +555,7 @@ export function HackGraph({
       applyApiGraph(graph);
       lastGraphKeyRef.current = key;
       setGraphLoading(false);
+      graphLoadingRef.current = false;
       setGraphLoadProgress(null);
     },
     [
@@ -520,7 +609,7 @@ export function HackGraph({
   const onNodeClickHandler = useCallback(
     (_: unknown, node: Node) => {
       const data = node.data as GraphNodeData;
-      if (data.address && node.type !== "victimCluster") {
+      if (data.address && node.type !== "victimCluster" && node.type !== "fanoutCluster") {
         onNodeClick(data.address);
       }
     },
