@@ -1,4 +1,4 @@
-import type { Store } from "@cointrace/db";
+import { VICTIM_REFUND_PROBE_LIMIT, type Store } from "@cointrace/db";
 import { blockTimeIso } from "../chain/esplora.js";
 import type { ChainRouter } from "../chain/router.js";
 import type { ChainTxDetail } from "../chain/types.js";
@@ -129,8 +129,6 @@ export async function buildGraph(
   });
   seen.add(hackerId);
 
-  const victimStats = await store.getVictimStats(hacker, minEdgeSats);
-
   if (victimFilter) {
     // Victim search: load this address's edges directly (ignore maxVictims / minEdgeSats).
     const victimEdges = await store.listEdgesFromVictimToHacker(victimFilter, hacker);
@@ -157,6 +155,7 @@ export async function buildGraph(
       }
     }
   } else if (!options.expandVictims) {
+    const victimStats = await store.getVictimStats(hacker, minEdgeSats);
     const clusterId = `victims:${hacker}`;
     nodes.push({
       id: clusterId,
@@ -285,7 +284,7 @@ export async function buildGraph(
 
   await appendVictimRefunds(store, hacker, nodes, edges, seen, {
     minEdgeSats,
-    victimAddresses: victimFilter ? [victimFilter] : [...victimSet],
+    victimAddresses: victimFilter ? [victimFilter] : [...victimSet].slice(0, VICTIM_REFUND_PROBE_LIMIT),
   });
 
   await enrichNodesWithOpReturn(store, nodes);

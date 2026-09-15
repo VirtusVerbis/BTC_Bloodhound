@@ -70,6 +70,11 @@ describe("victim address helpers", () => {
     expect(await store.getVictimAddressSetForHacker("hack1", 1000, 100_000)).toEqual(
       new Set(["victim_large"]),
     );
+    expect([...(await store.getVictimAddressSetForHacker("hack1", 1))]).toEqual(["victim_large"]);
+    expect([...(await store.getVictimAddressSetForHacker("hack1", 2))]).toEqual([
+      "victim_large",
+      "victim_mid",
+    ]);
 
     const listed = await store.listVictimsForHacker("hack1", 100, 100_000);
     expect(listed.map((row) => row.address)).toEqual(["victim_large"]);
@@ -219,6 +224,95 @@ describe("victim address helpers", () => {
 
     const refunds = await store.listVictimRefundsForHacker("hack1", { minEdgeSats: 100_000, limit: 100 });
     expect(refunds).toHaveLength(32);
+    expect(refunds[0]!.amountSats).toBe(200_000 + 39);
+    expect(refunds.every((row) => row.fanoutMetaJson == null)).toBe(true);
+  });
+
+  it("listVictimRefundsForHacker merges per-address top rows into a global cap", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "victim_a",
+        toAddress: "hack1",
+        txid: "tx_in_a",
+        amountSats: 1_000_000,
+        direction: "in_to_hacker",
+      },
+      {
+        fromAddress: "victim_b",
+        toAddress: "hack1",
+        txid: "tx_in_b",
+        amountSats: 1_000_000,
+        direction: "in_to_hacker",
+      },
+    ]);
+    await store.upsertEdgesBatch([
+      ...Array.from({ length: 20 }, (_, i) => ({
+        fromAddress: "down1",
+        toAddress: "victim_a",
+        txid: `tx_a_${i}`,
+        amountSats: 100_000 + i,
+        direction: "out_from_hacker" as const,
+      })),
+      ...Array.from({ length: 20 }, (_, i) => ({
+        fromAddress: "down1",
+        toAddress: "victim_b",
+        txid: `tx_b_${i}`,
+        amountSats: 200_000 + i,
+        direction: "out_from_hacker" as const,
+      })),
+    ]);
+
+    const refunds = await store.listVictimRefundsForHacker("hack1", {
+      minEdgeSats: 100_000,
+      victimAddresses: ["victim_a", "victim_b"],
+    });
+    expect(refunds).toHaveLength(32);
+    expect(refunds.filter((row) => row.toAddress === "victim_b")).toHaveLength(20);
+    expect(refunds.filter((row) => row.toAddress === "victim_a")).toHaveLength(12);
+    expect(Math.min(...refunds.map((row) => row.amountSats))).toBe(100_008);
+  });
+
+  it("listVictimRefundsForHacker probe-caps victimAddresses to the first 32", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const victims = Array.from({ length: 33 }, (_, i) => `victim_${String(i).padStart(2, "0")}`);
+    await store.upsertEdgesBatch(
+      victims.map((address, i) => ({
+        fromAddress: address,
+        toAddress: "hack1",
+        txid: `tx_in_${i}`,
+        amountSats: 100_000,
+        direction: "in_to_hacker" as const,
+      })),
+    );
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "down1",
+        toAddress: victims[0]!,
+        txid: "tx_refund_first",
+        amountSats: 1_000_000,
+        direction: "out_from_hacker",
+      },
+      {
+        fromAddress: "down1",
+        toAddress: victims[32]!,
+        txid: "tx_refund_last",
+        amountSats: 9_000_000,
+        direction: "out_from_hacker",
+      },
+    ]);
+
+    const refunds = await store.listVictimRefundsForHacker("hack1", {
+      minEdgeSats: 100_000,
+      victimAddresses: victims,
+    });
+    expect(refunds.map((row) => row.txid)).toEqual(["tx_refund_first"]);
   });
 
   it("listVictimRefundsForHacker subquery ignores dust-only victims", async () => {

@@ -1,4 +1,4 @@
-import type { Store } from "@cointrace/db";
+import { VICTIM_REFUND_PROBE_LIMIT, type Store } from "@cointrace/db";
 import { bundleParallelEdges, mapDbEdgeToGraph } from "./graphEdges.js";
 import type { GraphEdge, GraphNode, GraphResult } from "./builder.js";
 import { enrichNodesWithOpReturn } from "./graphOpReturn.js";
@@ -112,9 +112,9 @@ async function appendVictimsSection(
   },
 ): Promise<void> {
   const minEdgeSats = options.minEdgeSats ?? 100_000;
-  const victimStats = await store.getVictimStats(hacker, minEdgeSats);
 
   if (!options.expandVictims) {
+    const victimStats = await store.getVictimStats(hacker, minEdgeSats);
     const clusterId = `victims:${hacker}`;
     nodes.push({
       id: clusterId,
@@ -275,7 +275,7 @@ export async function buildGraphL1Page(
   if (isFirstPage) {
     await appendVictimRefunds(store, hacker, nodes, edges, seen, {
       minEdgeSats,
-      victimAddresses: [...victimSet],
+      victimAddresses: [...victimSet].slice(0, VICTIM_REFUND_PROBE_LIMIT),
     });
   }
 

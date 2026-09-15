@@ -15,11 +15,17 @@ export async function appendVictimRefunds(
   seen: Set<string>,
   options: { minEdgeSats: number; victimAddresses?: readonly string[] },
 ): Promise<void> {
-  const rows = await store.listVictimRefundsForHacker(hacker, {
-    minEdgeSats: options.minEdgeSats,
-    limit: REFUND_ATTACH_LIMIT,
-    victimAddresses: options.victimAddresses,
-  });
+  let rows: Awaited<ReturnType<Store["listVictimRefundsForHacker"]>>;
+  try {
+    rows = await store.listVictimRefundsForHacker(hacker, {
+      minEdgeSats: options.minEdgeSats,
+      limit: REFUND_ATTACH_LIMIT,
+      victimAddresses: options.victimAddresses,
+    });
+  } catch (err) {
+    console.error("appendVictimRefunds failed", err);
+    return;
+  }
   if (rows.length === 0) return;
 
   const existingIds = new Set(edges.map((e) => e.id));

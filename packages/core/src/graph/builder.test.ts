@@ -785,6 +785,58 @@ describe("buildGraphL1Page pagination", () => {
     expect(l2.nodes.some((n) => n.id === victim)).toBe(false);
   });
 
+  it("buildGraph and L1 still return when listVictimRefundsForHacker throws", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+    const down1 = "bc1qdown_refund_fail";
+
+    await store.upsertAddressesBatch([
+      { address: "hack1", role: "hacker", source: "admin", isFlaggedHacker: true, hopFromHacker: 0 },
+      { address: down1, role: "downstream", source: "derived", hopFromHacker: 1 },
+    ]);
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "hack1",
+        toAddress: down1,
+        txid: "tx_out",
+        amountSats: 1_000_000,
+        direction: "out_from_hacker",
+      },
+    ]);
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const refundSpy = vi
+      .spyOn(store, "listVictimRefundsForHacker")
+      .mockRejectedValue(new Error("D1_ERROR: internal error"));
+    try {
+      const graph = await buildGraph(store, "hack1", {
+        depth: 1,
+        minEdgeSats: 100_000,
+        maxOutputs: 10,
+      });
+      expect(graph.nodes.some((n) => n.id === "hack1" && n.type === "hacker")).toBe(true);
+      expect(graph.nodes.some((n) => n.id === down1)).toBe(true);
+      expect(graph.edges.some((e) => e.source === "hack1" && e.target === down1)).toBe(true);
+      expect(graph.edges.some((e) => e.edgeKind === "victim_refund")).toBe(false);
+
+      const page = await buildGraphL1Page(store, "hack1", {
+        limit: 10,
+        maxDownstream: 100,
+        minEdgeSats: 100_000,
+        maxGraphDepth: 2,
+      });
+      expect(page.nodes.some((n) => n.id === "hack1" && n.type === "hacker")).toBe(true);
+      expect(page.nodes.some((n) => n.id === down1)).toBe(true);
+      expect(page.edges.some((e) => e.edgeKind === "victim_refund")).toBe(false);
+      expect(refundSpy).toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalled();
+    } finally {
+      refundSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
   it("buildGraphL2Page fills one page across multiple parents", async () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);

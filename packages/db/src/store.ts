@@ -205,6 +205,9 @@ function targetAgeBoost(
 const D1_IN_CLAUSE_CHUNK_SIZE = 80;
 /** Max refund edges returned per hacker graph page (D1-capped). */
 export const VICTIM_REFUND_GRAPH_LIMIT = 32;
+/** Probe at most this many victim destinations (callers should pass amount-ordered addresses). */
+export const VICTIM_REFUND_PROBE_LIMIT = VICTIM_REFUND_GRAPH_LIMIT;
+
 const ADDRESS_DETAIL_TX_LIMIT = 50;
 const OP_RETURN_SPEND_TX_LIMIT = 200;
 const OP_RETURN_GRAPH_LABEL_MAX_CHARS = 48;
@@ -1461,7 +1464,10 @@ export class Store {
       .all();
   }
 
-  /** Distinct victim addresses with in_to_hacker edges into this hacker (for graph filtering). */
+  /**
+   * Distinct victim addresses with in_to_hacker edges into this hacker (for graph filtering).
+   * Ordered by largest inbound amount so LIMIT keeps the most significant victims.
+   */
   async getVictimAddressSetForHacker(
     hacker: string,
     limit = 1000,
@@ -1472,9 +1478,11 @@ export class Store {
       conditions.push(gte(edges.amountSats, minEdgeSats));
     }
     const rows = await this.db
-      .selectDistinct({ address: edges.fromAddress })
+      .select({ address: edges.fromAddress })
       .from(edges)
       .where(and(...conditions))
+      .groupBy(edges.fromAddress)
+      .orderBy(desc(sql`max(${edges.amountSats})`))
       .limit(limit)
       .all();
     return new Set(rows.map((row) => row.address));
@@ -1498,8 +1506,9 @@ export class Store {
 
   /**
    * Payments back to this hacker's known victims at or above minEdgeSats.
-   * Looks up by destination+amount (uses idx_edges_to_out_amount), not edge_kind,
+   * One indexed read per destination (idx_edges_to_out_amount), not edge_kind,
    * so historical victim_dust refunds are included. Hard-capped for D1.
+   * `victimAddresses` should be amount-ordered; only the first VICTIM_REFUND_PROBE_LIMIT are probed.
    */
   async listVictimRefundsForHacker(
     hacker: string,
@@ -1512,61 +1521,46 @@ export class Store {
     );
     if (cap === 0) return [];
 
+    let unique: string[];
     if (opts.victimAddresses) {
-      const unique = [...new Set(opts.victimAddresses)].filter(Boolean);
-      if (unique.length === 0) return [];
-      const collected: Edge[] = [];
-      for (const chunk of chunkArray(unique, D1_IN_CLAUSE_CHUNK_SIZE)) {
-        const rows = await this.db
-          .select()
-          .from(edges)
-          .where(
-            and(
-              inArray(edges.toAddress, chunk),
-              eq(edges.direction, "out_from_hacker"),
-              gte(edges.amountSats, floor),
-            ),
-          )
-          .orderBy(desc(edges.amountSats), asc(edges.toAddress), asc(edges.fromAddress))
-          .limit(cap)
-          .all();
-        collected.push(...rows);
-      }
-      collected.sort(
-        (a, b) =>
-          b.amountSats - a.amountSats ||
-          a.toAddress.localeCompare(b.toAddress) ||
-          a.fromAddress.localeCompare(b.fromAddress),
-      );
-      const seen = new Set<string>();
-      const out: Edge[] = [];
-      for (const row of collected) {
-        const key = `${row.fromAddress}|${row.toAddress}|${row.txid}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push(row);
-        if (out.length >= cap) break;
-      }
-      return out;
+      unique = [...new Set(opts.victimAddresses)].filter(Boolean).slice(0, VICTIM_REFUND_PROBE_LIMIT);
+    } else {
+      unique = [
+        ...await this.getVictimAddressSetForHacker(hacker, VICTIM_REFUND_PROBE_LIMIT, floor),
+      ];
+    }
+    if (unique.length === 0) return [];
+
+    const collected: Edge[] = [];
+    for (const toAddress of unique) {
+      const conditions = [eq(edges.toAddress, toAddress), eq(edges.direction, "out_from_hacker")];
+      if (floor > 0) conditions.push(gte(edges.amountSats, floor));
+      const rows = await this.db
+        .select()
+        .from(edges)
+        .where(and(...conditions))
+        .orderBy(desc(edges.amountSats), asc(edges.fromAddress))
+        .limit(cap)
+        .all();
+      collected.push(...rows);
     }
 
-    return await this.db
-      .select()
-      .from(edges)
-      .where(
-        and(
-          eq(edges.direction, "out_from_hacker"),
-          gte(edges.amountSats, floor),
-          sql`${edges.toAddress} IN (
-            SELECT DISTINCT v.from_address FROM edges v
-            WHERE v.to_address = ${hacker} AND v.direction = 'in_to_hacker'
-              AND v.amount_sats >= ${floor}
-          )`,
-        ),
-      )
-      .orderBy(desc(edges.amountSats), asc(edges.toAddress), asc(edges.fromAddress))
-      .limit(cap)
-      .all();
+    collected.sort(
+      (a, b) =>
+        b.amountSats - a.amountSats ||
+        a.toAddress.localeCompare(b.toAddress) ||
+        a.fromAddress.localeCompare(b.fromAddress),
+    );
+    const seen = new Set<string>();
+    const out: Edge[] = [];
+    for (const row of collected) {
+      const key = `${row.fromAddress}|${row.toAddress}|${row.txid}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(row);
+      if (out.length >= cap) break;
+    }
+    return out;
   }
 
   /** True when address has any in_to_hacker edge (sent funds into a hacker). */
