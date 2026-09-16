@@ -7,6 +7,7 @@ export const KNOWN_HACKER_SOURCES: Record<string, string> = {
   local_config: "Local config",
   admin: "Manual",
   ops: "Ops CLI",
+  x: "X",
 };
 
 export function resolveHackerSourceFlag(raw?: string): string {

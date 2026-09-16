@@ -83,6 +83,47 @@ describe("scheduler stats counters", () => {
     expect(state?.downstreamTreeCount).toBe(1);
   });
 
+  it("computeStatsCountsByHack groups hackers and victim edges by hack_id", async () => {
+    const { store } = await openStore();
+    await store.upsertAddress({
+      address: "bc1qcoldhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+      hackId: "coldcard",
+      totalReceivedSats: 1000,
+    });
+    await store.upsertAddress({
+      address: "bc1qliquidhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+      hackId: "liquid",
+      source: "x",
+      totalReceivedSats: 2000,
+    });
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "bc1qvictim1",
+        toAddress: "bc1qcoldhacker",
+        txid: "tx-cold",
+        amountSats: 1000,
+        direction: "in_to_hacker",
+      },
+      {
+        fromAddress: "bc1qvictim2",
+        toAddress: "bc1qliquidhacker",
+        txid: "tx-liquid",
+        amountSats: 2000,
+        direction: "in_to_hacker",
+      },
+    ]);
+
+    const byHack = await store.computeStatsCountsByHack();
+    const coldcard = byHack.find((h) => h.id === "coldcard");
+    const liquid = byHack.find((h) => h.id === "liquid");
+    expect(coldcard).toEqual({ id: "coldcard", hackerCount: 1, victimCount: 1, totalInSats: 1000 });
+    expect(liquid).toEqual({ id: "liquid", hackerCount: 1, victimCount: 1, totalInSats: 2000 });
+  });
+
   it("reconcileStatsCounters leaves incremental edge totals unchanged", async () => {
     const { store } = await openStore();
     await store.upsertEdgesBatch([

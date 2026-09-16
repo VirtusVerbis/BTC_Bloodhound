@@ -39,12 +39,40 @@ describe("addHackerRemote", () => {
     expect(writtenSql).toContain("'has spaces'");
     expect(writtenSql).toContain(`'${VALID_ADDRESS}'`);
     expect(writtenSql).toContain("'admin'");
+    expect(writtenSql).toContain("hack_id");
+    expect(writtenSql).toContain("'coldcard'");
     expect(result).toEqual({
       address: VALID_ADDRESS,
       upserted: true,
       enqueuedBackfill: true,
     });
     expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  it("writes liquid hack_id and x source in remote SQL", async () => {
+    let writtenSql = "";
+    const executeFile = vi.fn((filePath: string) => {
+      writtenSql = fs.readFileSync(filePath, "utf8");
+      return [];
+    });
+    const query = vi.fn().mockReturnValueOnce([]).mockReturnValueOnce([{ ok: 1 }]);
+    const client = {
+      execute: vi.fn(),
+      executeFile,
+      query,
+    } as unknown as D1WranglerClient;
+
+    await addHackerRemote(client, {
+      address: VALID_ADDRESS,
+      hackId: "liquid",
+      source: "x",
+      label: "Liquid collector",
+    });
+
+    expect(writtenSql).toContain("hack_id");
+    expect(writtenSql).toContain("'liquid'");
+    expect(writtenSql).toContain("'x'");
+    expect(writtenSql).toContain("hack_id = 'liquid'");
   });
 
   it("reports enqueuedBackfill false when job already existed", async () => {

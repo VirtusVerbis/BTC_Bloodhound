@@ -5,6 +5,7 @@ export const addresses = sqliteTable("addresses", {
   role: text("role").notNull().default("unknown"),
   label: text("label"),
   source: text("source").notNull().default("derived"),
+  hackId: text("hack_id").notNull().default("coldcard"),
   isFlaggedHacker: integer("is_flagged_hacker", { mode: "boolean" }).notNull().default(false),
   notes: text("notes"),
   firstSeenAt: text("first_seen_at"),

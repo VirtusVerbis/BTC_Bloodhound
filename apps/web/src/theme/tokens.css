@@ -326,12 +326,23 @@ body {
   white-space: nowrap;
 }
 
+.stats-hack-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
 .stats-row {
   display: flex;
   flex-wrap: wrap;
   gap: 1rem;
   font-size: 0.85rem;
   color: var(--color-text-muted);
+}
+
+.stats-hack-label {
+  font-weight: 700;
+  color: var(--color-text);
 }
 
 .stats-hacker-count {
@@ -382,6 +393,11 @@ body {
 
 .controls-panel select optgroup.hacker-optgroup-recent {
   font-weight: 600;
+}
+
+.controls-panel select option.hack-separator {
+  font-weight: 700;
+  color: var(--color-text);
 }
 
 .controls-panel button {

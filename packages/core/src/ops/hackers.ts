@@ -1,5 +1,6 @@
 import type { Store } from "@cointrace/db";
 import { JOB_PRIORITY } from "../config.js";
+import { DEFAULT_HACK_ID, type HackId } from "../hacks.js";
 import { normalizeBitcoinAddress } from "../util/address.js";
 
 export interface AddHackerResult {
@@ -37,14 +38,15 @@ export interface ReBackfillHackerResult {
 
 export async function addHacker(
   store: Store,
-  opts: { address: string; label?: string | null; source?: string },
+  opts: { address: string; label?: string | null; source?: string; hackId?: HackId },
 ): Promise<AddHackerResult> {
   const address = normalizeBitcoinAddress(opts.address);
   if (!address) {
     throw new Error(`Invalid Bitcoin address: ${opts.address}`);
   }
 
-  const source = opts.source?.trim() || "ops";
+  const hackId = opts.hackId ?? DEFAULT_HACK_ID;
+  const source = opts.source?.trim() || (hackId === "liquid" ? "x" : "ops");
 
   await store.upsertAddress({
     address,
@@ -52,6 +54,7 @@ export async function addHacker(
     isFlaggedHacker: true,
     hopFromHacker: 0,
     source,
+    hackId,
     label: opts.label ?? undefined,
   });
 

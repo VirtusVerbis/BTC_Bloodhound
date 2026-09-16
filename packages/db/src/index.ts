@@ -364,6 +364,14 @@ export function runMigrations(sqlite: Database.Database): void {
       ), 0)
     `);
   }
+  if (!addressCols.some((c) => c.name === "hack_id")) {
+    sqlite.exec(`ALTER TABLE addresses ADD COLUMN hack_id TEXT NOT NULL DEFAULT 'coldcard'`);
+    sqlite.exec(`
+      CREATE INDEX IF NOT EXISTS idx_addresses_hackers_by_hack
+        ON addresses(hack_id, total_received_sats DESC)
+        WHERE is_flagged_hacker = 1
+    `);
+  }
 
   if (addedGraphActivityCol) {
     backfillHackerGraphActivity(sqlite);

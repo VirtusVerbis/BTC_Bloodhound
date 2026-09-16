@@ -31,6 +31,9 @@ import {
   runRebuildHackEdges,
   runRebuildHackEdgesWait,
   runSeedPublicHackers,
+  formatKnownHacksList,
+  isKnownHackId,
+  resolveHackId,
   TICK_LEASE_SKEW_MS,
   type ListQueueResult,
   type QueueStatusFilter,
@@ -159,9 +162,24 @@ async function main() {
     const address = positionalArgs()[0] ?? "";
     const label = flagValue("--label");
     const yes = argv.includes("--yes");
-    const source = resolveHackerSourceFlag(flagValue("--source"));
+    const hackRaw = flagValue("--hack");
+    const hackId = resolveHackId(hackRaw);
+    if (hackRaw?.trim() && !isKnownHackId(hackRaw.trim())) {
+      console.error(`Unknown --hack value: ${hackRaw.trim()}`);
+      console.error(formatKnownHacksList());
+      process.exit(1);
+    }
+    const sourceFlag = flagValue("--source");
+    const source =
+      sourceFlag !== undefined
+        ? resolveHackerSourceFlag(sourceFlag)
+        : hackId === "liquid"
+          ? "x"
+          : resolveHackerSourceFlag(undefined);
     if (!normalizeBitcoinAddress(address)) {
-      console.error("Usage: add-hacker <address> [--label ...] [--source ...] [--yes] [--remote]");
+      console.error(
+        "Usage: add-hacker <address> [--label ...] [--source ...] [--hack coldcard|liquid] [--yes] [--remote]",
+      );
       process.exit(1);
     }
     if (!isKnownHackerSource(source) && !yes) {
@@ -179,8 +197,8 @@ async function main() {
       }
     }
     const result = remote
-      ? await addHackerRemote(remoteClient(), { address, label, source })
-      : await addHacker(openLocalStore(), { address, label, source });
+      ? await addHackerRemote(remoteClient(), { address, label, source, hackId })
+      : await addHacker(openLocalStore(), { address, label, source, hackId });
     console.log(
       JSON.stringify(
         {

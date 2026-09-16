@@ -1,5 +1,6 @@
 import type { Store } from "@cointrace/db";
 import { JOB_PRIORITY } from "../config.js";
+import { DEFAULT_HACK_ID, type HackId } from "../hacks.js";
 
 export type SourceDeltaRow = { isFlaggedHacker: boolean };
 
@@ -47,12 +48,15 @@ export async function ingestSourceHacker(
   store: Store,
   address: string,
   source: string,
+  opts?: { hackId?: HackId },
 ): Promise<boolean> {
+  const hackId = opts?.hackId ?? DEFAULT_HACK_ID;
   const inserted = await store.insertAddressIfMissing({
     address,
     role: "hacker",
     isFlaggedHacker: true,
     source,
+    hackId,
     hopFromHacker: 0,
     expandStatus: "pending",
   });
@@ -64,6 +68,7 @@ export async function ingestSourceHacker(
       role: "hacker",
       isFlaggedHacker: true,
       source,
+      hackId,
       hopFromHacker: 0,
     });
   }

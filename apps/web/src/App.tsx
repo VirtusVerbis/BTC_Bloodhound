@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { AboutPage } from "./components/AboutPage";
 import { QueuePage } from "./components/QueuePage";
 import { HackElapsedLabel } from "./components/HackElapsedLabel";
@@ -34,6 +34,7 @@ import {
   MIN_SATS_INPUT_MAX_LENGTH,
 } from "./lib/graphInputLimits";
 import {
+  flattenHackersForNav,
   groupHackersForDropdown,
   formatHackerOptionLabel,
   isHackerRecent,
@@ -43,11 +44,20 @@ import {
 
 type AppTab = "tracker" | "about" | "queue";
 
+interface HackStats {
+  id: string;
+  label: string;
+  victimCount: number;
+  hackerCount: number;
+  totalInSats: number;
+}
+
 interface Stats {
   victimCount: number;
   hackerCount: number;
   totalInSats: number;
   totalOutSats: number;
+  hacks?: HackStats[];
   lastJobAt: string | null;
   btcUsdPrice: number | null;
   btcUsdPriceAt: string | null;
@@ -178,8 +188,8 @@ export default function App() {
       );
       setRecentHackers(res.recentHackers ?? []);
       setHackers(res.hackers);
-      const visible = groupHackersForDropdown(res.hackers, res.recentHackers ?? []).flatMap(
-        (g) => g.items,
+      const visible = flattenHackersForNav(
+        groupHackersForDropdown(res.hackers, res.recentHackers ?? []),
       );
       if (!selected || !visible.some((h) => h.address === selected)) {
         setSelected(visible[0]?.address ?? "");
@@ -201,13 +211,13 @@ export default function App() {
     [recentHackers],
   );
 
-  const hackerDropdownGroups = useMemo(
+  const hackerDropdownSections = useMemo(
     () => groupHackersForDropdown(hackers, recentHackers),
     [hackers, recentHackers],
   );
   const sortedHackers = useMemo(
-    () => hackerDropdownGroups.flatMap((g) => g.items),
-    [hackerDropdownGroups],
+    () => flattenHackersForNav(hackerDropdownSections),
+    [hackerDropdownSections],
   );
 
   useEffect(() => {
@@ -570,25 +580,28 @@ export default function App() {
             Queue
           </button>
         </nav>
-        <div className="stats-row">
-          {stats && (
-            <>
-              <span title="Victim wallet addresses stored in the database, from public trackers and on-chain tracing. Does not include downstream addresses.">
-                {stats.victimCount} victims indexed
+        <div className="stats-hack-rows">
+          {stats?.hacks?.map((hack) => (
+            <div key={hack.id} className="stats-row">
+              <span className="stats-hack-label">{hack.label}:</span>
+              <span
+                title="Victim addresses that sent funds into this hack's flagged consolidation addresses."
+              >
+                {hack.victimCount} victims indexed
               </span>
               <span
                 className="stats-hacker-count"
                 title="Flagged consolidation addresses that received stolen funds from victims."
               >
-                {stats.hackerCount} hacker addresses
+                {hack.hackerCount} hacker addresses
               </span>
               <span className="stats-hack-btc">
-                {satsToBtc(stats.totalInSats)} BTC stolen =
+                {satsToBtc(hack.totalInSats)} BTC stolen =
                 {stats.btcUsdPrice != null && (
                   <>
                     <span className="usd-value">
                       {" "}
-                      {formatUsd(satsToUsd(stats.totalInSats, stats.btcUsdPrice))}
+                      {formatUsd(satsToUsd(hack.totalInSats, stats.btcUsdPrice))}
                     </span>
                     <span className="btc-spot-price">
                       {" @ "}
@@ -597,8 +610,8 @@ export default function App() {
                   </>
                 )}
               </span>
-            </>
-          )}
+            </div>
+          ))}
           {rateLimitActive && (
             <div className="rate-limit-banner" role="status">
               Rate limit active — too many requests. Try again in {rateLimitSecondsLeft}s.
@@ -665,18 +678,37 @@ export default function App() {
               onChange={(e) => setSelected(e.target.value)}
               disabled={hackersLoading && hackers.length === 0}
             >
-              {hackerDropdownGroups.map((group) => (
+              {hackerDropdownSections.recent && (
                 <optgroup
-                  key={group.source}
-                  label={group.label}
-                  className={group.source === "__recent__" ? "hacker-optgroup-recent" : undefined}
+                  key={hackerDropdownSections.recent.source}
+                  label={hackerDropdownSections.recent.label}
+                  className="hacker-optgroup-recent"
                 >
-                  {group.items.map((h) => (
+                  {hackerDropdownSections.recent.items.map((h) => (
                     <option key={h.address} value={h.address}>
                       {formatHackerOptionLabel(h, isHackerRecent(h.address, recentHackerAddresses))}
                     </option>
                   ))}
                 </optgroup>
+              )}
+              {hackerDropdownSections.hackSections.map((hack) => (
+                <Fragment key={hack.hackId}>
+                  <option disabled className="hack-separator">
+                    {hack.label}
+                  </option>
+                  {hack.sourceGroups.map((group) => (
+                    <optgroup key={`${hack.hackId}-${group.source}`} label={group.label}>
+                      {group.items.map((h) => (
+                        <option key={h.address} value={h.address}>
+                          {formatHackerOptionLabel(
+                            h,
+                            isHackerRecent(h.address, recentHackerAddresses),
+                          )}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </Fragment>
               ))}
             </select>
           </label>

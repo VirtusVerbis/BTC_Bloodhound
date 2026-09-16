@@ -4,6 +4,7 @@ import type { Job, Store } from "@cointrace/db";
 import { D1QuotaExceededError } from "@cointrace/db";
 import type { AppConfig } from "../config.js";
 import { JOB_PRIORITY } from "../config.js";
+import { resolveHackId } from "../hacks.js";
 import { ChainRouter, RateLimitNotReadyError } from "../chain/router.js";
 import { isRateLimitError, isTransientFetchError } from "../chain/esplora.js";
 import { getHackerAddressSet, processTxForHackTrace } from "../graph/builder.js";
@@ -238,7 +239,15 @@ export async function runSeedPublicHackers(
   seedDataJson?: string | null,
 ): Promise<void> {
   const raw = await readJsonText(seedFilePath, seedDataJson);
-  const data = JSON.parse(raw) as { hackers: Array<{ address: string; label?: string; source_url?: string }> };
+  const data = JSON.parse(raw) as {
+    hackers: Array<{
+      address: string;
+      label?: string;
+      source?: string;
+      hack?: string;
+      source_url?: string;
+    }>;
+  };
   let delay = 0;
   for (const h of data.hackers) {
     const address = normalizeBitcoinAddress(h.address);
@@ -246,11 +255,14 @@ export async function runSeedPublicHackers(
       console.warn(`Skipping invalid seed hacker address: ${h.address}`);
       continue;
     }
+    const hackId = resolveHackId(h.hack);
+    const source = h.source?.trim() || (hackId === "liquid" ? "x" : "public_seed");
     await store.upsertAddress({
       address,
       role: "hacker",
       label: h.label ?? null,
-      source: "public_seed",
+      source,
+      hackId,
       isFlaggedHacker: true,
       hopFromHacker: 0,
       expandStatus: "pending",
@@ -272,19 +284,24 @@ export async function runLoadLocalWatchlist(
 ): Promise<void> {
   try {
     const raw = await readJsonText(localPath, localWatchlistDataJson);
-    const data = JSON.parse(raw) as { hackers: Array<{ address: string; label?: string }> };
+    const data = JSON.parse(raw) as {
+      hackers: Array<{ address: string; label?: string; source?: string; hack?: string }>;
+    };
     for (const h of data.hackers) {
       const address = normalizeBitcoinAddress(h.address);
       if (!address) {
         console.warn(`Skipping invalid local watchlist hacker address: ${h.address}`);
         continue;
       }
+      const hackId = resolveHackId(h.hack);
+      const source = h.source?.trim() || (hackId === "liquid" ? "x" : "local_config");
       const existing = await store.getAddress(address);
       await store.upsertAddress({
         address,
         role: "hacker",
         label: h.label ?? null,
-        source: "local_config",
+        source,
+        hackId,
         isFlaggedHacker: true,
         hopFromHacker: 0,
       });

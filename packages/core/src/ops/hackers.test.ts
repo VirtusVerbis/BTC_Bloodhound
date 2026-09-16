@@ -37,6 +37,14 @@ describe("addHacker / clearQueue / removeHacker", () => {
     expect(addr?.label).toBe("manual add");
   });
 
+  it("persists hackId for liquid hackers and defaults source to x", async () => {
+    const store = await freshStore();
+    await addHacker(store, { address: H2, label: "liquid add", hackId: "liquid" });
+    const addr = await store.getAddress(H2);
+    expect(addr?.hackId).toBe("liquid");
+    expect(addr?.source).toBe("x");
+  });
+
   it("does not enqueue duplicate active backfill", async () => {
     const store = await freshStore();
     await addHacker(store, { address: H1 });

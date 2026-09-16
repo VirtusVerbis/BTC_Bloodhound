@@ -37,6 +37,15 @@ export type SyncSnapshotStats = {
   totalOutSats: number;
 };
 
+export type HackStatsRow = {
+  id: string;
+  victimCount: number;
+  hackerCount: number;
+  totalInSats: number;
+};
+
+export const HACK_STAT_IDS = ["coldcard", "liquid"] as const;
+
 export type SyncSnapshotV1 = {
   v: 1;
   at: string;
@@ -53,6 +62,7 @@ export type FlaggedHackerCacheEntry = Pick<
   | "role"
   | "label"
   | "source"
+  | "hackId"
   | "isFlaggedHacker"
   | "totalReceivedSats"
   | "liveBalanceSats"

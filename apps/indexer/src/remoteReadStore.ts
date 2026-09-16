@@ -50,6 +50,7 @@ function mapAddressRow(row: Row | undefined) {
     role: str(row.role),
     label: row.label != null ? str(row.label) : null,
     source: str(row.source),
+    hackId: row.hack_id != null ? str(row.hack_id) : "coldcard",
     isFlaggedHacker: row.is_flagged_hacker === 1 || row.is_flagged_hacker === true,
     notes: row.notes != null ? str(row.notes) : null,
     firstSeenAt: row.first_seen_at != null ? str(row.first_seen_at) : null,
@@ -301,7 +302,7 @@ WHERE id = 1;
   async listHackers() {
     return this.client
       .query(
-        `SELECT address, role, label, source, is_flagged_hacker, total_received_sats, live_balance_sats, live_balance_at, last_graph_activity_at
+        `SELECT address, role, label, source, hack_id, is_flagged_hacker, total_received_sats, live_balance_sats, live_balance_at, last_graph_activity_at
 FROM addresses WHERE is_flagged_hacker = 1 ORDER BY total_received_sats DESC;`,
       )
       .map((row) => mapAddressRow(row)!);

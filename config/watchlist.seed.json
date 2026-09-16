@@ -41,6 +41,12 @@
       "label": "Collector 7",
       "source_url": "https://gist.github.com/dsbaars/0a4f9e2d1f587a78f4a89a9a45e3b700",
       "attributed_sats": 3018476329
+    },
+    {
+      "address": "bc1qgslsydz56d0ed6827hdemfmk5w2f6ldyc6wt7p",
+      "label": "Liquid collector",
+      "hack": "liquid",
+      "source": "x"
     }
   ]
 }

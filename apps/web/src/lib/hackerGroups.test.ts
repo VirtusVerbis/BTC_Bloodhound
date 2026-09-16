@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  flattenHackersForNav,
   groupHackersForDropdown,
   isHackerRecent,
   type Hacker,
@@ -11,6 +12,7 @@ const hackers: Hacker[] = [
     address: "bc1qh1",
     label: "Hacker 1",
     source: "admin",
+    hackId: "coldcard",
     totalReceivedSats: 1_000_000,
     recentVictimCount: 2,
     recentDownstreamCount: 1,
@@ -19,7 +21,15 @@ const hackers: Hacker[] = [
     address: "bc1qh2",
     label: "Hacker 2",
     source: "admin",
+    hackId: "coldcard",
     totalReceivedSats: 500_000,
+  },
+  {
+    address: "bc1ql1",
+    label: "Liquid 1",
+    source: "x",
+    hackId: "liquid",
+    totalReceivedSats: 3_000_000,
   },
 ];
 
@@ -40,11 +50,29 @@ describe("hackerGroups recent cache", () => {
   });
 
   it("groups recent hackers at top of dropdown", () => {
-    const groups = groupHackersForDropdown(hackers, recentHackers);
-    expect(groups[0]?.label).toBe("Last activity");
-    expect(groups[0]?.items[0]?.address).toBe("bc1qh1");
-    expect(groups.some((g) => g.items.some((h) => h.address === "bc1qh1") && g.source !== "__recent__")).toBe(
-      false,
-    );
+    const sections = groupHackersForDropdown(hackers, recentHackers);
+    expect(sections.recent?.label).toBe("Last activity");
+    expect(sections.recent?.items[0]?.address).toBe("bc1qh1");
+    expect(
+      sections.hackSections.some((hack) =>
+        hack.sourceGroups.some((g) => g.items.some((h) => h.address === "bc1qh1")),
+      ),
+    ).toBe(false);
+  });
+
+  it("groups hackers under Coldcard and Liquid sections", () => {
+    const sections = groupHackersForDropdown(hackers, []);
+    expect(sections.hackSections.map((h) => h.hackId)).toEqual(["coldcard", "liquid"]);
+    const coldcard = sections.hackSections.find((h) => h.hackId === "coldcard");
+    const liquid = sections.hackSections.find((h) => h.hackId === "liquid");
+    expect(coldcard?.sourceGroups[0]?.items.map((h) => h.address)).toEqual(["bc1qh1", "bc1qh2"]);
+    expect(liquid?.sourceGroups[0]?.label).toBe("X");
+    expect(liquid?.sourceGroups[0]?.items[0]?.address).toBe("bc1ql1");
+  });
+
+  it("flattens nav order as recent then hack sections", () => {
+    const sections = groupHackersForDropdown(hackers, recentHackers);
+    const flat = flattenHackersForNav(sections);
+    expect(flat.map((h) => h.address)).toEqual(["bc1qh1", "bc1qh2", "bc1ql1"]);
   });
 });

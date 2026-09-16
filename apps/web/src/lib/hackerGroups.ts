@@ -4,6 +4,7 @@ export interface Hacker {
   address: string;
   label: string | null;
   source: string;
+  hackId?: string;
   totalReceivedSats: number;
   lastGraphActivityAt?: string | null;
   recentVictimCount?: number;
@@ -30,6 +31,22 @@ export interface HackerDropdownGroup {
   items: Hacker[];
 }
 
+export interface HackerDropdownHackSection {
+  hackId: string;
+  label: string;
+  sourceGroups: HackerDropdownGroup[];
+}
+
+export interface HackerDropdownSections {
+  recent: HackerDropdownGroup | null;
+  hackSections: HackerDropdownHackSection[];
+}
+
+const HACK_ORDER: Array<{ id: string; label: string }> = [
+  { id: "coldcard", label: "Coldcard" },
+  { id: "liquid", label: "Liquid" },
+];
+
 const SOURCE_LABELS: Record<string, string> = {
   coldcardwatch: "coldcardwatch.com",
   coldcard_sweep_watch: "Coldcard Sweep Watch",
@@ -38,6 +55,7 @@ const SOURCE_LABELS: Record<string, string> = {
   local_config: "Local config",
   admin: "Manual",
   ops: "Ops CLI",
+  x: "X",
 };
 
 const RECENT_GROUP_SOURCE = "__recent__";
@@ -99,35 +117,80 @@ export function groupHackersBySource(hackers: Hacker[]): HackerGroup[] {
   return groups;
 }
 
+function groupHackersByHackAndSource(
+  hackers: Hacker[],
+  excludeAddresses: ReadonlySet<string>,
+): HackerDropdownHackSection[] {
+  const byHack = new Map<string, Hacker[]>();
+  for (const h of hackers) {
+    if (excludeAddresses.has(h.address)) continue;
+    const hackId = h.hackId ?? "coldcard";
+    const bucket = byHack.get(hackId);
+    if (bucket) bucket.push(h);
+    else byHack.set(hackId, [h]);
+  }
+
+  const sections: HackerDropdownHackSection[] = [];
+  for (const hack of HACK_ORDER) {
+    const items = byHack.get(hack.id);
+    if (!items || items.length === 0) continue;
+    const sourceGroups: HackerDropdownGroup[] = [];
+    for (const group of groupHackersBySource(items)) {
+      if (group.items.length === 0) continue;
+      sourceGroups.push({
+        source: group.source,
+        label: group.label,
+        items: group.items,
+      });
+    }
+    if (sourceGroups.length === 0) continue;
+    sections.push({
+      hackId: hack.id,
+      label: hack.label,
+      sourceGroups,
+    });
+  }
+  return sections;
+}
+
 export function groupHackersForDropdown(
   hackers: Hacker[],
   recentHackers: RecentHackerEntry[],
-): HackerDropdownGroup[] {
+): HackerDropdownSections {
   const recentSorted = [...recentHackers].sort((a, b) => b.at.localeCompare(a.at));
   const recentAddresses = new Set(recentSorted.map((entry) => entry.address));
   const recentItems = recentSorted
     .map((entry) => hackers.find((h) => h.address === entry.address))
     .filter((h): h is Hacker => h != null);
 
-  const groups: HackerDropdownGroup[] = [];
+  const recent: HackerDropdownGroup | null =
+    recentItems.length > 0
+      ? {
+          source: RECENT_GROUP_SOURCE,
+          label: "Last activity",
+          items: recentItems,
+        }
+      : null;
 
-  if (recentItems.length > 0) {
-    groups.push({
-      source: RECENT_GROUP_SOURCE,
-      label: "Last activity",
-      items: recentItems,
-    });
+  return {
+    recent,
+    hackSections: groupHackersByHackAndSource(hackers, recentAddresses),
+  };
+}
+
+/** Flat list for keyboard navigation: recent, then each hack section in display order. */
+export function flattenHackersForNav(sections: HackerDropdownSections): Hacker[] {
+  const out: Hacker[] = [];
+  if (sections.recent) out.push(...sections.recent.items);
+  for (const hack of sections.hackSections) {
+    for (const group of hack.sourceGroups) {
+      out.push(...group.items);
+    }
   }
+  return out;
+}
 
-  for (const group of groupHackersBySource(hackers)) {
-    const items = group.items.filter((h) => !recentAddresses.has(h.address));
-    if (items.length === 0) continue;
-    groups.push({
-      source: group.source,
-      label: group.label,
-      items,
-    });
-  }
-
-  return groups;
+/** @deprecated Use groupHackersForDropdown + flattenHackersForNav */
+export function flattenHackerDropdownGroups(sections: HackerDropdownSections): Hacker[] {
+  return flattenHackersForNav(sections);
 }

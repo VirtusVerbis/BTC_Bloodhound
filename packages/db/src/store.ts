@@ -39,7 +39,9 @@ import {
   serializeFlaggedHackersCache,
   serializeSyncSnapshot,
   syncSnapshotParamsMatch,
+  HACK_STAT_IDS,
   type FlaggedHackerCacheEntry,
+  type HackStatsRow,
   type SyncSnapshotLastCompletedJob,
   type SyncSnapshotParams,
   type SyncSnapshotStats,
@@ -360,6 +362,7 @@ export type AddressUpsertData = {
   role?: string;
   label?: string | null;
   source?: string;
+  hackId?: string;
   isFlaggedHacker?: boolean;
   hopFromHacker?: number | null;
   expandStatus?: string;
@@ -688,6 +691,7 @@ export class Store {
     const role = data.role ?? "unknown";
     const label = data.label !== undefined ? data.label : null;
     const source = data.source ?? "derived";
+    const hackId = data.hackId ?? "coldcard";
     const isFlaggedHacker = data.isFlaggedHacker ?? false;
     const hopFromHacker = data.hopFromHacker !== undefined ? data.hopFromHacker : null;
     const expandStatus = data.expandStatus ?? "pending";
@@ -698,6 +702,7 @@ export class Store {
     const roleProvided = data.role !== undefined ? 1 : 0;
     const labelProvided = data.label !== undefined ? 1 : 0;
     const sourceProvided = data.source !== undefined ? 1 : 0;
+    const hackIdProvided = data.hackId !== undefined ? 1 : 0;
     const isFlaggedHackerProvided = data.isFlaggedHacker !== undefined ? 1 : 0;
     const hopProvided = data.hopFromHacker !== undefined ? 1 : 0;
     const expandStatusProvided = data.expandStatus !== undefined ? 1 : 0;
@@ -708,10 +713,10 @@ export class Store {
 
     await this.db.run(sql`
       INSERT INTO addresses (
-        address, role, label, source, is_flagged_hacker, created_at, first_seen_at, last_seen_at,
+        address, role, label, source, hack_id, is_flagged_hacker, created_at, first_seen_at, last_seen_at,
         hop_from_hacker, expand_status, total_received_sats, live_balance_sats, live_balance_at
       ) VALUES (
-        ${data.address}, ${role}, ${label}, ${source}, ${isFlaggedHacker ? 1 : 0},
+        ${data.address}, ${role}, ${label}, ${source}, ${hackId}, ${isFlaggedHacker ? 1 : 0},
         ${ts}, ${ts}, ${ts}, ${hopFromHacker}, ${expandStatus}, ${totalReceivedSats},
         ${liveBalanceSats}, ${liveBalanceAt}
       )
@@ -722,6 +727,7 @@ export class Store {
           ELSE addresses.role END,
         label = CASE WHEN ${labelProvided} = 1 THEN excluded.label ELSE addresses.label END,
         source = CASE WHEN ${sourceProvided} = 1 THEN excluded.source ELSE addresses.source END,
+        hack_id = CASE WHEN ${hackIdProvided} = 1 THEN excluded.hack_id ELSE addresses.hack_id END,
         is_flagged_hacker = CASE
           WHEN ${isFlaggedHackerProvided} = 1 THEN excluded.is_flagged_hacker
           ELSE addresses.is_flagged_hacker END,
@@ -764,13 +770,14 @@ export class Store {
     const ts = now();
     const result = await this.db.run(sql`
       INSERT INTO addresses (
-        address, role, label, source, is_flagged_hacker, created_at, first_seen_at, last_seen_at,
+        address, role, label, source, hack_id, is_flagged_hacker, created_at, first_seen_at, last_seen_at,
         hop_from_hacker, expand_status, total_received_sats, live_balance_sats, live_balance_at
       ) VALUES (
         ${data.address},
         ${data.role ?? "unknown"},
         ${data.label !== undefined ? data.label : null},
         ${data.source ?? "derived"},
+        ${data.hackId ?? "coldcard"},
         ${data.isFlaggedHacker ?? false ? 1 : 0},
         ${ts}, ${ts}, ${ts},
         ${data.hopFromHacker !== undefined ? data.hopFromHacker : null},
@@ -816,6 +823,7 @@ export class Store {
       role: addresses.role,
       label: addresses.label,
       source: addresses.source,
+      hackId: addresses.hackId,
       isFlaggedHacker: addresses.isFlaggedHacker,
       totalReceivedSats: addresses.totalReceivedSats,
       liveBalanceSats: addresses.liveBalanceSats,
@@ -924,6 +932,7 @@ export class Store {
         const role = data.role ?? "unknown";
         const label = data.label !== undefined ? data.label : null;
         const source = data.source ?? "derived";
+        const hackId = data.hackId ?? "coldcard";
         const isFlaggedHacker = data.isFlaggedHacker ?? false;
         const hopFromHacker = data.hopFromHacker !== undefined ? data.hopFromHacker : null;
         const expandStatus = data.expandStatus ?? "pending";
@@ -933,6 +942,7 @@ export class Store {
         const roleProvided = data.role !== undefined ? 1 : 0;
         const labelProvided = data.label !== undefined ? 1 : 0;
         const sourceProvided = data.source !== undefined ? 1 : 0;
+        const hackIdProvided = data.hackId !== undefined ? 1 : 0;
         const isFlaggedHackerProvided = data.isFlaggedHacker !== undefined ? 1 : 0;
         if (isFlaggedHackerProvided === 1) {
           const before = beforeByAddress.get(data.address);
@@ -946,10 +956,10 @@ export class Store {
         const forceRole = data.forceRole === true ? 1 : 0;
         return sql`
           INSERT INTO addresses (
-            address, role, label, source, is_flagged_hacker, created_at, first_seen_at, last_seen_at,
+            address, role, label, source, hack_id, is_flagged_hacker, created_at, first_seen_at, last_seen_at,
             hop_from_hacker, expand_status, total_received_sats, live_balance_sats, live_balance_at
           ) VALUES (
-            ${data.address}, ${role}, ${label}, ${source}, ${isFlaggedHacker ? 1 : 0},
+            ${data.address}, ${role}, ${label}, ${source}, ${hackId}, ${isFlaggedHacker ? 1 : 0},
             ${ts}, ${ts}, ${ts}, ${hopFromHacker}, ${expandStatus}, ${totalReceivedSats},
             ${liveBalanceSats}, ${liveBalanceAt}
           )
@@ -960,6 +970,7 @@ export class Store {
               ELSE addresses.role END,
             label = CASE WHEN ${labelProvided} = 1 THEN excluded.label ELSE addresses.label END,
             source = CASE WHEN ${sourceProvided} = 1 THEN excluded.source ELSE addresses.source END,
+            hack_id = CASE WHEN ${hackIdProvided} = 1 THEN excluded.hack_id ELSE addresses.hack_id END,
             is_flagged_hacker = CASE
               WHEN ${isFlaggedHackerProvided} = 1 THEN excluded.is_flagged_hacker
               ELSE addresses.is_flagged_hacker END,
@@ -4148,6 +4159,49 @@ export class Store {
     };
   }
 
+  async computeStatsCountsByHack(): Promise<HackStatsRow[]> {
+    const hackerRows = await this.db
+      .select({
+        hackId: addresses.hackId,
+        count: sql<number>`count(*)`,
+      })
+      .from(addresses)
+      .where(and(eq(addresses.isFlaggedHacker, true), gt(addresses.totalReceivedSats, 0)))
+      .groupBy(addresses.hackId)
+      .all();
+
+    const edgeRows = await this.db
+      .select({
+        hackId: addresses.hackId,
+        victimCount: sql<number>`count(distinct ${edges.fromAddress})`,
+        totalInSats: sql<number>`coalesce(sum(${edges.amountSats}), 0)`,
+      })
+      .from(edges)
+      .innerJoin(addresses, eq(edges.toAddress, addresses.address))
+      .where(and(eq(edges.direction, "in_to_hacker"), eq(addresses.isFlaggedHacker, true)))
+      .groupBy(addresses.hackId)
+      .all();
+
+    const byHack = new Map<string, HackStatsRow>();
+    for (const hackId of HACK_STAT_IDS) {
+      byHack.set(hackId, { id: hackId, victimCount: 0, hackerCount: 0, totalInSats: 0 });
+    }
+    for (const row of hackerRows) {
+      const id = row.hackId ?? "coldcard";
+      const entry = byHack.get(id) ?? { id, victimCount: 0, hackerCount: 0, totalInSats: 0 };
+      entry.hackerCount = row.count ?? 0;
+      byHack.set(id, entry);
+    }
+    for (const row of edgeRows) {
+      const id = row.hackId ?? "coldcard";
+      const entry = byHack.get(id) ?? { id, victimCount: 0, hackerCount: 0, totalInSats: 0 };
+      entry.victimCount = row.victimCount ?? 0;
+      entry.totalInSats = row.totalInSats ?? 0;
+      byHack.set(id, entry);
+    }
+    return HACK_STAT_IDS.map((id) => byHack.get(id)!);
+  }
+
   async refreshSyncSnapshot(params: SyncSnapshotParams): Promise<SyncSnapshotV1> {
     const state = await this.getSchedulerState();
     const parsed = parseSyncSnapshot(state?.syncSnapshotJson);
@@ -4536,6 +4590,7 @@ LIMIT ${remaining}
       hackerCount: 0,
       totalInSats: 0,
       totalOutSats: 0,
+      hacks: [] as Array<HackStatsRow & { label: string }>,
       lastJobAt: null as string | null,
       btcUsdPrice: null as number | null,
       btcUsdPriceAt: null as string | null,
@@ -4598,6 +4653,16 @@ LIMIT ${remaining}
       result.btcUsdPriceAt = scheduler?.btcUsdPriceAt ?? null;
     } catch (err) {
       console.error("getStats btcUsdPrice failed", err);
+    }
+    try {
+      const hackLabels: Record<string, string> = { coldcard: "Coldcard", liquid: "Liquid" };
+      const hackRows = await this.computeStatsCountsByHack();
+      result.hacks = hackRows.map((row) => ({
+        ...row,
+        label: hackLabels[row.id] ?? row.id,
+      }));
+    } catch (err) {
+      console.error("getStats hacks failed", err);
     }
     return result;
   }

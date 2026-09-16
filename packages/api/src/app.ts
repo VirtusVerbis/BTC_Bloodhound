@@ -222,6 +222,7 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
           address: h.address,
           label: h.label,
           source: h.source,
+          hackId: h.hackId ?? "coldcard",
           totalReceivedSats: h.totalReceivedSats,
           liveBalanceSats: h.liveBalanceSats,
           liveBalanceAt: h.liveBalanceAt,
