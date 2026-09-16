@@ -18,8 +18,15 @@ export function btcToSats(btc: number) {
   return Math.max(0, Math.round(btc * 1e8));
 }
 
-export function satsToBtc(sats: number) {
-  return satsToBtcNumber(sats).toLocaleString(undefined, { maximumFractionDigits: 8 });
+export function satsToBtc(sats: number, opts?: { fixedDecimals?: number }) {
+  const btc = satsToBtcNumber(sats);
+  if (opts?.fixedDecimals != null) {
+    return btc.toLocaleString(undefined, {
+      minimumFractionDigits: opts.fixedDecimals,
+      maximumFractionDigits: opts.fixedDecimals,
+    });
+  }
+  return btc.toLocaleString(undefined, { maximumFractionDigits: 8 });
 }
 
 export function satsToUsd(sats: number, btcUsdPrice: number) {

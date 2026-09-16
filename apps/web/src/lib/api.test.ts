@@ -4,6 +4,7 @@ import {
   isHtmlErrorBody,
   isJsonContentType,
   sanitizeApiErrorBody,
+  satsToBtc,
 } from "./api";
 
 describe("isHtmlErrorBody", () => {
@@ -81,6 +82,18 @@ describe("sanitizeApiErrorBody", () => {
         "application/json",
       ),
     ).toBe("Database temporarily unavailable. Please try again after midnight UTC.");
+  });
+});
+
+describe("satsToBtc", () => {
+  const coldcardSats = 183_583_209_650;
+
+  it("trims trailing fractional zeros by default", () => {
+    expect(satsToBtc(coldcardSats)).toBe("1,835.8320965");
+  });
+
+  it("pads to fixed decimal places when requested", () => {
+    expect(satsToBtc(coldcardSats, { fixedDecimals: 8 })).toBe("1,835.83209650");
   });
 });
 

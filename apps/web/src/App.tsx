@@ -598,7 +598,7 @@ export default function App() {
                   {hack.hackerCount} hacker addresses
                 </span>
                 <span className="stats-hack-btc">
-                  {satsToBtc(hack.totalInSats)} BTC stolen =
+                  {satsToBtc(hack.totalInSats, { fixedDecimals: 8 })} BTC stolen =
                   {stats.btcUsdPrice != null && (
                     <>
                       <span className="usd-value">
