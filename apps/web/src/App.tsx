@@ -581,37 +581,40 @@ export default function App() {
           </button>
         </nav>
         <div className="stats-hack-rows">
-          {stats?.hacks?.map((hack) => (
-            <div key={hack.id} className="stats-row">
-              <span className="stats-hack-label">{hack.label}:</span>
-              <span
-                title="Victim addresses that sent funds into this hack's flagged consolidation addresses."
-              >
-                {hack.victimCount} victims indexed
-              </span>
-              <span
-                className="stats-hacker-count"
-                title="Flagged consolidation addresses that received stolen funds from victims."
-              >
-                {hack.hackerCount} hacker addresses
-              </span>
-              <span className="stats-hack-btc">
-                {satsToBtc(hack.totalInSats)} BTC stolen =
-                {stats.btcUsdPrice != null && (
-                  <>
-                    <span className="usd-value">
-                      {" "}
-                      {formatUsd(satsToUsd(hack.totalInSats, stats.btcUsdPrice))}
-                    </span>
-                    <span className="btc-spot-price">
-                      {" @ "}
-                      {formatBtcSpotUsd(stats.btcUsdPrice)} USD/BTC
-                    </span>
-                  </>
-                )}
-              </span>
-            </div>
-          ))}
+          <div className="stats-hack-grid">
+            {stats?.hacks?.map((hack) => (
+              <div key={hack.id} className="stats-row">
+                <span className="stats-hack-label">{hack.label}:</span>
+                <span
+                  className="stats-col-victims"
+                  title="Victim addresses that sent funds into this hack's flagged consolidation addresses."
+                >
+                  {hack.victimCount} victims indexed
+                </span>
+                <span
+                  className="stats-col-hackers stats-hacker-count"
+                  title="Flagged consolidation addresses that received stolen funds from victims."
+                >
+                  {hack.hackerCount} hacker addresses
+                </span>
+                <span className="stats-hack-btc">
+                  {satsToBtc(hack.totalInSats)} BTC stolen =
+                  {stats.btcUsdPrice != null && (
+                    <>
+                      <span className="usd-value">
+                        {" "}
+                        {formatUsd(satsToUsd(hack.totalInSats, stats.btcUsdPrice))}
+                      </span>
+                      <span className="btc-spot-price">
+                        {" @ "}
+                        {formatBtcSpotUsd(stats.btcUsdPrice)} USD/BTC
+                      </span>
+                    </>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
           {rateLimitActive && (
             <div className="rate-limit-banner" role="status">
               Rate limit active — too many requests. Try again in {rateLimitSecondsLeft}s.
