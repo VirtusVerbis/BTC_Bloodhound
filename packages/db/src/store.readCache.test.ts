@@ -184,6 +184,10 @@ describe("read cache", () => {
 
     expect(snapshot.stats.victimCount).toBe(1);
     expect(snapshot.stats.hackerCount).toBe(1);
+    expect(snapshot.stats.hacks).toEqual([
+      { id: "coldcard", victimCount: 0, hackerCount: 1, totalInSats: 0 },
+      { id: "liquid", victimCount: 0, hackerCount: 0, totalInSats: 0 },
+    ]);
     expect(snapshot.v).toBe(1);
   });
 
@@ -201,6 +205,51 @@ describe("read cache", () => {
       downstreamPollIntervalSec: 600,
     });
     expect(stats.victimCount).toBe(1);
+  });
+
+  it("getStats uses snapshot hack stats when fresh", async () => {
+    await store.upsertAddress({
+      address: "bc1qhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+      hackId: "coldcard",
+      totalReceivedSats: 1000,
+    });
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "bc1qvictim",
+        toAddress: "bc1qhacker",
+        txid: "tx1",
+        amountSats: 1000,
+        direction: "in_to_hacker",
+      },
+    ]);
+    await store.refreshSyncSnapshot({
+      maxCrawlDepth: 5,
+      downstreamPollIntervalSec: 600,
+    });
+
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "bc1qvictim2",
+        toAddress: "bc1qhacker",
+        txid: "tx2",
+        amountSats: 500,
+        direction: "in_to_hacker",
+      },
+    ]);
+
+    const stats = await store.getStats({
+      maxCrawlDepth: 5,
+      downstreamPollIntervalSec: 600,
+    });
+    expect(stats.hacks.find((h) => h.id === "coldcard")).toEqual({
+      id: "coldcard",
+      victimCount: 1,
+      hackerCount: 1,
+      totalInSats: 1000,
+      label: "Coldcard",
+    });
   });
 
   it("getStats uses scheduler lastCompletedJobAt when snapshot stats are fresh", async () => {

@@ -35,6 +35,7 @@ import {
   isCacheFresh,
   pollDueCacheTtlSec,
   parseFlaggedHackersCache,
+  parseHackStatsRows,
   parseSyncSnapshot,
   serializeFlaggedHackersCache,
   serializeSyncSnapshot,
@@ -73,6 +74,7 @@ const JOB_STATUS_PENDING_SQL = sql`${jobs.status} = 'pending'`;
 const JOB_STATUS_ACTIVE_SQL = sql`${jobs.status} IN ('pending', 'running')`;
 const INGEST_JOB_TYPE_SQL = jobTypeInSql(INGEST_JOB_TYPES);
 const EDGE_DIRECTION_OUT_SQL = sql`${edges.direction} = 'out_from_hacker'`;
+const EDGE_DIRECTION_IN_SQL = sql`${edges.direction} = 'in_to_hacker'`;
 
 type CachedActiveJobCountField =
   | "activeExpandCount"
@@ -4178,7 +4180,7 @@ export class Store {
       })
       .from(edges)
       .innerJoin(addresses, eq(edges.toAddress, addresses.address))
-      .where(and(eq(edges.direction, "in_to_hacker"), eq(addresses.isFlaggedHacker, true)))
+      .where(and(EDGE_DIRECTION_IN_SQL, eq(addresses.isFlaggedHacker, true)))
       .groupBy(addresses.hackId)
       .all();
 
@@ -4220,6 +4222,7 @@ export class Store {
         ? await this.getLastCompletedJobSummary()
         : parsed.lastCompletedJob;
     const stats = await this.computeStatsCounts();
+    const hacks = await this.computeStatsCountsByHack();
     const snapshot: SyncSnapshotV1 = {
       v: 1,
       at: now(),
@@ -4234,7 +4237,7 @@ export class Store {
         downstreamPollDueCount: monitor.downstreamPollDueCount,
       },
       lastCompletedJob,
-      stats,
+      stats: { ...stats, hacks },
     };
     await this.updateSchedulerState({
       syncSnapshotJson: serializeSyncSnapshot(snapshot),
@@ -4598,6 +4601,7 @@ LIMIT ${remaining}
 
     let usedSnapshotStats = false;
     let snapshotLastJobAt: string | null = null;
+    let snapshotHacks: HackStatsRow[] | undefined;
     if (snapshotParams) {
       try {
         const snapshot = await this.getSyncSnapshot(snapshotParams);
@@ -4608,6 +4612,7 @@ LIMIT ${remaining}
           result.totalOutSats = snapshot.stats.totalOutSats;
           snapshotLastJobAt = snapshot.lastCompletedJob.at;
           usedSnapshotStats = true;
+          snapshotHacks = parseHackStatsRows(snapshot.stats.hacks);
         }
       } catch (err) {
         console.error("getStats sync snapshot failed", err);
@@ -4656,7 +4661,7 @@ LIMIT ${remaining}
     }
     try {
       const hackLabels: Record<string, string> = { coldcard: "Coldcard", liquid: "Liquid" };
-      const hackRows = await this.computeStatsCountsByHack();
+      const hackRows = snapshotHacks ?? (await this.computeStatsCountsByHack());
       result.hacks = hackRows.map((row) => ({
         ...row,
         label: hackLabels[row.id] ?? row.id,

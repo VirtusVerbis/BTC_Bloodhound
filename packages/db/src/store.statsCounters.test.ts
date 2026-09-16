@@ -122,6 +122,22 @@ describe("scheduler stats counters", () => {
     const liquid = byHack.find((h) => h.id === "liquid");
     expect(coldcard).toEqual({ id: "coldcard", hackerCount: 1, victimCount: 1, totalInSats: 1000 });
     expect(liquid).toEqual({ id: "liquid", hackerCount: 1, victimCount: 1, totalInSats: 2000 });
+
+    const snapshot = await store.refreshSyncSnapshot({
+      maxCrawlDepth: 5,
+      downstreamPollIntervalSec: 600,
+    });
+    const stats = await store.getStats({
+      maxCrawlDepth: 5,
+      downstreamPollIntervalSec: 600,
+    });
+    expect(snapshot.stats.hacks).toEqual(byHack);
+    expect(stats.hacks.map(({ id, victimCount, hackerCount, totalInSats }) => ({
+      id,
+      victimCount,
+      hackerCount,
+      totalInSats,
+    }))).toEqual(byHack);
   });
 
   it("reconcileStatsCounters leaves incremental edge totals unchanged", async () => {

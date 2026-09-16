@@ -30,13 +30,6 @@ export type SyncSnapshotLastCompletedJob = {
   at: string | null;
 };
 
-export type SyncSnapshotStats = {
-  victimCount: number;
-  hackerCount: number;
-  totalInSats: number;
-  totalOutSats: number;
-};
-
 export type HackStatsRow = {
   id: string;
   victimCount: number;
@@ -45,6 +38,15 @@ export type HackStatsRow = {
 };
 
 export const HACK_STAT_IDS = ["coldcard", "liquid"] as const;
+
+export type SyncSnapshotStats = {
+  victimCount: number;
+  hackerCount: number;
+  totalInSats: number;
+  totalOutSats: number;
+  /** Per-hack counts; omitted on pre-change snapshots (treated as a hacks cache miss). */
+  hacks?: HackStatsRow[];
+};
 
 export type SyncSnapshotV1 = {
   v: 1;
@@ -112,6 +114,32 @@ export function serializeFlaggedHackersCache(rows: FlaggedHackerCacheEntry[]): s
   return JSON.stringify(rows);
 }
 
+export function parseHackStatsRows(value: unknown): HackStatsRow[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const byId = new Map<string, HackStatsRow>();
+  for (const row of value) {
+    if (row == null || typeof row !== "object") return undefined;
+    const rec = row as Record<string, unknown>;
+    if (typeof rec.id !== "string" || rec.id.length === 0) return undefined;
+    if (typeof rec.victimCount !== "number" || !Number.isFinite(rec.victimCount)) return undefined;
+    if (typeof rec.hackerCount !== "number" || !Number.isFinite(rec.hackerCount)) return undefined;
+    if (typeof rec.totalInSats !== "number" || !Number.isFinite(rec.totalInSats)) return undefined;
+    byId.set(rec.id, {
+      id: rec.id,
+      victimCount: rec.victimCount,
+      hackerCount: rec.hackerCount,
+      totalInSats: rec.totalInSats,
+    });
+  }
+  const out: HackStatsRow[] = [];
+  for (const id of HACK_STAT_IDS) {
+    const row = byId.get(id);
+    if (!row) return undefined;
+    out.push(row);
+  }
+  return out;
+}
+
 export function parseSyncSnapshot(json: string | null | undefined): SyncSnapshotV1 | null {
   if (!json) return null;
   try {
@@ -119,6 +147,11 @@ export function parseSyncSnapshot(json: string | null | undefined): SyncSnapshot
     if (parsed?.v !== 1 || typeof parsed.at !== "string") return null;
     if (!parsed.params || typeof parsed.params.maxCrawlDepth !== "number") return null;
     if (typeof parsed.params.downstreamPollIntervalSec !== "number") return null;
+    if (parsed.stats && typeof parsed.stats === "object") {
+      const hacks = parseHackStatsRows(parsed.stats.hacks);
+      if (hacks) parsed.stats.hacks = hacks;
+      else delete parsed.stats.hacks;
+    }
     return parsed;
   } catch {
     return null;
