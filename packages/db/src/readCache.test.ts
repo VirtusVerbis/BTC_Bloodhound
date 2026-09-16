@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  labeledHackStats,
+  parseHackStatsJson,
   parseHackStatsRows,
   parseSyncSnapshot,
   pollDueCacheTtlSec,
@@ -70,5 +72,31 @@ describe("parseSyncSnapshot hacks", () => {
       JSON.stringify({ ...base, stats: { ...base.stats, hacks: [{ id: "coldcard" }] } }),
     );
     expect(invalid?.stats.hacks).toBeUndefined();
+  });
+});
+
+describe("labeledHackStats", () => {
+  it("fills known ids with zeros when the blob is missing", () => {
+    expect(labeledHackStats(undefined)).toEqual([
+      { id: "coldcard", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Coldcard" },
+      { id: "liquid", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Liquid" },
+    ]);
+  });
+});
+
+describe("parseHackStatsJson", () => {
+  it("parses a stored blob and rejects garbage", () => {
+    expect(
+      parseHackStatsJson(
+        JSON.stringify([
+          { id: "liquid", victimCount: 3, hackerCount: 4, totalInSats: 200 },
+          { id: "coldcard", victimCount: 1, hackerCount: 2, totalInSats: 100 },
+        ]),
+      ),
+    ).toEqual([
+      { id: "coldcard", victimCount: 1, hackerCount: 2, totalInSats: 100 },
+      { id: "liquid", victimCount: 3, hackerCount: 4, totalInSats: 200 },
+    ]);
+    expect(parseHackStatsJson("not-json")).toBeUndefined();
   });
 });

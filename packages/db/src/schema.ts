@@ -151,6 +151,8 @@ export const schedulerState = sqliteTable("scheduler_state", {
   crawlMaxHopReached: integer("crawl_max_hop_reached").notNull().default(0),
   downstreamTreeCount: integer("downstream_tree_count").notNull().default(0),
   downstreamTreeMaxDepth: integer("downstream_tree_max_depth").notNull().default(0),
+  hackStatsJson: text("hack_stats_json"),
+  hackStatsDayUtc: text("hack_stats_day_utc"),
 });
 
 export const rateLimits = sqliteTable("rate_limits", {

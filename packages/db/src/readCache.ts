@@ -39,6 +39,29 @@ export type HackStatsRow = {
 
 export const HACK_STAT_IDS = ["coldcard", "liquid"] as const;
 
+const HACK_STAT_LABELS: Record<string, string> = { coldcard: "Coldcard", liquid: "Liquid" };
+
+export function labeledHackStats(rows: HackStatsRow[] | undefined): Array<HackStatsRow & { label: string }> {
+  const byId = new Map((rows ?? []).map((row) => [row.id, row]));
+  return HACK_STAT_IDS.map((id) => {
+    const row = byId.get(id) ?? { id, victimCount: 0, hackerCount: 0, totalInSats: 0 };
+    return { ...row, label: HACK_STAT_LABELS[id] ?? id };
+  });
+}
+
+export function serializeHackStatsRows(rows: HackStatsRow[]): string {
+  return JSON.stringify(rows);
+}
+
+export function parseHackStatsJson(json: string | null | undefined): HackStatsRow[] | undefined {
+  if (!json) return undefined;
+  try {
+    return parseHackStatsRows(JSON.parse(json) as unknown);
+  } catch {
+    return undefined;
+  }
+}
+
 export type SyncSnapshotStats = {
   victimCount: number;
   hackerCount: number;

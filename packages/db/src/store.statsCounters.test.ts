@@ -122,22 +122,64 @@ describe("scheduler stats counters", () => {
     const liquid = byHack.find((h) => h.id === "liquid");
     expect(coldcard).toEqual({ id: "coldcard", hackerCount: 1, victimCount: 1, totalInSats: 1000 });
     expect(liquid).toEqual({ id: "liquid", hackerCount: 1, victimCount: 1, totalInSats: 2000 });
+  });
 
-    const snapshot = await store.refreshSyncSnapshot({
-      maxCrawlDepth: 5,
-      downstreamPollIntervalSec: 600,
+  it("maybeRefreshHackStatsDaily runs the join once per UTC day", async () => {
+    const { store } = await openStore();
+    await store.upsertAddress({
+      address: "bc1qcoldhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+      hackId: "coldcard",
+      totalReceivedSats: 1000,
     });
-    const stats = await store.getStats({
-      maxCrawlDepth: 5,
-      downstreamPollIntervalSec: 600,
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "bc1qvictim1",
+        toAddress: "bc1qcoldhacker",
+        txid: "tx-cold",
+        amountSats: 1000,
+        direction: "in_to_hacker",
+      },
+    ]);
+
+    const day = new Date("2026-09-16T00:01:00.000Z");
+    expect(await store.maybeRefreshHackStatsDaily(day)).toBe(true);
+    expect(await store.maybeRefreshHackStatsDaily(day)).toBe(false);
+
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "bc1qvictim2",
+        toAddress: "bc1qcoldhacker",
+        txid: "tx-cold-2",
+        amountSats: 500,
+        direction: "in_to_hacker",
+      },
+    ]);
+    expect(await store.maybeRefreshHackStatsDaily(new Date("2026-09-16T12:00:00.000Z"))).toBe(false);
+
+    const sameDay = await store.getStats();
+    expect(sameDay.hacks.find((h) => h.id === "coldcard")).toMatchObject({
+      victimCount: 1,
+      totalInSats: 1000,
+      label: "Coldcard",
     });
-    expect(snapshot.stats.hacks).toEqual(byHack);
-    expect(stats.hacks.map(({ id, victimCount, hackerCount, totalInSats }) => ({
-      id,
-      victimCount,
-      hackerCount,
-      totalInSats,
-    }))).toEqual(byHack);
+
+    expect(await store.maybeRefreshHackStatsDaily(new Date("2026-09-17T00:01:00.000Z"))).toBe(true);
+    const nextDay = await store.getStats();
+    expect(nextDay.hacks.find((h) => h.id === "coldcard")).toMatchObject({
+      victimCount: 2,
+      totalInSats: 1500,
+    });
+  });
+
+  it("getStats returns labeled zeros when daily hack stats are missing", async () => {
+    const { store } = await openStore();
+    const stats = await store.getStats();
+    expect(stats.hacks).toEqual([
+      { id: "coldcard", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Coldcard" },
+      { id: "liquid", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Liquid" },
+    ]);
   });
 
   it("reconcileStatsCounters leaves incremental edge totals unchanged", async () => {

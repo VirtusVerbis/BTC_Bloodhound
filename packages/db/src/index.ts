@@ -606,6 +606,12 @@ export function runMigrations(sqlite: Database.Database): void {
       WHERE id = 1
     `);
   }
+  if (!schedulerCols.some((c) => c.name === "hack_stats_json")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN hack_stats_json TEXT`);
+  }
+  if (!schedulerCols.some((c) => c.name === "hack_stats_day_utc")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN hack_stats_day_utc TEXT`);
+  }
   sqlite.exec(`
     CREATE INDEX IF NOT EXISTS idx_addresses_hackers_by_received
       ON addresses(total_received_sats DESC)

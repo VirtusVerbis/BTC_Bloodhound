@@ -24,6 +24,7 @@ function tickStoreMock(overrides: Record<string, unknown> = {}): Store {
     setSubrequestBudget: vi.fn(),
     clearExpiredD1QuotaPause: vi.fn().mockResolvedValue(undefined),
     isD1QuotaBlocked: vi.fn().mockResolvedValue(false),
+    maybeRefreshHackStatsDaily: vi.fn().mockResolvedValue(false),
     getSchedulerState: vi.fn().mockResolvedValue({ maintenanceCronCounter: 0 }),
     getQueueDepth: vi.fn().mockResolvedValue(0),
     getPendingQueueDepthAll: vi.fn().mockResolvedValue(0),
@@ -273,8 +274,19 @@ describe("runIndexerTick ordering", () => {
     const result = await runIndexerTick(store, router, baseConfig(), { schedule: true });
 
     expect(result.jobsProcessed).toBe(0);
+    expect(store.maybeRefreshHackStatsDaily).not.toHaveBeenCalled();
     expect(processJobsMock).not.toHaveBeenCalled();
     expect(scheduleBtcMock).not.toHaveBeenCalled();
     expect(scheduleCrawlMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshes daily hack stats after quota pause is cleared", async () => {
+    const store = tickStoreMock();
+    const router = {} as ChainRouter;
+
+    await runIndexerTick(store, router, baseConfig(), { schedule: true });
+
+    expect(store.clearExpiredD1QuotaPause).toHaveBeenCalledOnce();
+    expect(store.maybeRefreshHackStatsDaily).toHaveBeenCalledOnce();
   });
 });

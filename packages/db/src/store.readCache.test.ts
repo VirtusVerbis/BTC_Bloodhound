@@ -184,10 +184,7 @@ describe("read cache", () => {
 
     expect(snapshot.stats.victimCount).toBe(1);
     expect(snapshot.stats.hackerCount).toBe(1);
-    expect(snapshot.stats.hacks).toEqual([
-      { id: "coldcard", victimCount: 0, hackerCount: 1, totalInSats: 0 },
-      { id: "liquid", victimCount: 0, hackerCount: 0, totalInSats: 0 },
-    ]);
+    expect(snapshot.stats.hacks).toBeUndefined();
     expect(snapshot.v).toBe(1);
   });
 
@@ -207,7 +204,7 @@ describe("read cache", () => {
     expect(stats.victimCount).toBe(1);
   });
 
-  it("getStats uses snapshot hack stats when fresh", async () => {
+  it("getStats uses daily hack stats blob, not snapshot or live edges", async () => {
     await store.upsertAddress({
       address: "bc1qhacker",
       role: "hacker",
@@ -228,6 +225,7 @@ describe("read cache", () => {
       maxCrawlDepth: 5,
       downstreamPollIntervalSec: 600,
     });
+    await store.maybeRefreshHackStatsDaily(new Date("2026-09-16T00:01:00.000Z"));
 
     await store.upsertEdgesBatch([
       {

@@ -35,10 +35,12 @@ import {
   isCacheFresh,
   pollDueCacheTtlSec,
   parseFlaggedHackersCache,
-  parseHackStatsRows,
+  parseHackStatsJson,
   parseSyncSnapshot,
   serializeFlaggedHackersCache,
+  serializeHackStatsRows,
   serializeSyncSnapshot,
+  labeledHackStats,
   syncSnapshotParamsMatch,
   HACK_STAT_IDS,
   type FlaggedHackerCacheEntry,
@@ -3300,6 +3302,8 @@ export class Store {
     crawlMaxHopReached?: number;
     downstreamTreeCount?: number;
     downstreamTreeMaxDepth?: number;
+    hackStatsJson?: string | null;
+    hackStatsDayUtc?: string | null;
   }) {
     await this.db
       .update(schedulerState)
@@ -4204,6 +4208,23 @@ export class Store {
     return HACK_STAT_IDS.map((id) => byHack.get(id)!);
   }
 
+  async maybeRefreshHackStatsDaily(now = new Date()): Promise<boolean> {
+    try {
+      const today = todayUtcDate(now);
+      const state = await this.getSchedulerState();
+      if (state?.hackStatsDayUtc === today) return false;
+      const hacks = await this.computeStatsCountsByHack();
+      await this.updateSchedulerState({
+        hackStatsJson: serializeHackStatsRows(hacks),
+        hackStatsDayUtc: today,
+      });
+      return true;
+    } catch (err) {
+      console.error("maybeRefreshHackStatsDaily failed", err);
+      return false;
+    }
+  }
+
   async refreshSyncSnapshot(params: SyncSnapshotParams): Promise<SyncSnapshotV1> {
     const state = await this.getSchedulerState();
     const parsed = parseSyncSnapshot(state?.syncSnapshotJson);
@@ -4222,7 +4243,6 @@ export class Store {
         ? await this.getLastCompletedJobSummary()
         : parsed.lastCompletedJob;
     const stats = await this.computeStatsCounts();
-    const hacks = await this.computeStatsCountsByHack();
     const snapshot: SyncSnapshotV1 = {
       v: 1,
       at: now(),
@@ -4237,7 +4257,7 @@ export class Store {
         downstreamPollDueCount: monitor.downstreamPollDueCount,
       },
       lastCompletedJob,
-      stats: { ...stats, hacks },
+      stats,
     };
     await this.updateSchedulerState({
       syncSnapshotJson: serializeSyncSnapshot(snapshot),
@@ -4601,7 +4621,6 @@ LIMIT ${remaining}
 
     let usedSnapshotStats = false;
     let snapshotLastJobAt: string | null = null;
-    let snapshotHacks: HackStatsRow[] | undefined;
     if (snapshotParams) {
       try {
         const snapshot = await this.getSyncSnapshot(snapshotParams);
@@ -4612,7 +4631,6 @@ LIMIT ${remaining}
           result.totalOutSats = snapshot.stats.totalOutSats;
           snapshotLastJobAt = snapshot.lastCompletedJob.at;
           usedSnapshotStats = true;
-          snapshotHacks = parseHackStatsRows(snapshot.stats.hacks);
         }
       } catch (err) {
         console.error("getStats sync snapshot failed", err);
@@ -4652,22 +4670,19 @@ LIMIT ${remaining}
     } catch (err) {
       console.error("getStats lastJobAt failed", err);
     }
+    let schedulerRow: Awaited<ReturnType<Store["getSchedulerState"]>> | undefined;
     try {
-      const scheduler = await this.getSchedulerState();
-      result.btcUsdPrice = scheduler?.btcUsdPrice ?? null;
-      result.btcUsdPriceAt = scheduler?.btcUsdPriceAt ?? null;
+      schedulerRow = await this.getSchedulerState();
+      result.btcUsdPrice = schedulerRow?.btcUsdPrice ?? null;
+      result.btcUsdPriceAt = schedulerRow?.btcUsdPriceAt ?? null;
     } catch (err) {
       console.error("getStats btcUsdPrice failed", err);
     }
     try {
-      const hackLabels: Record<string, string> = { coldcard: "Coldcard", liquid: "Liquid" };
-      const hackRows = snapshotHacks ?? (await this.computeStatsCountsByHack());
-      result.hacks = hackRows.map((row) => ({
-        ...row,
-        label: hackLabels[row.id] ?? row.id,
-      }));
+      result.hacks = labeledHackStats(parseHackStatsJson(schedulerRow?.hackStatsJson));
     } catch (err) {
       console.error("getStats hacks failed", err);
+      result.hacks = labeledHackStats(undefined);
     }
     return result;
   }
