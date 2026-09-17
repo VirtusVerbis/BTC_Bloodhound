@@ -105,9 +105,11 @@ export async function runIndexerTick(
     return { scheduled: schedule, jobsProcessed: 0 };
   }
 
-  await store.maybeRefreshHackStatsDaily().catch((err: unknown) => {
-    console.error("maybeRefreshHackStatsDaily failed", err);
-  });
+  if (schedule) {
+    await store.maybeRefreshHackStatsDaily().catch((err: unknown) => {
+      console.error("maybeRefreshHackStatsDaily failed", err);
+    });
+  }
 
   logCronDetail(jobDetails, "[cron] tick start", logColor, logColorMode);
   try {

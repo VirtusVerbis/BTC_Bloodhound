@@ -289,4 +289,13 @@ describe("runIndexerTick ordering", () => {
     expect(store.clearExpiredD1QuotaPause).toHaveBeenCalledOnce();
     expect(store.maybeRefreshHackStatsDaily).toHaveBeenCalledOnce();
   });
+
+  it("does not refresh daily hack stats on job-only ticks", async () => {
+    const store = tickStoreMock();
+    const router = {} as ChainRouter;
+
+    await runIndexerTick(store, router, baseConfig(), { schedule: false });
+
+    expect(store.maybeRefreshHackStatsDaily).not.toHaveBeenCalled();
+  });
 });

@@ -84,6 +84,22 @@ export const sourceSyncState = sqliteTable("source_sync_state", {
   lastContentHash: text("last_content_hash"),
 });
 
+export const hackStats = sqliteTable("hack_stats", {
+  hackId: text("hack_id").primaryKey(),
+  victimCount: integer("victim_count").notNull().default(0),
+  hackerCount: integer("hacker_count").notNull().default(0),
+  totalInSats: integer("total_in_sats").notNull().default(0),
+});
+
+export const hackVictims = sqliteTable(
+  "hack_victims",
+  {
+    hackId: text("hack_id").notNull(),
+    fromAddress: text("from_address").notNull(),
+  },
+  (table) => [uniqueIndex("hack_victims_pk").on(table.hackId, table.fromAddress)],
+);
+
 export const schedulerState = sqliteTable("scheduler_state", {
   id: integer("id").primaryKey().default(1),
   nextProviderCallAt: text("next_provider_call_at"),

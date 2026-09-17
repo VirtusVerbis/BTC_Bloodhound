@@ -9,6 +9,7 @@ import * as schema from "./schema.js";
 import {
   addresses,
   edges,
+  hackStats,
   jobs,
   rateLimits,
   schedulerState,
@@ -1101,6 +1102,33 @@ export class Store {
       for (const [toAddress, delta] of deltaByInbound) {
         await this.applyInboundSatsDelta(toAddress, delta);
       }
+
+      const newInToHacker = chunk.filter((row) => {
+        if (row.direction !== "in_to_hacker") return false;
+        const key = `${row.fromAddress}|${row.toAddress}|${row.txid}`;
+        return !oldEdgeByKey.has(key);
+      });
+      if (newInToHacker.length > 0) {
+        const hackerAddresses = [...new Set(newInToHacker.map((row) => row.toAddress))];
+        const hackers = await this.db
+          .select({
+            address: addresses.address,
+            hackId: addresses.hackId,
+            isFlaggedHacker: addresses.isFlaggedHacker,
+          })
+          .from(addresses)
+          .where(inArray(addresses.address, hackerAddresses))
+          .all();
+        const hackerByAddress = new Map(hackers.map((row) => [row.address, row]));
+        for (const row of newInToHacker) {
+          const hacker = hackerByAddress.get(row.toAddress);
+          if (!hacker?.isFlaggedHacker) continue;
+          const hackId = hacker.hackId ?? "coldcard";
+          if (await this.tryInsertHackVictim(hackId, row.fromAddress)) {
+            await this.adjustHackStatsCounter(hackId, "victimCount", 1);
+          }
+        }
+      }
     }
     await this.adjustEdgeTotalsCounters(totalInDelta, totalOutDelta);
   }
@@ -1133,6 +1161,7 @@ export class Store {
     if (deltaSats === 0) return;
     const before = await this.db
       .select({
+        hackId: addresses.hackId,
         isFlaggedHacker: addresses.isFlaggedHacker,
         totalReceivedSats: addresses.totalReceivedSats,
       })
@@ -1151,6 +1180,12 @@ export class Store {
     const isActive = before ? isHackerActive(before.isFlaggedHacker, afterTotal) : false;
     if (wasActive !== isActive) {
       await this.adjustSchedulerCounter("hackerActiveCount", isActive ? 1 : -1);
+      if (before?.isFlaggedHacker) {
+        await this.adjustHackStatsCounter(before.hackId ?? "coldcard", "hackerCount", isActive ? 1 : -1);
+      }
+    }
+    if (before?.isFlaggedHacker) {
+      await this.adjustHackStatsCounter(before.hackId ?? "coldcard", "totalInSats", deltaSats);
     }
   }
 
@@ -1167,16 +1202,37 @@ export class Store {
   }
 
   async recalcTotalReceived(hackerAddress: string) {
+    const before = await this.db
+      .select({
+        hackId: addresses.hackId,
+        isFlaggedHacker: addresses.isFlaggedHacker,
+        totalReceivedSats: addresses.totalReceivedSats,
+      })
+      .from(addresses)
+      .where(eq(addresses.address, hackerAddress))
+      .get();
     const row = await this.db
       .select({ total: sql<number>`coalesce(sum(${edges.amountSats}), 0)` })
       .from(edges)
       .where(and(eq(edges.toAddress, hackerAddress), eq(edges.direction, "in_to_hacker")))
       .get();
+    const nextTotal = row?.total ?? 0;
     await this.db
       .update(addresses)
-      .set({ totalReceivedSats: row?.total ?? 0 })
+      .set({ totalReceivedSats: nextTotal })
       .where(eq(addresses.address, hackerAddress))
       .run();
+    if (before?.isFlaggedHacker) {
+      const delta = nextTotal - (before.totalReceivedSats ?? 0);
+      if (delta !== 0) {
+        await this.adjustHackStatsCounter(before.hackId ?? "coldcard", "totalInSats", delta);
+      }
+      const wasActive = isHackerActive(before.isFlaggedHacker, before.totalReceivedSats);
+      const isActive = isHackerActive(before.isFlaggedHacker, nextTotal);
+      if (wasActive !== isActive) {
+        await this.adjustHackStatsCounter(before.hackId ?? "coldcard", "hackerCount", isActive ? 1 : -1);
+      }
+    }
   }
 
   async recalcInboundSatsFor(toAddresses: string[]): Promise<void> {
@@ -3105,7 +3161,13 @@ export class Store {
     const isHackerActiveNow = isHackerActive(after.isFlaggedHacker, after.totalReceivedSats);
     if (wasHackerActive !== isHackerActiveNow) {
       await this.adjustSchedulerCounter("hackerActiveCount", isHackerActiveNow ? 1 : -1);
+      const hackId = isHackerActiveNow ? after.hackId : before?.hackId ?? "coldcard";
+      if (isHackerActiveNow ? after.isFlaggedHacker : before?.isFlaggedHacker) {
+        await this.adjustHackStatsCounter(hackId ?? "coldcard", "hackerCount", isHackerActiveNow ? 1 : -1);
+      }
     }
+
+    await this.reconcileHackStatsForAddress(before, after);
 
     if (after.role === "downstream" && after.hopFromHacker != null) {
       const currentMax = state?.crawlMaxHopReached ?? 0;
@@ -3199,6 +3261,7 @@ export class Store {
 
   async reconcileStatsCounters(): Promise<void> {
     await this.reconcileCheapCounters();
+    await this.reconcileHackStats();
     const victims = await this.db
       .select({ count: sql<number>`count(*)` })
       .from(addresses)
@@ -4166,46 +4229,131 @@ export class Store {
   }
 
   async computeStatsCountsByHack(): Promise<HackStatsRow[]> {
-    const hackerRows = await this.db
-      .select({
-        hackId: addresses.hackId,
-        count: sql<number>`count(*)`,
-      })
-      .from(addresses)
-      .where(and(eq(addresses.isFlaggedHacker, true), gt(addresses.totalReceivedSats, 0)))
-      .groupBy(addresses.hackId)
-      .all();
-
-    const edgeRows = await this.db
-      .select({
-        hackId: addresses.hackId,
-        victimCount: sql<number>`count(distinct ${edges.fromAddress})`,
-        totalInSats: sql<number>`coalesce(sum(${edges.amountSats}), 0)`,
-      })
-      .from(edges)
-      .innerJoin(addresses, eq(edges.toAddress, addresses.address))
-      .where(and(EDGE_DIRECTION_IN_SQL, eq(addresses.isFlaggedHacker, true)))
-      .groupBy(addresses.hackId)
-      .all();
-
+    const rows = await this.db.select().from(hackStats).all();
     const byHack = new Map<string, HackStatsRow>();
     for (const hackId of HACK_STAT_IDS) {
       byHack.set(hackId, { id: hackId, victimCount: 0, hackerCount: 0, totalInSats: 0 });
     }
-    for (const row of hackerRows) {
+    for (const row of rows) {
       const id = row.hackId ?? "coldcard";
-      const entry = byHack.get(id) ?? { id, victimCount: 0, hackerCount: 0, totalInSats: 0 };
-      entry.hackerCount = row.count ?? 0;
-      byHack.set(id, entry);
-    }
-    for (const row of edgeRows) {
-      const id = row.hackId ?? "coldcard";
-      const entry = byHack.get(id) ?? { id, victimCount: 0, hackerCount: 0, totalInSats: 0 };
-      entry.victimCount = row.victimCount ?? 0;
-      entry.totalInSats = row.totalInSats ?? 0;
-      byHack.set(id, entry);
+      byHack.set(id, {
+        id,
+        victimCount: row.victimCount ?? 0,
+        hackerCount: row.hackerCount ?? 0,
+        totalInSats: row.totalInSats ?? 0,
+      });
     }
     return HACK_STAT_IDS.map((id) => byHack.get(id)!);
+  }
+
+  async reconcileHackStats(): Promise<void> {
+    await this.db.run(sql`DELETE FROM hack_victims`);
+    await this.db.run(sql`
+      INSERT INTO hack_victims (hack_id, from_address)
+      SELECT DISTINCT a.hack_id, e.from_address
+      FROM edges e
+      INNER JOIN addresses a ON e.to_address = a.address
+      WHERE e.direction = 'in_to_hacker' AND a.is_flagged_hacker = 1
+    `);
+    for (const hackId of HACK_STAT_IDS) {
+      await this.ensureHackStatsRow(hackId);
+    }
+    await this.db.run(sql`
+      UPDATE hack_stats SET
+        victim_count = (
+          SELECT COUNT(*) FROM hack_victims hv WHERE hv.hack_id = hack_stats.hack_id
+        ),
+        hacker_count = (
+          SELECT COUNT(*) FROM addresses a
+          WHERE a.hack_id = hack_stats.hack_id
+            AND a.is_flagged_hacker = 1
+            AND a.total_received_sats > 0
+        ),
+        total_in_sats = (
+          SELECT COALESCE(SUM(a.total_received_sats), 0) FROM addresses a
+          WHERE a.hack_id = hack_stats.hack_id AND a.is_flagged_hacker = 1
+        )
+    `);
+  }
+
+  private async ensureHackStatsRow(hackId: string): Promise<void> {
+    await this.db.run(sql`
+      INSERT INTO hack_stats (hack_id) VALUES (${hackId})
+      ON CONFLICT(hack_id) DO NOTHING
+    `);
+  }
+
+  private async adjustHackStatsCounter(
+    hackId: string,
+    field: "victimCount" | "hackerCount" | "totalInSats",
+    delta: number,
+  ): Promise<void> {
+    if (delta === 0) return;
+    await this.ensureHackStatsRow(hackId);
+    switch (field) {
+      case "victimCount":
+        await this.db.run(sql`
+          UPDATE hack_stats SET victim_count = MAX(0, victim_count + ${delta}) WHERE hack_id = ${hackId}
+        `);
+        break;
+      case "hackerCount":
+        await this.db.run(sql`
+          UPDATE hack_stats SET hacker_count = MAX(0, hacker_count + ${delta}) WHERE hack_id = ${hackId}
+        `);
+        break;
+      case "totalInSats":
+        await this.db.run(sql`
+          UPDATE hack_stats SET total_in_sats = MAX(0, total_in_sats + ${delta}) WHERE hack_id = ${hackId}
+        `);
+        break;
+    }
+  }
+
+  private async tryInsertHackVictim(hackId: string, fromAddress: string): Promise<boolean> {
+    const result = await this.db.run(sql`
+      INSERT INTO hack_victims (hack_id, from_address) VALUES (${hackId}, ${fromAddress})
+      ON CONFLICT(hack_id, from_address) DO NOTHING
+    `);
+    return changesCount(result as { changes?: number; meta?: { changes?: number } }) > 0;
+  }
+
+  private async reconcileHackStatsForAddress(
+    before: Address | undefined,
+    after: Address,
+  ): Promise<void> {
+    const flagChanged = (before?.isFlaggedHacker ?? false) !== after.isFlaggedHacker;
+    const hackIdChanged = (before?.hackId ?? "coldcard") !== after.hackId;
+    if (!flagChanged && !hackIdChanged) return;
+
+    if (before?.isFlaggedHacker) {
+      const hackId = before.hackId ?? "coldcard";
+      await this.adjustHackStatsCounter(hackId, "totalInSats", -(before.totalReceivedSats ?? 0));
+      if (isHackerActive(before.isFlaggedHacker, before.totalReceivedSats) && hackIdChanged && !flagChanged) {
+        await this.adjustHackStatsCounter(hackId, "hackerCount", -1);
+      }
+    }
+
+    if (after.isFlaggedHacker) {
+      const hackId = after.hackId ?? "coldcard";
+      await this.adjustHackStatsCounter(hackId, "totalInSats", after.totalReceivedSats ?? 0);
+      if (isHackerActive(after.isFlaggedHacker, after.totalReceivedSats) && hackIdChanged && !flagChanged) {
+        await this.adjustHackStatsCounter(hackId, "hackerCount", 1);
+      }
+    }
+  }
+
+  private async tryClaimHackStatsDay(today: string): Promise<boolean> {
+    const result = await this.db.run(sql`
+      UPDATE scheduler_state
+      SET hack_stats_day_utc = ${today}
+      WHERE id = 1
+        AND (hack_stats_day_utc IS NULL OR hack_stats_day_utc != ${today})
+    `);
+    return changesCount(result as { changes?: number; meta?: { changes?: number } }) > 0;
+  }
+
+  private async rollbackHackStatsDayClaim(previousDay: string | null): Promise<void> {
+    await this.updateSchedulerState({ hackStatsDayUtc: previousDay });
   }
 
   async maybeRefreshHackStatsDaily(now = new Date()): Promise<boolean> {
@@ -4213,12 +4361,21 @@ export class Store {
       const today = todayUtcDate(now);
       const state = await this.getSchedulerState();
       if (state?.hackStatsDayUtc === today) return false;
-      const hacks = await this.computeStatsCountsByHack();
-      await this.updateSchedulerState({
-        hackStatsJson: serializeHackStatsRows(hacks),
-        hackStatsDayUtc: today,
-      });
-      return true;
+
+      const previousDay = state?.hackStatsDayUtc ?? null;
+      const claimed = await this.tryClaimHackStatsDay(today);
+      if (!claimed) return false;
+
+      try {
+        const hacks = await this.computeStatsCountsByHack();
+        await this.updateSchedulerState({
+          hackStatsJson: serializeHackStatsRows(hacks),
+        });
+        return true;
+      } catch (err) {
+        await this.rollbackHackStatsDayClaim(previousDay);
+        throw err;
+      }
     } catch (err) {
       console.error("maybeRefreshHackStatsDaily failed", err);
       return false;

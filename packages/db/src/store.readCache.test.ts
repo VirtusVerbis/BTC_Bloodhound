@@ -210,7 +210,6 @@ describe("read cache", () => {
       role: "hacker",
       isFlaggedHacker: true,
       hackId: "coldcard",
-      totalReceivedSats: 1000,
     });
     await store.upsertEdgesBatch([
       {

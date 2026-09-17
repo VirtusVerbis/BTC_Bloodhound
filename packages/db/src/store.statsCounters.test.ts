@@ -90,7 +90,6 @@ describe("scheduler stats counters", () => {
       role: "hacker",
       isFlaggedHacker: true,
       hackId: "coldcard",
-      totalReceivedSats: 1000,
     });
     await store.upsertAddress({
       address: "bc1qliquidhacker",
@@ -98,7 +97,6 @@ describe("scheduler stats counters", () => {
       isFlaggedHacker: true,
       hackId: "liquid",
       source: "x",
-      totalReceivedSats: 2000,
     });
     await store.upsertEdgesBatch([
       {
@@ -131,7 +129,6 @@ describe("scheduler stats counters", () => {
       role: "hacker",
       isFlaggedHacker: true,
       hackId: "coldcard",
-      totalReceivedSats: 1000,
     });
     await store.upsertEdgesBatch([
       {
@@ -179,6 +176,98 @@ describe("scheduler stats counters", () => {
     expect(stats.hacks).toEqual([
       { id: "coldcard", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Coldcard" },
       { id: "liquid", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Liquid" },
+    ]);
+  });
+
+  it("increments hack_stats victimCount once for repeat victim edges", async () => {
+    const { store } = await openStore();
+    await store.upsertAddress({
+      address: "bc1qhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+      hackId: "coldcard",
+    });
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "bc1qvictim",
+        toAddress: "bc1qhacker",
+        txid: "tx1",
+        amountSats: 1000,
+        direction: "in_to_hacker",
+      },
+      {
+        fromAddress: "bc1qvictim",
+        toAddress: "bc1qhacker",
+        txid: "tx2",
+        amountSats: 500,
+        direction: "in_to_hacker",
+      },
+    ]);
+
+    const byHack = await store.computeStatsCountsByHack();
+    expect(byHack.find((h) => h.id === "coldcard")).toEqual({
+      id: "coldcard",
+      hackerCount: 1,
+      victimCount: 1,
+      totalInSats: 1500,
+    });
+  });
+
+  it("counts flagged hacker with zero total in totalInSats but not hackerCount", async () => {
+    const { store } = await openStore();
+    await store.upsertAddress({
+      address: "bc1qzerohacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+      hackId: "coldcard",
+    });
+    await store.upsertAddress({
+      address: "bc1qactivehacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+      hackId: "coldcard",
+    });
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "bc1qvictim",
+        toAddress: "bc1qactivehacker",
+        txid: "tx1",
+        amountSats: 1000,
+        direction: "in_to_hacker",
+      },
+    ]);
+
+    const byHack = await store.computeStatsCountsByHack();
+    expect(byHack.find((h) => h.id === "coldcard")).toEqual({
+      id: "coldcard",
+      hackerCount: 1,
+      victimCount: 1,
+      totalInSats: 1000,
+    });
+  });
+
+  it("reconcileHackStats repairs hack_stats drift", async () => {
+    const { sqlite, store } = await openStore();
+    await store.upsertAddress({
+      address: "bc1qhacker",
+      role: "hacker",
+      isFlaggedHacker: true,
+      hackId: "coldcard",
+    });
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "bc1qvictim",
+        toAddress: "bc1qhacker",
+        txid: "tx1",
+        amountSats: 1000,
+        direction: "in_to_hacker",
+      },
+    ]);
+    sqlite.prepare("UPDATE hack_stats SET victim_count = 0, total_in_sats = 0 WHERE hack_id = 'coldcard'").run();
+    await store.reconcileHackStats();
+    expect(await store.computeStatsCountsByHack()).toEqual([
+      { id: "coldcard", victimCount: 1, hackerCount: 1, totalInSats: 1000 },
+      { id: "liquid", victimCount: 0, hackerCount: 0, totalInSats: 0 },
     ]);
   });
 
