@@ -159,6 +159,7 @@ export const schedulerState = sqliteTable("scheduler_state", {
   downstreamPollDueAt: text("downstream_poll_due_at"),
   downstreamPollMaxDepth: integer("downstream_poll_max_depth").notNull().default(0),
   downstreamPollIntervalSec: integer("downstream_poll_interval_sec").notNull().default(0),
+  downstreamPollMinExpandSats: integer("downstream_poll_min_expand_sats").notNull().default(0),
   totalInSats: integer("total_in_sats").notNull().default(0),
   totalOutSats: integer("total_out_sats").notNull().default(0),
   victimCount: integer("victim_count").notNull().default(0),

@@ -108,6 +108,7 @@ describe("RemoteReadStore.getDownstreamMonitorStatsCached", () => {
             downstream_poll_due_at: new Date().toISOString(),
             downstream_poll_max_depth: 5,
             downstream_poll_interval_sec: 600,
+            downstream_poll_min_expand_sats: 0,
             monitor_snapshot_dirty: 0,
           },
         ];

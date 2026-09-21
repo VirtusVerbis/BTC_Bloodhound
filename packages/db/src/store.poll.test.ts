@@ -320,6 +320,56 @@ describe("listDownstreamForPoll", () => {
     const state = await store.getSchedulerState();
     expect(state?.monitorSnapshotDirty).toBe(0);
   });
+
+  it("getDownstreamMonitorStatsCached recomputes when minExpandSats cache param mismatches", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.upsertAddress({
+      address: "small",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "expanded",
+    });
+    sqlite.prepare("UPDATE addresses SET inbound_sats = 50000 WHERE address = 'small'").run();
+    await store.reconcileDownstreamTreeCount(5);
+    await store.getDownstreamMonitorStatsCached(5, 600, { minExpandSats: 0 });
+    expect((await store.getDownstreamMonitorStatsCached(5, 600, { minExpandSats: 0 })).downstreamPollDueCount).toBe(
+      1,
+    );
+
+    const withFloor = await store.getDownstreamMonitorStatsCached(5, 600, { minExpandSats: 100_000 });
+    expect(withFloor.downstreamPollDueCount).toBe(0);
+    expect((await store.getSchedulerState())?.downstreamPollMinExpandSats).toBe(100_000);
+  });
+
+  it("addInboundSats crossing minExpandSats marks monitor snapshot dirty", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.ensurePollDueCacheParams(5, 600, 100_000);
+    await store.upsertAddress({
+      address: "bc1qdown",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "expanded",
+    });
+    sqlite.prepare("UPDATE addresses SET inbound_sats = 90000 WHERE address = 'bc1qdown'").run();
+    await store.reconcileDownstreamTreeCount(5);
+    await store.getDownstreamMonitorStatsCached(5, 600, { minExpandSats: 100_000, forceRefresh: true });
+    expect((await store.getDownstreamMonitorStatsCached(5, 600, { minExpandSats: 100_000 })).downstreamPollDueCount).toBe(
+      0,
+    );
+
+    await store.addInboundSats("bc1qdown", 20_000);
+
+    expect((await store.getSchedulerState())?.monitorSnapshotDirty).toBe(1);
+    expect(
+      (await store.getDownstreamMonitorStatsCached(5, 600, { minExpandSats: 100_000 })).downstreamPollDueCount,
+    ).toBe(1);
+  });
 });
 
 describe("lastObservedTxCount", () => {

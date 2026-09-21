@@ -53,6 +53,7 @@ import {
 } from "./readCache.js";
 import {
   clampPollDueCount,
+  isDownstreamPollEligibleAddress,
   listDownstreamNeverPolledSql,
   listDownstreamStalePolledSql,
   pollDueCountSql,
@@ -161,18 +162,9 @@ function isDownstreamTreeNode(role: string, hop: number | null | undefined, maxD
   return role === "downstream" && hop != null && hop < maxDepth;
 }
 
-function isDownstreamPollEligible(
-  role: string,
-  expandStatus: string,
-  hop: number | null | undefined,
-  maxDepth: number,
-): boolean {
-  return (
-    role === "downstream" &&
-    (expandStatus === "expanded" || expandStatus === "pending") &&
-    hop != null &&
-    hop < maxDepth
-  );
+function crossedMinExpandThreshold(before: number, after: number, floor: number): boolean {
+  if (floor <= 0) return false;
+  return (before >= floor) !== (after >= floor);
 }
 
 function isD1QuotaBlockedFromState(
@@ -1135,6 +1127,13 @@ export class Store {
 
   private async applyInboundSatsDelta(toAddress: string, deltaSats: number): Promise<void> {
     if (deltaSats === 0) return;
+    const existing = await this.getAddress(toAddress);
+    const state = await this.getSchedulerState();
+    const maxDepth = state?.downstreamTreeMaxDepth ?? 0;
+    const floor = state?.downstreamPollMinExpandSats ?? 0;
+    const beforeInbound = existing?.inboundSats ?? 0;
+    const afterInbound = beforeInbound + deltaSats;
+
     await this.db
       .update(addresses)
       .set({
@@ -1142,6 +1141,22 @@ export class Store {
       })
       .where(eq(addresses.address, toAddress))
       .run();
+
+    if (
+      existing &&
+      maxDepth > 0 &&
+      crossedMinExpandThreshold(beforeInbound, afterInbound, floor) &&
+      isDownstreamPollEligibleAddress(
+        existing.role,
+        existing.expandStatus,
+        existing.hopFromHacker,
+        maxDepth,
+        beforeInbound,
+        0,
+      )
+    ) {
+      await this.markMonitorSnapshotDirty();
+    }
   }
 
   async addInboundSats(toAddress: string, deltaSats: number): Promise<void> {
@@ -3041,11 +3056,26 @@ export class Store {
     if (maxDepth <= 0) return;
 
     const minIntervalSec = state?.downstreamPollIntervalSec ?? 0;
+    const minExpandSats = state?.downstreamPollMinExpandSats ?? 0;
     const wasPoll = before
-      ? isDownstreamPollEligible(before.role, before.expandStatus, before.hopFromHacker, maxDepth)
+      ? isDownstreamPollEligibleAddress(
+          before.role,
+          before.expandStatus,
+          before.hopFromHacker,
+          maxDepth,
+          before.inboundSats ?? 0,
+          minExpandSats,
+        )
       : false;
     const isPoll = after
-      ? isDownstreamPollEligible(after.role, after.expandStatus, after.hopFromHacker, maxDepth)
+      ? isDownstreamPollEligibleAddress(
+          after.role,
+          after.expandStatus,
+          after.hopFromHacker,
+          maxDepth,
+          after.inboundSats ?? 0,
+          minExpandSats,
+        )
       : false;
 
     if (wasPoll === isPoll || minIntervalSec <= 0) return;
@@ -3053,6 +3083,7 @@ export class Store {
     const pollAdjusted = await this.adjustPollDueCountDelta(isPoll ? 1 : -1, {
       maxDepth,
       minIntervalSec,
+      minExpandSats,
     });
     if (!pollAdjusted) {
       await this.markMonitorSnapshotDirty();
@@ -3061,7 +3092,7 @@ export class Store {
 
   private async adjustPollDueCountDelta(
     delta: number,
-    params: { maxDepth: number; minIntervalSec: number },
+    params: { maxDepth: number; minIntervalSec: number; minExpandSats: number },
   ): Promise<boolean> {
     if (delta === 0) return true;
     const state = await this.getSchedulerState();
@@ -3069,6 +3100,7 @@ export class Store {
     const cacheFresh =
       state?.downstreamPollMaxDepth === params.maxDepth &&
       state?.downstreamPollIntervalSec === params.minIntervalSec &&
+      state?.downstreamPollMinExpandSats === params.minExpandSats &&
       isCacheFresh(state?.downstreamPollDueAt, ttlSec) &&
       (state?.monitorSnapshotDirty ?? 0) === 0;
     if (!cacheFresh) return false;
@@ -3201,6 +3233,31 @@ export class Store {
     if (state?.downstreamTreeMaxDepth !== maxDepth) {
       await this.reconcileDownstreamTreeCount(maxDepth);
     }
+  }
+
+  async ensurePollDueCacheParams(
+    maxDepth: number,
+    minIntervalSec: number,
+    minExpandSats: number,
+  ): Promise<void> {
+    const state = await this.getSchedulerState();
+    const depth = Math.floor(maxDepth);
+    const intervalSec = Math.floor(minIntervalSec);
+    const floor = Math.max(0, Math.floor(minExpandSats));
+    if (
+      (state?.downstreamPollMaxDepth ?? 0) === depth &&
+      (state?.downstreamPollIntervalSec ?? 0) === intervalSec &&
+      (state?.downstreamPollMinExpandSats ?? 0) === floor
+    ) {
+      return;
+    }
+
+    await this.updateSchedulerState({
+      downstreamPollMaxDepth: depth,
+      downstreamPollIntervalSec: intervalSec,
+      downstreamPollMinExpandSats: floor,
+    });
+    await this.markMonitorSnapshotDirty();
   }
 
   async reconcileDownstreamTreeCount(maxDepth: number): Promise<number> {
@@ -3357,6 +3414,7 @@ export class Store {
     downstreamPollDueAt?: string | null;
     downstreamPollMaxDepth?: number;
     downstreamPollIntervalSec?: number;
+    downstreamPollMinExpandSats?: number;
     totalInSats?: number;
     totalOutSats?: number;
     victimCount?: number;
@@ -3683,12 +3741,20 @@ export class Store {
     const state = await this.getSchedulerState();
     const maxDepth = state?.downstreamTreeMaxDepth ?? 0;
     const minIntervalSec = state?.downstreamPollIntervalSec ?? 0;
+    const minExpandSats = state?.downstreamPollMinExpandSats ?? 0;
 
     let wasDue = false;
     if (addr && maxDepth > 0 && minIntervalSec > 0) {
       const cutoff = new Date(Date.now() - minIntervalSec * 1000).toISOString();
       wasDue =
-        isDownstreamPollEligible(addr.role, addr.expandStatus, addr.hopFromHacker, maxDepth) &&
+        isDownstreamPollEligibleAddress(
+          addr.role,
+          addr.expandStatus,
+          addr.hopFromHacker,
+          maxDepth,
+          addr.inboundSats ?? 0,
+          minExpandSats,
+        ) &&
         (!existing?.lastPolledAt || existing.lastPolledAt <= cutoff);
     }
 
@@ -3724,7 +3790,11 @@ export class Store {
     }
 
     if (wasDue) {
-      const adjusted = await this.adjustPollDueCountDelta(-1, { maxDepth, minIntervalSec });
+      const adjusted = await this.adjustPollDueCountDelta(-1, {
+        maxDepth,
+        minIntervalSec,
+        minExpandSats,
+      });
       if (!adjusted) await this.markMonitorSnapshotDirty();
     }
   }
@@ -4577,9 +4647,11 @@ LIMIT ${remaining}
     const treeNodeCount = await this.countDownstreamTreeNodes(maxDepth);
     const state = await this.getSchedulerState();
     const ttlSec = pollDueCacheTtlSec(minIntervalSec);
+    const minExpandSats = Math.max(0, Math.floor(opts?.minExpandSats ?? 0));
     const paramsMatch =
       state?.downstreamPollMaxDepth === maxDepth &&
-      state?.downstreamPollIntervalSec === minIntervalSec;
+      state?.downstreamPollIntervalSec === minIntervalSec &&
+      state?.downstreamPollMinExpandSats === minExpandSats;
     const cacheFresh =
       paramsMatch &&
       isCacheFresh(state?.downstreamPollDueAt, ttlSec) &&
@@ -4596,7 +4668,7 @@ LIMIT ${remaining}
     const downstreamPollDueCount = await this.countDownstreamPollDue(
       maxDepth,
       minIntervalSec,
-      opts?.minExpandSats ?? 0,
+      minExpandSats,
     );
     const at = now();
     await this.updateSchedulerState({
@@ -4604,6 +4676,7 @@ LIMIT ${remaining}
       downstreamPollDueAt: at,
       downstreamPollMaxDepth: maxDepth,
       downstreamPollIntervalSec: minIntervalSec,
+      downstreamPollMinExpandSats: minExpandSats,
       monitorSnapshotDirty: 0,
     });
     return { treeNodeCount, downstreamPollDueCount };

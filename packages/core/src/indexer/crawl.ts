@@ -326,6 +326,15 @@ export async function scheduleDownstreamCrawl(
       console.error("ensureDownstreamTreeDepth failed", err);
     });
     await store
+      .ensurePollDueCacheParams(
+        config.maxCrawlDepth,
+        config.downstreamPollIntervalSec,
+        config.minExpandSats,
+      )
+      .catch((err: unknown) => {
+        console.error("ensurePollDueCacheParams failed", err);
+      });
+    await store
       .maybeRefreshSyncSnapshot({
         maxCrawlDepth: config.maxCrawlDepth,
         downstreamPollIntervalSec: config.downstreamPollIntervalSec,

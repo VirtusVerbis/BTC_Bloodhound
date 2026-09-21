@@ -228,13 +228,15 @@ export class RemoteReadStore {
   async countDownstreamPollDue(maxDepth: number, minIntervalSec: number, minExpandSats = 0) {
     const depth = Math.floor(maxDepth);
     const intervalSec = Math.floor(minIntervalSec);
+    const floor = Math.max(0, Math.floor(minExpandSats));
     const state = this.client.query(
-      `SELECT downstream_poll_due_count, downstream_poll_due_at, downstream_poll_max_depth, downstream_poll_interval_sec, monitor_snapshot_dirty FROM scheduler_state WHERE id = 1 LIMIT 1;`,
+      `SELECT downstream_poll_due_count, downstream_poll_due_at, downstream_poll_max_depth, downstream_poll_interval_sec, downstream_poll_min_expand_sats, monitor_snapshot_dirty FROM scheduler_state WHERE id = 1 LIMIT 1;`,
     )[0];
     const ttlSec = pollDueCacheTtlSec(intervalSec);
     const paramsMatch =
       num(state?.downstream_poll_max_depth) === depth &&
-      num(state?.downstream_poll_interval_sec) === intervalSec;
+      num(state?.downstream_poll_interval_sec) === intervalSec &&
+      num(state?.downstream_poll_min_expand_sats) === floor;
     const cacheFresh =
       paramsMatch &&
       isCacheFresh(state?.downstream_poll_due_at != null ? str(state.downstream_poll_due_at) : null, ttlSec) &&
@@ -244,13 +246,18 @@ export class RemoteReadStore {
     }
 
     const cutoffIso = new Date(Date.now() - intervalSec * 1000).toISOString();
-    const row = this.client.query(`${pollDueCountSql(depth, cutoffIso, minExpandSats)};`)[0];
+    const row = this.client.query(`${pollDueCountSql(depth, cutoffIso, floor)};`)[0];
     const count = clampPollDueCount(num(row?.count));
-    this.persistPollDueCache(count, depth, intervalSec);
+    this.persistPollDueCache(count, depth, intervalSec, floor);
     return count;
   }
 
-  private persistPollDueCache(count: number, maxDepth: number, minIntervalSec: number): void {
+  private persistPollDueCache(
+    count: number,
+    maxDepth: number,
+    minIntervalSec: number,
+    minExpandSats: number,
+  ): void {
     const at = sqlString(new Date().toISOString());
     this.client.execute(`
 UPDATE scheduler_state SET
@@ -258,6 +265,7 @@ UPDATE scheduler_state SET
   downstream_poll_due_at = ${at},
   downstream_poll_max_depth = ${maxDepth},
   downstream_poll_interval_sec = ${minIntervalSec},
+  downstream_poll_min_expand_sats = ${minExpandSats},
   monitor_snapshot_dirty = 0
 WHERE id = 1;
 `);
