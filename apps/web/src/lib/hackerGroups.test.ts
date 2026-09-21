@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  filterHackers,
   flattenHackersForNav,
   groupHackersForDropdown,
   isHackerRecent,
@@ -41,6 +42,27 @@ const recentHackers: RecentHackerEntry[] = [
     downstream: 1,
   },
 ];
+
+describe("filterHackers", () => {
+  it("returns all hackers for empty or whitespace query", () => {
+    expect(filterHackers(hackers, "")).toEqual(hackers);
+    expect(filterHackers(hackers, "   ")).toEqual(hackers);
+  });
+
+  it("matches address substring case-insensitively", () => {
+    expect(filterHackers(hackers, "BC1QH1").map((h) => h.address)).toEqual(["bc1qh1"]);
+    expect(filterHackers(hackers, "ql1").map((h) => h.address)).toEqual(["bc1ql1"]);
+  });
+
+  it("matches label substring case-insensitively", () => {
+    expect(filterHackers(hackers, "liquid").map((h) => h.address)).toEqual(["bc1ql1"]);
+    expect(filterHackers(hackers, "HACKER 2").map((h) => h.address)).toEqual(["bc1qh2"]);
+  });
+
+  it("returns empty array when nothing matches", () => {
+    expect(filterHackers(hackers, "zzznomatch")).toEqual([]);
+  });
+});
 
 describe("hackerGroups recent cache", () => {
   it("flags recent hackers from global cache", () => {

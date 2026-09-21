@@ -34,6 +34,7 @@ import {
   MIN_SATS_INPUT_MAX_LENGTH,
 } from "./lib/graphInputLimits";
 import {
+  filterHackers,
   flattenHackersForNav,
   groupHackersForDropdown,
   formatHackerOptionLabel,
@@ -179,21 +180,14 @@ export default function App() {
     }
   }, []);
 
-  const loadHackers = useCallback(async (q?: string) => {
+  const loadHackers = useCallback(async () => {
     setHackersLoading(true);
     try {
-      const params = q ? `?q=${encodeURIComponent(q)}` : "";
       const res = await api<{ hackers: Hacker[]; recentHackers: RecentHackerEntry[] }>(
-        `/api/hackers${params}`,
+        "/api/hackers",
       );
       setRecentHackers(res.recentHackers ?? []);
       setHackers(res.hackers);
-      const visible = flattenHackersForNav(
-        groupHackersForDropdown(res.hackers, res.recentHackers ?? []),
-      );
-      if (!selected || !visible.some((h) => h.address === selected)) {
-        setSelected(visible[0]?.address ?? "");
-      }
     } catch (e) {
       const isD1Quota = e instanceof ApiError && e.code === "d1_quota_exceeded";
       if (!isD1Quota) {
@@ -204,16 +198,21 @@ export default function App() {
     } finally {
       setHackersLoading(false);
     }
-  }, [selected]);
+  }, []);
 
   const recentHackerAddresses = useMemo(
     () => new Set(recentHackers.map((entry) => entry.address)),
     [recentHackers],
   );
 
+  const filteredHackers = useMemo(
+    () => filterHackers(hackers, filter),
+    [hackers, filter],
+  );
+
   const hackerDropdownSections = useMemo(
-    () => groupHackersForDropdown(hackers, recentHackers),
-    [hackers, recentHackers],
+    () => groupHackersForDropdown(filteredHackers, recentHackers),
+    [filteredHackers, recentHackers],
   );
   const sortedHackers = useMemo(
     () => flattenHackersForNav(hackerDropdownSections),
@@ -221,16 +220,23 @@ export default function App() {
   );
 
   useEffect(() => {
-    loadHackers(filter).catch(console.error);
-  }, [filter, loadHackers]);
+    loadHackers().catch(console.error);
+  }, [loadHackers]);
 
   useEffect(() => {
     const pollMs = Math.max(MIN_HACKERS_POLL_MS, hackersPollMs);
     const iv = setInterval(() => {
-      loadHackers(filter).catch(console.error);
+      loadHackers().catch(console.error);
     }, pollMs);
     return () => clearInterval(iv);
-  }, [filter, loadHackers, hackersPollMs]);
+  }, [loadHackers, hackersPollMs]);
+
+  useEffect(() => {
+    if (!sortedHackers.length) return;
+    if (!selected || !sortedHackers.some((h) => h.address === selected)) {
+      setSelected(sortedHackers[0]?.address ?? "");
+    }
+  }, [sortedHackers, selected]);
 
   useEffect(() => {
     api<AppConfig>("/api/config")

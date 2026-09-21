@@ -68,6 +68,17 @@ export function isHackerRecent(address: string, recentAddresses: ReadonlySet<str
   return recentAddresses.has(address);
 }
 
+/** Client-side filter mirroring server filterFlaggedHackersCache q matching. */
+export function filterHackers(hackers: Hacker[], q: string): Hacker[] {
+  const needle = q.trim().toLowerCase();
+  if (!needle) return hackers;
+  return hackers.filter((h) => {
+    if (h.address.toLowerCase().includes(needle)) return true;
+    if (h.label != null && h.label.toLowerCase().includes(needle)) return true;
+    return false;
+  });
+}
+
 function activitySuffix(hacker: Hacker): string {
   const victims = hacker.recentVictimCount ?? 0;
   const downstream = hacker.recentDownstreamCount ?? 0;
