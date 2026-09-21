@@ -15,6 +15,13 @@ import type { AppConfig, ListQueueOptions, ListQueueResult } from "@cointrace/co
 import { listQueue } from "@cointrace/core";
 import { asReadOnlyStore } from "./remoteReadStore.js";
 
+/**
+ * Wrangler CLI D1 access (`wrangler d1 execute`) for admin/ops commands.
+ * Not reflected in scheduler_state quota counters — production metering uses
+ * createD1Store + D1RowMeter (Cloudflare Worker and sidecar proxy only).
+ * Manual CLI usage is expected to be low-volume.
+ */
+
 export interface D1WranglerClientOptions {
   remote: boolean;
   databaseName?: string;

@@ -130,8 +130,6 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
   });
 
-  app.get("/api/health", (c) => c.json({ ok: true }));
-
   app.use("/api/*", async (c, next) => {
     d1RowMeter?.rolloverIfNeeded();
     const meterStart = d1RowMeter
@@ -142,16 +140,20 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
     } finally {
       if (d1RowMeter && meterStart) {
         const snap = d1RowMeter.snapshot();
-        void store
-          .flushQuotaUsage("api", {
+        try {
+          await store.flushQuotaUsage("api", {
             reads: snap.rowsRead - meterStart.rowsRead,
             writes: snap.rowsWritten - meterStart.rowsWritten,
             requests: 1,
-          })
-          .catch(console.error);
+          });
+        } catch (err) {
+          console.error(err);
+        }
       }
     }
   });
+
+  app.get("/api/health", (c) => c.json({ ok: true }));
 
   app.use("/api/*", async (c, next) => {
     if (c.req.method !== "GET") return next();

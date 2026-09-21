@@ -262,6 +262,12 @@ export function runMigrations(sqlite: Database.Database): void {
   if (!schedulerCols.some((c) => c.name === "workers_requests_cron")) {
     sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN workers_requests_cron INTEGER NOT NULL DEFAULT 0`);
   }
+  if (!schedulerCols.some((c) => c.name === "d1_rows_read_overhead")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN d1_rows_read_overhead INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!schedulerCols.some((c) => c.name === "d1_rows_written_overhead")) {
+    sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN d1_rows_written_overhead INTEGER NOT NULL DEFAULT 0`);
+  }
   if (!schedulerCols.some((c) => c.name === "flagged_hackers_cache_json")) {
     sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN flagged_hackers_cache_json TEXT`);
   }

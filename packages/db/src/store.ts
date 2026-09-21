@@ -565,6 +565,7 @@ export class Store {
   private maxPendingAuditGlobal: number;
   private d1BatchSize: number;
   private d1?: D1Binding;
+  private d1RowMeter?: D1RowMeter;
   private subrequestBudget?: StoreOptions["subrequestBudget"];
   private recentHackerActivityBuffer?: Map<string, RecentHackerActivityDelta>;
 
@@ -581,6 +582,7 @@ export class Store {
     this.maxPendingAuditGlobal = options?.maxPendingAuditGlobal ?? 1;
     this.d1BatchSize = options?.d1BatchSize ?? 8;
     this.d1 = options?.d1;
+    this.d1RowMeter = options?.d1RowMeter;
     this.subrequestBudget = options?.subrequestBudget;
   }
 
@@ -3392,6 +3394,8 @@ export class Store {
     d1RowsReadCron?: number;
     d1RowsWrittenCron?: number;
     workersRequestsCron?: number;
+    d1RowsReadOverhead?: number;
+    d1RowsWrittenOverhead?: number;
     flaggedHackersCacheJson?: string | null;
     flaggedHackersCacheAt?: string | null;
     syncSnapshotJson?: string | null;
@@ -3554,6 +3558,8 @@ export class Store {
         d1RowsReadCron: 0,
         d1RowsWrittenCron: 0,
         workersRequestsCron: 0,
+        d1RowsReadOverhead: 0,
+        d1RowsWrittenOverhead: 0,
       });
       return {
         quotaDayUtc: today,
@@ -3576,6 +3582,21 @@ export class Store {
     };
   }
 
+  private async applyOverheadToSchedulerState(reads: number, writes: number): Promise<void> {
+    const overheadReads = Math.max(0, Math.floor(reads));
+    const overheadWrites = Math.max(0, Math.floor(writes));
+    if (overheadReads === 0 && overheadWrites === 0) return;
+    await this.db.run(sql`
+      UPDATE scheduler_state
+      SET
+        d1_rows_read_total = d1_rows_read_total + ${overheadReads},
+        d1_rows_written_total = d1_rows_written_total + ${overheadWrites},
+        d1_rows_read_overhead = d1_rows_read_overhead + ${overheadReads},
+        d1_rows_written_overhead = d1_rows_written_overhead + ${overheadWrites}
+      WHERE id = 1
+    `);
+  }
+
   async flushQuotaUsage(
     source: "cron" | "api",
     delta: { reads: number; writes: number; requests: number },
@@ -3585,29 +3606,54 @@ export class Store {
     const requests = Math.max(0, Math.floor(delta.requests));
     if (reads === 0 && writes === 0 && requests === 0) return;
 
-    await this.getQuotaSnapshot();
-    if (source === "cron") {
-      await this.db.run(sql`
-        UPDATE scheduler_state
-        SET
-          d1_rows_read_total = d1_rows_read_total + ${reads},
-          d1_rows_written_total = d1_rows_written_total + ${writes},
-          workers_requests_total = workers_requests_total + ${requests},
-          d1_rows_read_cron = d1_rows_read_cron + ${reads},
-          d1_rows_written_cron = d1_rows_written_cron + ${writes},
-          workers_requests_cron = workers_requests_cron + ${requests}
-        WHERE id = 1
-      `);
-      return;
+    const meter = this.d1RowMeter;
+    let tailOverhead = { reads: 0, writes: 0 };
+    meter?.suppress();
+    try {
+      await this.getQuotaSnapshot();
+      const oh1 = meter?.drainOverhead() ?? { reads: 0, writes: 0 };
+      const totalReads = reads + oh1.reads;
+      const totalWrites = writes + oh1.writes;
+
+      if (source === "cron") {
+        await this.db.run(sql`
+          UPDATE scheduler_state
+          SET
+            d1_rows_read_total = d1_rows_read_total + ${totalReads},
+            d1_rows_written_total = d1_rows_written_total + ${totalWrites},
+            workers_requests_total = workers_requests_total + ${requests},
+            d1_rows_read_cron = d1_rows_read_cron + ${reads},
+            d1_rows_written_cron = d1_rows_written_cron + ${writes},
+            workers_requests_cron = workers_requests_cron + ${requests},
+            d1_rows_read_overhead = d1_rows_read_overhead + ${oh1.reads},
+            d1_rows_written_overhead = d1_rows_written_overhead + ${oh1.writes}
+          WHERE id = 1
+        `);
+      } else {
+        await this.db.run(sql`
+          UPDATE scheduler_state
+          SET
+            d1_rows_read_total = d1_rows_read_total + ${totalReads},
+            d1_rows_written_total = d1_rows_written_total + ${totalWrites},
+            workers_requests_total = workers_requests_total + ${requests},
+            d1_rows_read_overhead = d1_rows_read_overhead + ${oh1.reads},
+            d1_rows_written_overhead = d1_rows_written_overhead + ${oh1.writes}
+          WHERE id = 1
+        `);
+      }
+      tailOverhead = meter?.drainOverhead() ?? { reads: 0, writes: 0 };
+    } finally {
+      meter?.unsuppress();
     }
-    await this.db.run(sql`
-      UPDATE scheduler_state
-      SET
-        d1_rows_read_total = d1_rows_read_total + ${reads},
-        d1_rows_written_total = d1_rows_written_total + ${writes},
-        workers_requests_total = workers_requests_total + ${requests}
-      WHERE id = 1
-    `);
+
+    if (tailOverhead.reads > 0 || tailOverhead.writes > 0) {
+      meter?.suppress();
+      try {
+        await this.applyOverheadToSchedulerState(tailOverhead.reads, tailOverhead.writes);
+      } finally {
+        meter?.unsuppress();
+      }
+    }
   }
 
   async getBtcUsdPrice(): Promise<{ usd: number; at: string } | null> {
