@@ -1,6 +1,6 @@
 import type { Job, Store } from "@cointrace/db";
 import type { AppConfig, JobType } from "../config.js";
-import { JOB_PRIORITY } from "../config.js";
+import { JOB_PRIORITY, syncSnapshotMaxAgeSec } from "../config.js";
 import { jobClassForType, isIngestContinuation } from "../indexer/jobClass.js";
 import { shouldEnqueueRefreshLiveBalance } from "../indexer/addressStats.js";
 import { isRebuildActive } from "../indexer/rebuildMode.js";
@@ -429,7 +429,9 @@ export async function listQueue(store: Store, config: AppConfig, opts: ListQueue
     downstreamPollIntervalSec: config.downstreamPollIntervalSec,
     minExpandSats: config.minExpandSats,
   };
-  const snapshot = await store.getSyncSnapshot(snapshotParams);
+  const snapshot = await store.getSyncSnapshot(snapshotParams, {
+    maxAgeSec: syncSnapshotMaxAgeSec(config),
+  });
   const crawl = snapshot?.crawl ?? await store.getCrawlStats();
   const monitor =
     snapshot?.monitor ??

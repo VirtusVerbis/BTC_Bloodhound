@@ -3,7 +3,7 @@ import { RemoteReadStore } from "./remoteReadStore.js";
 import type { D1WranglerClient } from "./d1Wrangler.js";
 
 function mockClient(queryImpl: (sql: string) => unknown[]): D1WranglerClient {
-  return { query: vi.fn(queryImpl) } as unknown as D1WranglerClient;
+  return { query: vi.fn(queryImpl), execute: vi.fn() } as unknown as D1WranglerClient;
 }
 
 describe("RemoteReadStore.listHackersCached", () => {
@@ -119,5 +119,65 @@ describe("RemoteReadStore.getDownstreamMonitorStatsCached", () => {
 
     const stats = await store.getDownstreamMonitorStatsCached(5, 600, { minExpandSats: 0 });
     expect(stats).toEqual({ treeNodeCount: 10, downstreamPollDueCount: 3 });
+    expect(client.query).not.toHaveBeenCalledWith(expect.stringContaining("AS count"));
+  });
+
+  it("recounts when minExpandSats cache param mismatches", async () => {
+    const client = mockClient((sql) => {
+      if (sql.includes("downstream_tree_count")) {
+        return [{ downstream_tree_count: 10, downstream_tree_max_depth: 5 }];
+      }
+      if (sql.includes("downstream_poll_due_count") && sql.includes("monitor_snapshot_dirty")) {
+        return [
+          {
+            downstream_poll_due_count: 3,
+            downstream_poll_due_at: new Date().toISOString(),
+            downstream_poll_max_depth: 5,
+            downstream_poll_interval_sec: 600,
+            downstream_poll_min_expand_sats: 0,
+            monitor_snapshot_dirty: 0,
+          },
+        ];
+      }
+      if (sql.includes("AS count")) {
+        return [{ count: 1 }];
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const store = new RemoteReadStore(client);
+
+    const stats = await store.getDownstreamMonitorStatsCached(5, 600, { minExpandSats: 100_000 });
+    expect(stats).toEqual({ treeNodeCount: 10, downstreamPollDueCount: 1 });
+  });
+
+  it("recounts when forceRefresh is true", async () => {
+    const client = mockClient((sql) => {
+      if (sql.includes("downstream_tree_count")) {
+        return [{ downstream_tree_count: 10, downstream_tree_max_depth: 5 }];
+      }
+      if (sql.includes("downstream_poll_due_count")) {
+        return [
+          {
+            downstream_poll_due_count: 99,
+            downstream_poll_due_at: new Date().toISOString(),
+            downstream_poll_max_depth: 5,
+            downstream_poll_interval_sec: 600,
+            downstream_poll_min_expand_sats: 0,
+            monitor_snapshot_dirty: 0,
+          },
+        ];
+      }
+      if (sql.includes("AS count")) {
+        return [{ count: 2 }];
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const store = new RemoteReadStore(client);
+
+    const stats = await store.getDownstreamMonitorStatsCached(5, 600, {
+      minExpandSats: 0,
+      forceRefresh: true,
+    });
+    expect(stats).toEqual({ treeNodeCount: 10, downstreamPollDueCount: 2 });
   });
 });

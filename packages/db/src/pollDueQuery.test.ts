@@ -40,18 +40,21 @@ describe("pollDueQuery", () => {
   it("pollDueCountSql sums never-polled and stale-polled subqueries", () => {
     const sql = pollDueCountSql(5, "2020-01-01T00:00:00.000Z");
     expect(sql).toContain("AS count");
-    expect(sql).toContain("last_polled_at IS NOT NULL");
+    expect(sql).toContain("LEFT JOIN sync_state s");
+    expect(sql).toContain("s.address IS NULL");
     expect(sql).toContain("INNER JOIN addresses a");
     expect(sql).toContain("last_polled_at <= '2020-01-01T00:00:00.000Z'");
+    expect(sql).not.toContain("NOT EXISTS");
     expect(sql).not.toContain("last_polled_at >");
-    expect(sql).not.toContain("LEFT JOIN");
   });
 
-  it("pollDueNeverCountSql uses NOT EXISTS with IS NOT NULL", () => {
+  it("pollDueNeverCountSql uses LEFT JOIN anti-join", () => {
     const sql = pollDueNeverCountSql(5, 100_000);
-    expect(sql).toContain("NOT EXISTS");
+    expect(sql).toContain("LEFT JOIN sync_state s");
+    expect(sql).toContain("s.address IS NULL");
     expect(sql).toContain("last_polled_at IS NOT NULL");
     expect(sql).toContain("inbound_sats >= 100000");
+    expect(sql).not.toContain("NOT EXISTS");
   });
 
   it("pollDueStaleCountSql joins sync_state on cutoff", () => {
@@ -60,13 +63,13 @@ describe("pollDueQuery", () => {
     expect(sql).toContain("last_polled_at <= '2020-01-01T00:00:00.000Z'");
   });
 
-  it("listDownstreamNeverPolledSql uses NOT EXISTS and hop order", () => {
+  it("listDownstreamNeverPolledSql uses LEFT JOIN anti-join and hop order", () => {
     const sql = listDownstreamNeverPolledSql(5, 3);
-    expect(sql).toContain("NOT EXISTS");
-    expect(sql).toContain("last_polled_at IS NOT NULL");
+    expect(sql).toContain("LEFT JOIN sync_state s");
+    expect(sql).toContain("s.address IS NULL");
     expect(sql).toContain("ORDER BY a.hop_from_hacker ASC");
     expect(sql).toContain("LIMIT 3");
-    expect(sql).not.toContain("LEFT JOIN");
+    expect(sql).not.toContain("NOT EXISTS");
   });
 
   it("listDownstreamStalePolledSql joins sync_state and orders by last_polled_at", () => {
@@ -87,6 +90,12 @@ describe("pollDueQuery", () => {
     const indexNames = indexes.map((row) => row.name);
     expect(indexNames).toContain("idx_addresses_poll_due");
     expect(indexNames).toContain("idx_sync_state_addr_last_polled");
+
+    const neverPlan = sqlite
+      .prepare(`EXPLAIN QUERY PLAN ${pollDueNeverCountSql(5, 100_000)};`)
+      .all() as Array<{ detail: string }>;
+    const neverDetails = neverPlan.map((p) => p.detail).join("\n");
+    expect(neverDetails).not.toMatch(/CORRELATED SCALAR SUBQUERY/);
 
     const stalePlan = sqlite
       .prepare(`EXPLAIN QUERY PLAN ${pollDueStaleCountSql(5, "2020-01-01T00:00:00.000Z", 100_000)};`)

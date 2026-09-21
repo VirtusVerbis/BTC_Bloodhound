@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   labeledHackStats,
+  monitorStatsFromSchedulerCache,
   parseHackStatsJson,
   parseHackStatsRows,
   parseSyncSnapshot,
   pollDueCacheTtlSec,
+  syncSnapshotCacheTtlSec,
 } from "./readCache.js";
 
 describe("pollDueCacheTtlSec", () => {
@@ -22,6 +24,53 @@ describe("pollDueCacheTtlSec", () => {
 
   it("clamps negative intervals to 0", () => {
     expect(pollDueCacheTtlSec(-10)).toBe(0);
+  });
+});
+
+describe("syncSnapshotCacheTtlSec", () => {
+  it("matches poll due cache TTL", () => {
+    expect(syncSnapshotCacheTtlSec(600)).toBe(600);
+  });
+});
+
+describe("monitorStatsFromSchedulerCache", () => {
+  it("returns cached monitor stats when poll cache is fresh", () => {
+    const monitor = monitorStatsFromSchedulerCache(
+      {
+        downstreamPollDueCount: 4,
+        downstreamPollDueAt: new Date().toISOString(),
+        downstreamPollMaxDepth: 5,
+        downstreamPollIntervalSec: 600,
+        downstreamPollMinExpandSats: 100_000,
+        downstreamTreeCount: 12,
+        downstreamTreeMaxDepth: 5,
+        monitorSnapshotDirty: 0,
+      },
+      5,
+      600,
+      100_000,
+    );
+    expect(monitor).toEqual({ treeNodeCount: 12, downstreamPollDueCount: 4 });
+  });
+
+  it("returns null when tree depth does not match", () => {
+    expect(
+      monitorStatsFromSchedulerCache(
+        {
+          downstreamPollDueCount: 4,
+          downstreamPollDueAt: new Date().toISOString(),
+          downstreamPollMaxDepth: 5,
+          downstreamPollIntervalSec: 600,
+          downstreamPollMinExpandSats: 0,
+          downstreamTreeCount: 12,
+          downstreamTreeMaxDepth: 3,
+          monitorSnapshotDirty: 0,
+        },
+        5,
+        600,
+        0,
+      ),
+    ).toBeNull();
   });
 });
 

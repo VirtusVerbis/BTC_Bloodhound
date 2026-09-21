@@ -41,16 +41,22 @@ export function downstreamPollEligibleWhereSql(
     AND ${tableAlias}.hop_from_hacker < ${depth}${amountClause}`;
 }
 
+/** FROM/JOIN/WHERE for never-polled eligible addresses (no row or last_polled_at IS NULL). */
+export function downstreamNeverPolledFromSql(
+  maxDepth: number,
+  minExpandSats = 0,
+): string {
+  const depth = Math.floor(maxDepth);
+  return `FROM addresses a
+LEFT JOIN sync_state s ON s.address = a.address AND s.last_polled_at IS NOT NULL
+WHERE ${downstreamPollEligibleWhereSql("a", depth, minExpandSats)}
+  AND s.address IS NULL`;
+}
+
 /** Never-polled eligible downstream addresses (no sync_state row or last_polled_at IS NULL). */
 export function pollDueNeverCountSql(maxDepth: number, minExpandSats = 0): string {
-  const depth = Math.floor(maxDepth);
   return `SELECT COUNT(*) AS count
-FROM addresses a
-WHERE ${downstreamPollEligibleWhereSql("a", depth, minExpandSats)}
-  AND NOT EXISTS (
-    SELECT 1 FROM sync_state s
-    WHERE s.address = a.address AND s.last_polled_at IS NOT NULL
-  )`;
+${downstreamNeverPolledFromSql(maxDepth, minExpandSats)}`;
 }
 
 /** Stale-polled eligible downstream addresses (last_polled_at <= cutoff). */
@@ -94,12 +100,7 @@ export function listDownstreamNeverPolledSql(
   const depth = Math.floor(maxDepth);
   const cap = Math.max(0, Math.floor(limit));
   return `SELECT a.address
-FROM addresses a
-WHERE ${downstreamPollEligibleWhereSql("a", depth, minExpandSats)}
-  AND NOT EXISTS (
-    SELECT 1 FROM sync_state s
-    WHERE s.address = a.address AND s.last_polled_at IS NOT NULL
-  )
+${downstreamNeverPolledFromSql(depth, minExpandSats)}
 ORDER BY a.hop_from_hacker ASC
 LIMIT ${cap}`;
 }

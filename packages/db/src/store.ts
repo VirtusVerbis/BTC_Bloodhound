@@ -31,7 +31,7 @@ import {
 } from "./recentHackers.js";
 import {
   FLAGGED_HACKERS_CACHE_DEFAULT_TTL_SEC,
-  SYNC_SNAPSHOT_DEFAULT_TTL_SEC,
+  resolveSyncSnapshotMaxAgeSec,
   filterFlaggedHackersCache,
   isCacheFresh,
   pollDueCacheTtlSec,
@@ -3213,7 +3213,8 @@ export class Store {
     params: SyncSnapshotParams,
     opts?: { maxAgeSec?: number },
   ): Promise<SyncSnapshotV1 | null> {
-    const maxAgeSec = opts?.maxAgeSec ?? SYNC_SNAPSHOT_DEFAULT_TTL_SEC;
+    const maxAgeSec =
+      opts?.maxAgeSec ?? resolveSyncSnapshotMaxAgeSec(params, null);
     const state = await this.getSchedulerState();
     const parsed = parseSyncSnapshot(state?.syncSnapshotJson);
     if (
@@ -4499,7 +4500,8 @@ export class Store {
     params: SyncSnapshotParams,
     opts?: { maxAgeSec?: number },
   ): Promise<SyncSnapshotV1 | null> {
-    const maxAgeSec = opts?.maxAgeSec ?? SYNC_SNAPSHOT_DEFAULT_TTL_SEC;
+    const maxAgeSec =
+      opts?.maxAgeSec ?? resolveSyncSnapshotMaxAgeSec(params, null);
     const state = await this.getSchedulerState();
     const parsed = parseSyncSnapshot(state?.syncSnapshotJson);
     if (

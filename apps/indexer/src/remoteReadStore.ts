@@ -245,10 +245,18 @@ export class RemoteReadStore {
       return num(state?.downstream_poll_due_count);
     }
 
-    const cutoffIso = new Date(Date.now() - intervalSec * 1000).toISOString();
-    const row = this.client.query(`${pollDueCountSql(depth, cutoffIso, floor)};`)[0];
+    return this.recountDownstreamPollDue(depth, intervalSec, floor);
+  }
+
+  private recountDownstreamPollDue(
+    maxDepth: number,
+    minIntervalSec: number,
+    minExpandSats: number,
+  ): number {
+    const cutoffIso = new Date(Date.now() - minIntervalSec * 1000).toISOString();
+    const row = this.client.query(`${pollDueCountSql(maxDepth, cutoffIso, minExpandSats)};`)[0];
     const count = clampPollDueCount(num(row?.count));
-    this.persistPollDueCache(count, depth, intervalSec, floor);
+    this.persistPollDueCache(count, maxDepth, minIntervalSec, minExpandSats);
     return count;
   }
 
@@ -283,7 +291,37 @@ WHERE id = 1;
     minIntervalSec: number,
     opts?: { forceRefresh?: boolean; minExpandSats?: number },
   ) {
-    return this.getDownstreamMonitorStats(maxDepth, minIntervalSec, opts?.minExpandSats ?? 0);
+    const depth = Math.floor(maxDepth);
+    const intervalSec = Math.floor(minIntervalSec);
+    const minExpandSats = Math.max(0, Math.floor(opts?.minExpandSats ?? 0));
+    const treeNodeCount = await this.countDownstreamTreeNodes(depth);
+
+    if (!opts?.forceRefresh) {
+      const state = this.client.query(
+        `SELECT downstream_poll_due_count, downstream_poll_due_at, downstream_poll_max_depth, downstream_poll_interval_sec, downstream_poll_min_expand_sats, monitor_snapshot_dirty FROM scheduler_state WHERE id = 1 LIMIT 1;`,
+      )[0];
+      const ttlSec = pollDueCacheTtlSec(intervalSec);
+      const paramsMatch =
+        num(state?.downstream_poll_max_depth) === depth &&
+        num(state?.downstream_poll_interval_sec) === intervalSec &&
+        num(state?.downstream_poll_min_expand_sats) === minExpandSats;
+      const cacheFresh =
+        paramsMatch &&
+        isCacheFresh(
+          state?.downstream_poll_due_at != null ? str(state.downstream_poll_due_at) : null,
+          ttlSec,
+        ) &&
+        num(state?.monitor_snapshot_dirty) === 0;
+      if (cacheFresh) {
+        return {
+          treeNodeCount,
+          downstreamPollDueCount: num(state?.downstream_poll_due_count),
+        };
+      }
+    }
+
+    const downstreamPollDueCount = this.recountDownstreamPollDue(depth, intervalSec, minExpandSats);
+    return { treeNodeCount, downstreamPollDueCount };
   }
 
   async getSyncSnapshot(_params: SyncSnapshotParams, _opts?: { maxAgeSec?: number }) {

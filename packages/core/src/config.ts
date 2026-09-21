@@ -51,6 +51,8 @@ export interface AppConfig {
   hackerMaintenanceEveryNCrons: number;
   downstreamPollIntervalSec: number;
   downstreamPollEnqueuePerCron: number;
+  /** Override sync snapshot TTL (seconds); null aligns with downstreamPollIntervalSec. */
+  syncSnapshotTtlSec: number | null;
   maxCrawlDepth: number;
   maxGraphDepth: number;
   minEdgeSats: number;
@@ -274,6 +276,10 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     hackerMaintenanceEveryNCrons: Number(env.HACKER_MAINTENANCE_EVERY_N_CRONS ?? 10),
     downstreamPollIntervalSec: Number(env.DOWNSTREAM_POLL_INTERVAL_SEC ?? 600),
     downstreamPollEnqueuePerCron: Number(env.DOWNSTREAM_POLL_ENQUEUE_PER_CRON ?? 2),
+    syncSnapshotTtlSec:
+      env.SYNC_SNAPSHOT_TTL_SEC != null && env.SYNC_SNAPSHOT_TTL_SEC !== ""
+        ? Number(env.SYNC_SNAPSHOT_TTL_SEC)
+        : null,
     maxCrawlDepth: Number(env.MAX_CRAWL_DEPTH ?? 5),
     maxGraphDepth: Number(env.MAX_GRAPH_DEPTH ?? 2),
     minEdgeSats: Number(env.MIN_EDGE_SATS ?? 100_000),
@@ -400,6 +406,19 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     maintenanceMaxBatchesPerTick: Math.max(1, Number(env.MAINTENANCE_MAX_BATCHES_PER_TICK ?? 25)),
     maintenanceMaxWritesPerTick: Math.max(1, Number(env.MAINTENANCE_MAX_WRITES_PER_TICK ?? 12_000)),
   };
+}
+
+export function syncSnapshotMaxAgeSec(
+  config: Pick<AppConfig, "syncSnapshotTtlSec" | "downstreamPollIntervalSec">,
+): number {
+  if (
+    config.syncSnapshotTtlSec != null &&
+    Number.isFinite(config.syncSnapshotTtlSec) &&
+    config.syncSnapshotTtlSec >= 0
+  ) {
+    return Math.floor(config.syncSnapshotTtlSec);
+  }
+  return Math.max(0, config.downstreamPollIntervalSec);
 }
 
 /** Refuse insecure defaults when running as production. */

@@ -1,6 +1,6 @@
 import type { Store } from "@cointrace/db";
 import type { AppConfig } from "../config.js";
-import { JOB_PRIORITY } from "../config.js";
+import { JOB_PRIORITY, syncSnapshotMaxAgeSec } from "../config.js";
 import type { ChainRouter } from "../chain/router.js";
 import { fetchMempoolBtcUsd } from "../price/mempoolPrices.js";
 import { buildBackfillJobPayload } from "./processor.js";
@@ -335,11 +335,14 @@ export async function scheduleDownstreamCrawl(
         console.error("ensurePollDueCacheParams failed", err);
       });
     await store
-      .maybeRefreshSyncSnapshot({
-        maxCrawlDepth: config.maxCrawlDepth,
-        downstreamPollIntervalSec: config.downstreamPollIntervalSec,
-        minExpandSats: config.minExpandSats,
-      })
+      .maybeRefreshSyncSnapshot(
+        {
+          maxCrawlDepth: config.maxCrawlDepth,
+          downstreamPollIntervalSec: config.downstreamPollIntervalSec,
+          minExpandSats: config.minExpandSats,
+        },
+        { maxAgeSec: syncSnapshotMaxAgeSec(config) },
+      )
       .catch((err: unknown) => {
         console.error("refreshSyncSnapshot failed", err);
       });

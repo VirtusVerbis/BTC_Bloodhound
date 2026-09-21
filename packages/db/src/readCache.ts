@@ -7,6 +7,59 @@ export function pollDueCacheTtlSec(downstreamPollIntervalSec: number): number {
   return Math.max(0, downstreamPollIntervalSec);
 }
 
+export function syncSnapshotCacheTtlSec(downstreamPollIntervalSec: number): number {
+  return pollDueCacheTtlSec(downstreamPollIntervalSec);
+}
+
+export function resolveSyncSnapshotMaxAgeSec(
+  params: SyncSnapshotParams,
+  overrideSec?: number | null,
+): number {
+  if (overrideSec != null && Number.isFinite(overrideSec) && overrideSec >= 0) {
+    return Math.floor(overrideSec);
+  }
+  return syncSnapshotCacheTtlSec(params.downstreamPollIntervalSec);
+}
+
+export type SchedulerMonitorCache = {
+  downstreamPollDueCount?: number;
+  downstreamPollDueAt?: string | null;
+  downstreamPollMaxDepth?: number;
+  downstreamPollIntervalSec?: number;
+  downstreamPollMinExpandSats?: number;
+  downstreamTreeCount?: number;
+  downstreamTreeMaxDepth?: number;
+  monitorSnapshotDirty?: number;
+};
+
+/** Read cached tree/poll-due monitor stats from scheduler_state when fresh. */
+export function monitorStatsFromSchedulerCache(
+  state: SchedulerMonitorCache | null | undefined,
+  maxDepth: number,
+  minIntervalSec: number,
+  minExpandSats: number,
+): SyncSnapshotMonitor | null {
+  if (!state) return null;
+  const depth = Math.floor(maxDepth);
+  const intervalSec = Math.floor(minIntervalSec);
+  const floor = Math.max(0, Math.floor(minExpandSats));
+  if (state.downstreamTreeMaxDepth !== depth) return null;
+  const ttlSec = pollDueCacheTtlSec(intervalSec);
+  const paramsMatch =
+    state.downstreamPollMaxDepth === depth &&
+    state.downstreamPollIntervalSec === intervalSec &&
+    state.downstreamPollMinExpandSats === floor;
+  const cacheFresh =
+    paramsMatch &&
+    isCacheFresh(state.downstreamPollDueAt, ttlSec) &&
+    (state.monitorSnapshotDirty ?? 0) === 0;
+  if (!cacheFresh) return null;
+  return {
+    treeNodeCount: state.downstreamTreeCount ?? 0,
+    downstreamPollDueCount: state.downstreamPollDueCount ?? 0,
+  };
+}
+
 export type SyncSnapshotParams = {
   maxCrawlDepth: number;
   downstreamPollIntervalSec: number;

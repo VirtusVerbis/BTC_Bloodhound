@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
-import { classifyD1Error, D1QuotaExceededError, type D1RowMeter, type Store } from "@cointrace/db";
+import { classifyD1Error, D1QuotaExceededError, monitorStatsFromSchedulerCache, type D1RowMeter, type Store } from "@cointrace/db";
 import type { AppConfig } from "@cointrace/core";
 import {
   buildGraph,
@@ -12,6 +12,7 @@ import {
   listQueue,
   normalizeBitcoinAddress,
   resolveHackersPollMs,
+  syncSnapshotMaxAgeSec,
   type EnrichedQueueJob,
 } from "@cointrace/core";
 import {
@@ -397,9 +398,11 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
       scheduler = undefined;
     }
 
+    const snapshotMaxAgeSec = syncSnapshotMaxAgeSec(config);
+
     let snapshot: Awaited<ReturnType<Store["getSyncSnapshot"]>> = null;
     try {
-      snapshot = await store.getSyncSnapshot(snapshotParams);
+      snapshot = await store.getSyncSnapshot(snapshotParams, { maxAgeSec: snapshotMaxAgeSec });
     } catch (err) {
       console.error("sync/status getSyncSnapshot failed", err);
     }
@@ -414,15 +417,26 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
     }
 
     let monitor = snapshot?.monitor ?? { treeNodeCount: 0, downstreamPollDueCount: 0 };
+    const metricsSnapshotAt = snapshot?.at ?? null;
     if (!snapshot) {
-      try {
-        monitor = await store.getDownstreamMonitorStatsCached(
-          config.maxCrawlDepth,
-          config.downstreamPollIntervalSec,
-          { minExpandSats: config.minExpandSats },
-        );
-      } catch (err) {
-        console.error("sync/status getDownstreamMonitorStatsCached failed", err);
+      const cachedMonitor = monitorStatsFromSchedulerCache(
+        scheduler,
+        config.maxCrawlDepth,
+        config.downstreamPollIntervalSec,
+        config.minExpandSats,
+      );
+      if (cachedMonitor) {
+        monitor = cachedMonitor;
+      } else {
+        try {
+          monitor = await store.getDownstreamMonitorStatsCached(
+            config.maxCrawlDepth,
+            config.downstreamPollIntervalSec,
+            { minExpandSats: config.minExpandSats },
+          );
+        } catch (err) {
+          console.error("sync/status getDownstreamMonitorStatsCached failed", err);
+        }
       }
     }
 
@@ -511,6 +525,7 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
       queueDepth,
       pendingQueueDepthAll,
       d1Quota,
+      metricsSnapshotAt,
       nextApiCallAt: scheduler?.nextProviderCallAt ?? null,
       rateLimitMs: scheduler?.rateLimitMs ?? config.rateLimitMs,
       lastProviderUsed: scheduler?.lastProviderUsed ?? null,
