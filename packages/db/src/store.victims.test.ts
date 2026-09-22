@@ -359,6 +359,114 @@ describe("victim address helpers", () => {
     expect(refunds.map((row) => row.txid)).toEqual(["tx_refund_first"]);
   });
 
+  it("getVictimAddressSetForHacker uses early scan for dominant fan-in victim", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    const dominantEdges = Array.from({ length: 500 }, (_, i) => ({
+      fromAddress: "victim_dominant",
+      toAddress: "hack1",
+      txid: `tx_dom_${i}`,
+      amountSats: 100_000 + i,
+      direction: "in_to_hacker" as const,
+    }));
+    const otherVictims = Array.from({ length: 31 }, (_, i) => ({
+      fromAddress: `victim_other_${i}`,
+      toAddress: "hack1",
+      txid: `tx_other_${i}`,
+      amountSats: 500_000 - i,
+      direction: "in_to_hacker" as const,
+    }));
+    await store.upsertEdgesBatch([...dominantEdges, ...otherVictims]);
+
+    const victims = [...(await store.getVictimAddressSetForHacker("hack1", 32, 100_000))];
+    expect(victims).toHaveLength(32);
+    expect(victims[0]).toBe("victim_other_0");
+    expect(victims).toContain("victim_dominant");
+    expect(victims[victims.length - 1]).toBe("victim_dominant");
+  });
+
+  it("getVictimAddressSetForHacker reads from hacker_victim_peaks after upsert", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.upsertEdgesBatch([
+      {
+        fromAddress: "victim_a",
+        toAddress: "hack1",
+        txid: "tx_a1",
+        amountSats: 150_000,
+        direction: "in_to_hacker",
+      },
+      {
+        fromAddress: "victim_a",
+        toAddress: "hack1",
+        txid: "tx_a2",
+        amountSats: 250_000,
+        direction: "in_to_hacker",
+      },
+      {
+        fromAddress: "victim_b",
+        toAddress: "hack1",
+        txid: "tx_b1",
+        amountSats: 200_000,
+        direction: "in_to_hacker",
+      },
+    ]);
+
+    const peaks = sqlite
+      .prepare(
+        "SELECT from_address, max_amount_sats FROM hacker_victim_peaks WHERE hacker_address = 'hack1' ORDER BY max_amount_sats DESC",
+      )
+      .all() as Array<{ from_address: string; max_amount_sats: number }>;
+    expect(peaks).toEqual([
+      { from_address: "victim_a", max_amount_sats: 250_000 },
+      { from_address: "victim_b", max_amount_sats: 200_000 },
+    ]);
+
+    expect([...(await store.getVictimAddressSetForHacker("hack1", 2, 100_000))]).toEqual([
+      "victim_a",
+      "victim_b",
+    ]);
+  });
+
+  it("hacker_victim_peaks recomputes when peak edge amount decreases", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.upsertEdge({
+      fromAddress: "victim_a",
+      toAddress: "hack1",
+      txid: "tx_peak",
+      amountSats: 300_000,
+      direction: "in_to_hacker",
+    });
+    await store.upsertEdge({
+      fromAddress: "victim_a",
+      toAddress: "hack1",
+      txid: "tx_other",
+      amountSats: 150_000,
+      direction: "in_to_hacker",
+    });
+    await store.upsertEdge({
+      fromAddress: "victim_a",
+      toAddress: "hack1",
+      txid: "tx_peak",
+      amountSats: 120_000,
+      direction: "in_to_hacker",
+    });
+
+    const peak = sqlite
+      .prepare(
+        "SELECT max_amount_sats FROM hacker_victim_peaks WHERE hacker_address = 'hack1' AND from_address = 'victim_a'",
+      )
+      .get() as { max_amount_sats: number };
+    expect(peak.max_amount_sats).toBe(150_000);
+  });
+
   it("listVictimRefundsForHacker subquery ignores dust-only victims", async () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);

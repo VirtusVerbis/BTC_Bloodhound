@@ -480,6 +480,11 @@ export function runMigrations(sqlite: Database.Database): void {
       ON edges(to_address, direction, amount_sats, from_address);
   `);
   sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_edges_to_in_amount
+      ON edges(to_address, amount_sats DESC, from_address)
+      WHERE direction = 'in_to_hacker';
+  `);
+  sqlite.exec(`
     CREATE INDEX IF NOT EXISTS idx_addresses_poll_due
       ON addresses(hop_from_hacker, inbound_sats)
       WHERE role = 'downstream' AND expand_status IN ('pending', 'expanded');
@@ -627,6 +632,27 @@ export function runMigrations(sqlite: Database.Database): void {
   if (!schedulerCols.some((c) => c.name === "hack_stats_day_utc")) {
     sqlite.exec(`ALTER TABLE scheduler_state ADD COLUMN hack_stats_day_utc TEXT`);
   }
+  const hackerVictimPeaksTable = sqlite
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hacker_victim_peaks'")
+    .get();
+  if (!hackerVictimPeaksTable) {
+    sqlite.exec(`
+      CREATE TABLE hacker_victim_peaks (
+        hacker_address TEXT NOT NULL,
+        from_address TEXT NOT NULL,
+        max_amount_sats INTEGER NOT NULL,
+        PRIMARY KEY (hacker_address, from_address)
+      );
+      CREATE INDEX idx_hacker_victim_peaks_top
+        ON hacker_victim_peaks(hacker_address, max_amount_sats DESC, from_address);
+      INSERT INTO hacker_victim_peaks (hacker_address, from_address, max_amount_sats)
+      SELECT to_address, from_address, MAX(amount_sats)
+      FROM edges
+      WHERE direction = 'in_to_hacker'
+      GROUP BY to_address, from_address;
+    `);
+  }
+
   const hackStatsTable = sqlite
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hack_stats'")
     .get();

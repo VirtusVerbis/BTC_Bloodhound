@@ -10,6 +10,7 @@ import {
   addresses,
   edges,
   hackStats,
+  hackerVictimPeaks,
   jobs,
   rateLimits,
   schedulerState,
@@ -207,6 +208,8 @@ const D1_IN_CLAUSE_CHUNK_SIZE = 80;
 export const VICTIM_REFUND_GRAPH_LIMIT = 32;
 /** Probe at most this many victim destinations (callers should pass amount-ordered addresses). */
 export const VICTIM_REFUND_PROBE_LIMIT = VICTIM_REFUND_GRAPH_LIMIT;
+const VICTIM_SCAN_FETCH_INITIAL_MULTIPLIER = 4;
+const VICTIM_SCAN_FETCH_MAX_MULTIPLIER = 128;
 
 const ADDRESS_DETAIL_TX_LIMIT = 50;
 const OP_RETURN_SPEND_TX_LIMIT = 200;
@@ -1123,8 +1126,80 @@ export class Store {
           }
         }
       }
+
+      for (const row of chunk) {
+        if (row.direction !== "in_to_hacker") continue;
+        const key = `${row.fromAddress}|${row.toAddress}|${row.txid}`;
+        const oldAmount = oldEdgeByKey.get(key)?.amountSats ?? 0;
+        try {
+          await this.applyHackerVictimPeakDelta(
+            row.toAddress,
+            row.fromAddress,
+            row.amountSats,
+            oldAmount,
+          );
+        } catch {
+          // peaks table not migrated yet
+        }
+      }
     }
     await this.adjustEdgeTotalsCounters(totalInDelta, totalOutDelta);
+  }
+
+  private async applyHackerVictimPeakDelta(
+    hackerAddress: string,
+    fromAddress: string,
+    newAmount: number,
+    oldAmount: number,
+  ): Promise<void> {
+    if (newAmount <= 0 && oldAmount <= 0) return;
+
+    if (newAmount >= oldAmount) {
+      await this.db.run(sql`
+        INSERT INTO hacker_victim_peaks (hacker_address, from_address, max_amount_sats)
+        VALUES (${hackerAddress}, ${fromAddress}, ${newAmount})
+        ON CONFLICT(hacker_address, from_address) DO UPDATE SET
+          max_amount_sats = MAX(hacker_victim_peaks.max_amount_sats, excluded.max_amount_sats)
+      `);
+      return;
+    }
+
+    const peak = await this.db
+      .select({ maxAmountSats: hackerVictimPeaks.maxAmountSats })
+      .from(hackerVictimPeaks)
+      .where(
+        and(
+          eq(hackerVictimPeaks.hackerAddress, hackerAddress),
+          eq(hackerVictimPeaks.fromAddress, fromAddress),
+        ),
+      )
+      .get();
+    if (!peak || oldAmount < peak.maxAmountSats) return;
+
+    const row = await this.db
+      .select({ maxAmount: sql<number>`MAX(${edges.amountSats})` })
+      .from(edges)
+      .where(
+        and(
+          eq(edges.toAddress, hackerAddress),
+          eq(edges.fromAddress, fromAddress),
+          eq(edges.direction, "in_to_hacker"),
+        ),
+      )
+      .get();
+    const recomputed = row?.maxAmount ?? 0;
+    if (recomputed <= 0) {
+      await this.db.run(sql`
+        DELETE FROM hacker_victim_peaks
+        WHERE hacker_address = ${hackerAddress} AND from_address = ${fromAddress}
+      `);
+      return;
+    }
+    await this.db.run(sql`
+      UPDATE hacker_victim_peaks
+      SET max_amount_sats = ${recomputed}
+      WHERE hacker_address = ${hackerAddress} AND from_address = ${fromAddress}
+    `);
   }
 
   private async applyInboundSatsDelta(toAddress: string, deltaSats: number): Promise<void> {
@@ -1560,6 +1635,93 @@ export class Store {
   async getVictimAddressSetForHacker(
     hacker: string,
     limit = 1000,
+    minEdgeSats?: number,
+  ): Promise<Set<string>> {
+    const cap = Math.max(0, Math.floor(limit));
+    if (cap === 0) return new Set();
+
+    const fromPeaks = await this.collectTopVictimAddressesFromPeaks(hacker, cap, minEdgeSats);
+    if (fromPeaks != null) return fromPeaks;
+
+    const scanned = await this.collectTopVictimAddressesByScan(hacker, cap, minEdgeSats);
+    if (scanned != null) return scanned;
+
+    return await this.collectTopVictimAddressesByGroupBy(hacker, cap, minEdgeSats);
+  }
+
+  private async collectTopVictimAddressesFromPeaks(
+    hacker: string,
+    limit: number,
+    minEdgeSats?: number,
+  ): Promise<Set<string> | null> {
+    try {
+      const conditions = [eq(hackerVictimPeaks.hackerAddress, hacker)];
+      if (minEdgeSats != null) {
+        conditions.push(gte(hackerVictimPeaks.maxAmountSats, minEdgeSats));
+      }
+      const rows = await this.db
+        .select({ address: hackerVictimPeaks.fromAddress })
+        .from(hackerVictimPeaks)
+        .where(and(...conditions))
+        .orderBy(desc(hackerVictimPeaks.maxAmountSats))
+        .limit(limit)
+        .all();
+      if (rows.length > 0) return new Set(rows.map((row) => row.address));
+
+      const edgeConditions = [eq(edges.toAddress, hacker), eq(edges.direction, "in_to_hacker")];
+      if (minEdgeSats != null) edgeConditions.push(gte(edges.amountSats, minEdgeSats));
+      const hasEdges = await this.db
+        .select({ fromAddress: edges.fromAddress })
+        .from(edges)
+        .where(and(...edgeConditions))
+        .limit(1)
+        .get();
+      return hasEdges == null ? new Set() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Descending edge scan; returns null when a pathological fan-in needs GROUP BY fallback. */
+  private async collectTopVictimAddressesByScan(
+    hacker: string,
+    limit: number,
+    minEdgeSats?: number,
+  ): Promise<Set<string> | null> {
+    const conditions = [eq(edges.toAddress, hacker), eq(edges.direction, "in_to_hacker")];
+    if (minEdgeSats != null) {
+      conditions.push(gte(edges.amountSats, minEdgeSats));
+    }
+
+    let fetchLimit = limit * VICTIM_SCAN_FETCH_INITIAL_MULTIPLIER;
+    const maxFetch = limit * VICTIM_SCAN_FETCH_MAX_MULTIPLIER;
+
+    while (fetchLimit <= maxFetch) {
+      const out = new Set<string>();
+      const rows = await this.db
+        .select({ address: edges.fromAddress })
+        .from(edges)
+        .where(and(...conditions))
+        .orderBy(desc(edges.amountSats))
+        .limit(fetchLimit)
+        .all();
+
+      for (const row of rows) {
+        out.add(row.address);
+        if (out.size >= limit) return out;
+      }
+
+      if (rows.length < fetchLimit) return out;
+
+      fetchLimit *= 2;
+    }
+
+    return null;
+  }
+
+  private async collectTopVictimAddressesByGroupBy(
+    hacker: string,
+    limit: number,
     minEdgeSats?: number,
   ): Promise<Set<string>> {
     const conditions = [eq(edges.toAddress, hacker), eq(edges.direction, "in_to_hacker")];

@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, sqliteTable, text, integer, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const addresses = sqliteTable("addresses", {
   address: text("address").primaryKey(),
@@ -98,6 +98,23 @@ export const hackVictims = sqliteTable(
     fromAddress: text("from_address").notNull(),
   },
   (table) => [uniqueIndex("hack_victims_pk").on(table.hackId, table.fromAddress)],
+);
+
+export const hackerVictimPeaks = sqliteTable(
+  "hacker_victim_peaks",
+  {
+    hackerAddress: text("hacker_address").notNull(),
+    fromAddress: text("from_address").notNull(),
+    maxAmountSats: integer("max_amount_sats").notNull(),
+  },
+  (table) => [
+    uniqueIndex("hacker_victim_peaks_pk").on(table.hackerAddress, table.fromAddress),
+    index("idx_hacker_victim_peaks_top").on(
+      table.hackerAddress,
+      table.maxAmountSats,
+      table.fromAddress,
+    ),
+  ],
 );
 
 export const schedulerState = sqliteTable("scheduler_state", {
