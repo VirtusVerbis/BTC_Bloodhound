@@ -9,6 +9,7 @@ dist/
 data/
 backups/
 RUNCOMMANDS.txt
+CMDS_REF.txt
 *.db
 *.db-journal
 *.db-wal

@@ -1,7 +1,7 @@
 {
   "name": "Bitcoin Bloodhound",
   "short_name": "Bloodhound",
-  "description": "Coldcard Hack Tracker",
+  "description": "Coldcard hack on-chain tracker — maps consolidation addresses, victim inputs, and downstream Bitcoin flows from the 2026 entropy exploit.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

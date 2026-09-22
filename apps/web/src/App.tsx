@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { AboutPage } from "./components/AboutPage";
 import { QueuePage } from "./components/QueuePage";
 import { HackElapsedLabel } from "./components/HackElapsedLabel";
@@ -42,6 +43,8 @@ import {
   type Hacker,
   type RecentHackerEntry,
 } from "./lib/hackerGroups";
+import { pathnameToRoute } from "./content/siteSeo";
+import { usePageSeo } from "./lib/usePageSeo";
 
 type AppTab = "tracker" | "about" | "queue";
 
@@ -127,6 +130,12 @@ function latestD1QuotaRetryAfterAt(d1Quota: SyncStatus["d1Quota"]): string | nul
 }
 
 export default function App() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const route = pathnameToRoute(location.pathname) ?? "/";
+  const activeTab: AppTab = route === "/" ? "tracker" : route === "/about" ? "about" : "queue";
+  usePageSeo(route);
+
   const [hackers, setHackers] = useState<Hacker[]>([]);
   const [selected, setSelected] = useState("");
   const [filter, setFilter] = useState("");
@@ -153,7 +162,6 @@ export default function App() {
   const [graphPageSize, setGraphPageSize] = useState(DEFAULT_GRAPH_PAGE_SIZE);
   const [victimSearchInput, setVictimSearchInput] = useState("");
   const [activeVictimSearch, setActiveVictimSearch] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<AppTab>("tracker");
   const [queueSnapshot, setQueueSnapshot] = useState<QueueSnapshot | null>(null);
   const [queueFetchedAt, setQueueFetchedAt] = useState<number | null>(null);
   const [queueLoading, setQueueLoading] = useState(false);
@@ -164,6 +172,25 @@ export default function App() {
   const [hackersLoading, setHackersLoading] = useState(false);
   const prevApiThresholdRef = useRef(false);
   const minAmountFocusedRef = useRef(false);
+
+  useEffect(() => {
+    const matched = pathnameToRoute(location.pathname);
+    if (matched == null) {
+      navigate("/", { replace: true });
+      return;
+    }
+    if (location.pathname !== matched) {
+      navigate(`${matched}${location.search}${location.hash}`, { replace: true });
+    }
+  }, [location.pathname, location.hash, location.search, navigate]);
+
+  useEffect(() => {
+    if (route === "/about" && location.hash === "#monitoring") {
+      requestAnimationFrame(() => {
+        document.getElementById("monitoring")?.scrollIntoView({ behavior: "smooth" });
+      });
+    }
+  }, [route, location.hash]);
 
   const loadQueueSnapshot = useCallback(async () => {
     setQueueLoading(true);
@@ -511,10 +538,7 @@ export default function App() {
   };
 
   const navigateToMonitoring = () => {
-    setActiveTab("about");
-    requestAnimationFrame(() => {
-      document.getElementById("monitoring")?.scrollIntoView({ behavior: "smooth" });
-    });
+    navigate("/about#monitoring");
   };
 
   const commitMinAmount = useCallback(() => {
@@ -558,33 +582,30 @@ export default function App() {
           <HackElapsedLabel />
         </div>
         <nav className="app-tabs" role="tablist" aria-label="Main navigation">
-          <button
-            type="button"
+          <Link
+            to="/"
             role="tab"
             className={`app-tab${activeTab === "tracker" ? " active" : ""}`}
             aria-selected={activeTab === "tracker"}
-            onClick={() => setActiveTab("tracker")}
           >
             Tracker
-          </button>
-          <button
-            type="button"
+          </Link>
+          <Link
+            to="/about"
             role="tab"
             className={`app-tab${activeTab === "about" ? " active" : ""}`}
             aria-selected={activeTab === "about"}
-            onClick={() => setActiveTab("about")}
           >
             About
-          </button>
-          <button
-            type="button"
+          </Link>
+          <Link
+            to="/queue"
             role="tab"
             className={`app-tab${activeTab === "queue" ? " active" : ""}`}
             aria-selected={activeTab === "queue"}
-            onClick={() => setActiveTab("queue")}
           >
             Queue
-          </button>
+          </Link>
         </nav>
         <div className="stats-hack-rows">
           <div className="stats-hack-grid">
@@ -643,11 +664,11 @@ export default function App() {
               <span
                 className="sync-stats-queue-link"
                 title="Background indexer jobs waiting to run (polls, expansions, and sync tasks). Click to open Queue tab."
-                onClick={() => setActiveTab("queue")}
+                onClick={() => navigate("/queue")}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
-                    setActiveTab("queue");
+                    navigate("/queue");
                   }
                 }}
                 role="button"

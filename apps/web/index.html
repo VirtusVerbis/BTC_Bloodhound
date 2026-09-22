@@ -4,6 +4,41 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Bitcoin Bloodhound — Coldcard Hack Tracker</title>
+    <meta
+      name="description"
+      content="Bitcoin Bloodhound maps consolidation addresses, victim inputs, and downstream flows from the 2026 Coldcard entropy exploit. It is an exploratory on-chain visualization tool, not a forensic or legal record."
+    />
+    <link rel="canonical" href="https://bitcoinbloodhound.com/" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Bitcoin Bloodhound" />
+    <meta property="og:title" content="Bitcoin Bloodhound — Coldcard Hack Tracker" />
+    <meta
+      property="og:description"
+      content="Bitcoin Bloodhound maps consolidation addresses, victim inputs, and downstream flows from the 2026 Coldcard entropy exploit. It is an exploratory on-chain visualization tool, not a forensic or legal record."
+    />
+    <meta property="og:url" content="https://bitcoinbloodhound.com/" />
+    <meta property="og:image" content="https://bitcoinbloodhound.com/bloodhound_logo_1024x1024.png" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Bitcoin Bloodhound — Coldcard Hack Tracker" />
+    <meta
+      name="twitter:description"
+      content="Bitcoin Bloodhound maps consolidation addresses, victim inputs, and downstream flows from the 2026 Coldcard entropy exploit. It is an exploratory on-chain visualization tool, not a forensic or legal record."
+    />
+    <meta name="twitter:image" content="https://bitcoinbloodhound.com/bloodhound_logo_1024x1024.png" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "Bitcoin Bloodhound",
+        "description": "Bitcoin Bloodhound maps consolidation addresses, victim inputs, and downstream flows from the 2026 Coldcard entropy exploit. It is an exploratory on-chain visualization tool, not a forensic or legal record.",
+        "url": "https://bitcoinbloodhound.com",
+        "applicationCategory": "FinanceApplication",
+        "operatingSystem": "Web"
+      }
+    </script>
 
     <!-- Web App Manifest (Android + PC Chromium install) -->
     <link rel="manifest" href="/manifest.webmanifest" />
@@ -21,7 +56,12 @@
     <meta name="mobile-web-app-capable" content="yes" />
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <p class="seo-intro">
+        Bitcoin Bloodhound is a Coldcard hack tracker and on-chain visualization tool for the 2026 Coldcard entropy
+        exploit — mapping consolidation addresses, victim inputs, and downstream Bitcoin flows.
+      </p>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

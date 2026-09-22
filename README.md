@@ -13,7 +13,7 @@ Same codebase, two deployments:
 | Mode | Stack | When to use |
 |------|-------|-------------|
 | **Local** | Node API + SQLite + local indexer process + Vite dev server (or Docker) | Development, analysis snapshots, self-host |
-| **Remote** | Cloudflare Worker + D1 + static UI; indexer runs on Worker cron | Production ([bitcoinbloodhound.com](https://www.bitcoinbloodhound.com)) |
+| **Remote** | Cloudflare Worker + D1 + static UI; indexer runs on Worker cron | Production ([bitcoinbloodhound.com](https://bitcoinbloodhound.com)) |
 
 ### Local
 
