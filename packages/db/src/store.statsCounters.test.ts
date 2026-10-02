@@ -42,6 +42,7 @@ describe("scheduler stats counters", () => {
     const { sqlite, store } = await openStore();
     await store.upsertAddress({ address: "bc1qvictim", role: "victim" });
     sqlite.prepare("UPDATE scheduler_state SET victim_count = 0 WHERE id = 1").run();
+    store.clearSchedulerStateCache();
     await store.reconcileStatsCounters();
     expect((await store.computeStatsCounts()).victimCount).toBe(1);
   });
@@ -50,6 +51,7 @@ describe("scheduler stats counters", () => {
     const { sqlite, store } = await openStore();
     await store.upsertAddress({ address: "bc1qvictim", role: "victim" });
     sqlite.prepare("UPDATE scheduler_state SET victim_count = 0 WHERE id = 1").run();
+    store.clearSchedulerStateCache();
     await store.reconcileCheapCounters();
     expect((await store.computeStatsCounts()).victimCount).toBe(0);
     await store.reconcileStatsCounters();
@@ -77,6 +79,7 @@ describe("scheduler stats counters", () => {
       expandStatus: "expanded",
     });
     sqlite.prepare("UPDATE scheduler_state SET downstream_tree_max_depth = 10 WHERE id = 1").run();
+    store.clearSchedulerStateCache();
     await store.ensureDownstreamTreeDepth(5);
     const state = await store.getSchedulerState();
     expect(state?.downstreamTreeMaxDepth).toBe(5);

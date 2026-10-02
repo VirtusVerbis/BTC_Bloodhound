@@ -240,6 +240,7 @@ describe("tick lease", () => {
     expect(await store.tryAcquireTickLease(60_000)).toBe(true);
     const past = new Date(Date.now() - 1000).toISOString();
     sqlite.prepare("UPDATE scheduler_state SET tick_lease_until = ? WHERE id = 1").run(past);
+    store.clearSchedulerStateCache();
     expect(await store.tryAcquireTickLease(60_000)).toBe(true);
   });
 });

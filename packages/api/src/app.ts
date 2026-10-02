@@ -101,6 +101,11 @@ export function createApp(store: Store, config: AppConfig, opts?: { d1RowMeter?:
   const app = new Hono();
   const d1RowMeter = opts?.d1RowMeter;
 
+  app.use("*", async (c, next) => {
+    store.clearSchedulerStateCache();
+    await next();
+  });
+
   app.use("*", securityHeadersMiddleware);
 
   const allowed = new Set(config.corsOrigins);

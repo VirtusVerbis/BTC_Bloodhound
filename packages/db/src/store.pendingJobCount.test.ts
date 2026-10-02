@@ -93,6 +93,7 @@ describe("pending job count", () => {
     const { sqlite, store } = await openStore();
     await store.enqueueJob("process_tx", { txid: "a" }, 1);
     sqlite.prepare("UPDATE scheduler_state SET pending_job_count = 0 WHERE id = 1").run();
+    store.clearSchedulerStateCache();
     expect(await readCounter(store)).toBe(0);
     expect(await store.reconcilePendingJobCount()).toBe(1);
     expect(await readCounter(store)).toBe(1);
@@ -159,6 +160,7 @@ describe("active job type counters", () => {
     const { sqlite, store } = await openStore();
     await store.enqueueJob("process_tx", { txid: "a" }, 1);
     sqlite.prepare("UPDATE scheduler_state SET active_process_tx_count = 0 WHERE id = 1").run();
+    store.clearSchedulerStateCache();
     expect(await store.countActiveJobs("process_tx")).toBe(0);
     await store.reconcileCheapCounters();
     expect(await store.countActiveJobs("process_tx")).toBe(1);

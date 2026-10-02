@@ -77,6 +77,7 @@ describe("crawl pending counter", () => {
     await store.upsertAddress({ address: "bc1qdown1", role: "downstream", expandStatus: "pending" });
     await store.upsertAddress({ address: "bc1qdown2", role: "hacker", expandStatus: "pending" });
     sqlite.prepare("UPDATE scheduler_state SET crawl_pending_count = 0 WHERE id = 1").run();
+    store.clearSchedulerStateCache();
     expect(await readCounter(store)).toBe(0);
     expect(await store.reconcileCrawlPendingCount()).toBe(2);
     expect(await readCounter(store)).toBe(2);

@@ -571,6 +571,8 @@ export class Store {
   private d1RowMeter?: D1RowMeter;
   private subrequestBudget?: StoreOptions["subrequestBudget"];
   private recentHackerActivityBuffer?: Map<string, RecentHackerActivityDelta>;
+  /** `undefined` = not loaded. `null` = loaded and the row is missing. */
+  private schedulerStateCache: SchedulerStateRow | null | undefined;
 
   constructor(
     public db: Db,
@@ -650,11 +652,7 @@ export class Store {
   }
 
   async setCronIndexerPaused(paused: boolean): Promise<void> {
-    await this.db
-      .update(schedulerState)
-      .set({ cronIndexerPaused: paused ? 1 : 0 })
-      .where(eq(schedulerState.id, 1))
-      .run();
+    await this.updateSchedulerState({ cronIndexerPaused: paused ? 1 : 0 });
   }
 
   async isCronIndexerPaused(): Promise<boolean> {
@@ -663,11 +661,7 @@ export class Store {
   }
 
   async setQueueSchedulingPaused(paused: boolean): Promise<void> {
-    await this.db
-      .update(schedulerState)
-      .set({ queueSchedulingPaused: paused ? 1 : 0 })
-      .where(eq(schedulerState.id, 1))
-      .run();
+    await this.updateSchedulerState({ queueSchedulingPaused: paused ? 1 : 0 });
   }
 
   async isQueueSchedulingPaused(): Promise<boolean> {
@@ -3002,7 +2996,9 @@ export class Store {
       WHERE id = 1
         AND (tick_lease_until IS NULL OR tick_lease_until < ${nowIso})
     `);
-    return changesCount(result as { changes?: number; meta?: { changes?: number } }) > 0;
+    const acquired = changesCount(result as { changes?: number; meta?: { changes?: number } }) > 0;
+    if (acquired) this.patchSchedulerCache({ tickLeaseUntil: untilIso });
+    return acquired;
   }
 
   async clearTickLease(): Promise<void> {
@@ -3011,6 +3007,7 @@ export class Store {
       SET tick_lease_until = NULL
       WHERE id = 1
     `);
+    this.patchSchedulerCache({ tickLeaseUntil: null });
   }
 
   async getJob(id: number) {
@@ -3130,8 +3127,78 @@ export class Store {
     return await base.all();
   }
 
+  clearSchedulerStateCache(): void {
+    this.schedulerStateCache = undefined;
+  }
+
   async getSchedulerState() {
-    return await this.db.select().from(schedulerState).where(eq(schedulerState.id, 1)).get();
+    if (this.schedulerStateCache !== undefined) {
+      return this.schedulerStateCache ? { ...this.schedulerStateCache } : undefined;
+    }
+    const row = await this.db.select().from(schedulerState).where(eq(schedulerState.id, 1)).get();
+    this.schedulerStateCache = row ?? null;
+    return row ? { ...row } : undefined;
+  }
+
+  private patchSchedulerCache(data: Partial<SchedulerStateRow>): void {
+    if (this.schedulerStateCache == null) return;
+    const next = { ...this.schedulerStateCache };
+    for (const [key, value] of Object.entries(data)) {
+      if (value !== undefined) {
+        (next as Record<string, unknown>)[key] = value;
+      }
+    }
+    this.schedulerStateCache = next;
+  }
+
+  private bumpSchedulerCache(
+    field:
+      | "crawlPendingCount"
+      | "pendingJobCount"
+      | "activeExpandCount"
+      | "activeBackfillCount"
+      | "activeAuditCount"
+      | "activeProcessTxCount"
+      | "victimCount"
+      | "hackerActiveCount"
+      | "crawlExpandedCount"
+      | "downstreamTreeCount"
+      | "downstreamPollDueCount"
+      | "totalInSats"
+      | "totalOutSats",
+    delta: number,
+  ): void {
+    if (this.schedulerStateCache == null || delta === 0) return;
+    const current = this.schedulerStateCache[field] ?? 0;
+    this.schedulerStateCache = {
+      ...this.schedulerStateCache,
+      [field]: Math.max(0, current + delta),
+    };
+  }
+
+  private addSchedulerQuotaCache(amounts: {
+    d1RowsReadTotal?: number;
+    d1RowsWrittenTotal?: number;
+    workersRequestsTotal?: number;
+    d1RowsReadCron?: number;
+    d1RowsWrittenCron?: number;
+    workersRequestsCron?: number;
+    d1RowsReadOverhead?: number;
+    d1RowsWrittenOverhead?: number;
+  }): void {
+    const row = this.schedulerStateCache;
+    if (row == null) return;
+    this.schedulerStateCache = {
+      ...row,
+      d1RowsReadTotal: row.d1RowsReadTotal + (amounts.d1RowsReadTotal ?? 0),
+      d1RowsWrittenTotal: row.d1RowsWrittenTotal + (amounts.d1RowsWrittenTotal ?? 0),
+      workersRequestsTotal: row.workersRequestsTotal + (amounts.workersRequestsTotal ?? 0),
+      d1RowsReadCron: row.d1RowsReadCron + (amounts.d1RowsReadCron ?? 0),
+      d1RowsWrittenCron: row.d1RowsWrittenCron + (amounts.d1RowsWrittenCron ?? 0),
+      workersRequestsCron: row.workersRequestsCron + (amounts.workersRequestsCron ?? 0),
+      d1RowsReadOverhead: row.d1RowsReadOverhead + (amounts.d1RowsReadOverhead ?? 0),
+      d1RowsWrittenOverhead: row.d1RowsWrittenOverhead + (amounts.d1RowsWrittenOverhead ?? 0),
+    };
   }
 
   private async adjustCrawlPendingCount(delta: number): Promise<void> {
@@ -3141,6 +3208,7 @@ export class Store {
       SET crawl_pending_count = MAX(0, crawl_pending_count + ${delta})
       WHERE id = 1
     `);
+    this.bumpSchedulerCache("crawlPendingCount", delta);
   }
 
   private async adjustPendingJobCount(delta: number): Promise<void> {
@@ -3150,6 +3218,7 @@ export class Store {
       SET pending_job_count = MAX(0, pending_job_count + ${delta})
       WHERE id = 1
     `);
+    this.bumpSchedulerCache("pendingJobCount", delta);
   }
 
   private async afterJobInserted(type: string): Promise<void> {
@@ -3159,6 +3228,8 @@ export class Store {
 
   private async adjustActiveJobCount(type: string, delta: number): Promise<void> {
     if (delta === 0) return;
+    const field = cachedActiveJobCountField(type);
+    if (!field) return;
     switch (type) {
       case "expand_downstream":
         await this.db.run(sql`
@@ -3166,43 +3237,46 @@ export class Store {
           SET active_expand_count = MAX(0, active_expand_count + ${delta})
           WHERE id = 1
         `);
-        return;
+        break;
       case "backfill_hacker_address":
         await this.db.run(sql`
           UPDATE scheduler_state
           SET active_backfill_count = MAX(0, active_backfill_count + ${delta})
           WHERE id = 1
         `);
-        return;
+        break;
       case "audit_hacker_backfill":
         await this.db.run(sql`
           UPDATE scheduler_state
           SET active_audit_count = MAX(0, active_audit_count + ${delta})
           WHERE id = 1
         `);
-        return;
+        break;
       case "process_tx":
         await this.db.run(sql`
           UPDATE scheduler_state
           SET active_process_tx_count = MAX(0, active_process_tx_count + ${delta})
           WHERE id = 1
         `);
-        return;
+        break;
       default:
         return;
     }
+    this.bumpSchedulerCache(field, delta);
   }
 
   async markJobSnapshotDirty(): Promise<void> {
     await this.db.run(sql`
       UPDATE scheduler_state SET sync_snapshot_dirty = 1 WHERE id = 1
     `);
+    this.patchSchedulerCache({ syncSnapshotDirty: 1 });
   }
 
   async markMonitorSnapshotDirty(): Promise<void> {
     await this.db.run(sql`
       UPDATE scheduler_state SET monitor_snapshot_dirty = 1 WHERE id = 1
     `);
+    this.patchSchedulerCache({ monitorSnapshotDirty: 1 });
   }
 
   /** @deprecated Use markJobSnapshotDirty or markMonitorSnapshotDirty */
@@ -3269,13 +3343,16 @@ export class Store {
       (state?.monitorSnapshotDirty ?? 0) === 0;
     if (!cacheFresh) return false;
 
+    const polledAt = now();
     await this.db.run(sql`
       UPDATE scheduler_state
       SET
         downstream_poll_due_count = MAX(0, downstream_poll_due_count + ${delta}),
-        downstream_poll_due_at = ${now()}
+        downstream_poll_due_at = ${polledAt}
       WHERE id = 1
     `);
+    this.bumpSchedulerCache("downstreamPollDueCount", delta);
+    this.patchSchedulerCache({ downstreamPollDueAt: polledAt });
     return true;
   }
 
@@ -3310,6 +3387,7 @@ export class Store {
         `);
         break;
     }
+    this.bumpSchedulerCache(field, delta);
   }
 
   private async adjustEdgeTotalsCounters(totalInDelta: number, totalOutDelta: number): Promise<void> {
@@ -3321,6 +3399,8 @@ export class Store {
         total_out_sats = MAX(0, total_out_sats + ${totalOutDelta})
       WHERE id = 1
     `);
+    this.bumpSchedulerCache("totalInSats", totalInDelta);
+    this.bumpSchedulerCache("totalOutSats", totalOutDelta);
   }
 
   private async applyAddressStatsDelta(
@@ -3473,6 +3553,7 @@ export class Store {
         )
       WHERE id = 1
     `);
+    this.clearSchedulerStateCache();
   }
 
   async reconcileCheapCounters(): Promise<void> {
@@ -3598,6 +3679,7 @@ export class Store {
       .set(data)
       .where(eq(schedulerState.id, 1))
       .run();
+    this.patchSchedulerCache(data);
   }
 
   async setBtcUsdPrice(usd: number, at: string) {
@@ -3757,6 +3839,12 @@ export class Store {
         d1_rows_written_overhead = d1_rows_written_overhead + ${overheadWrites}
       WHERE id = 1
     `);
+    this.addSchedulerQuotaCache({
+      d1RowsReadTotal: overheadReads,
+      d1RowsWrittenTotal: overheadWrites,
+      d1RowsReadOverhead: overheadReads,
+      d1RowsWrittenOverhead: overheadWrites,
+    });
   }
 
   async flushQuotaUsage(
@@ -3791,6 +3879,16 @@ export class Store {
             d1_rows_written_overhead = d1_rows_written_overhead + ${oh1.writes}
           WHERE id = 1
         `);
+        this.addSchedulerQuotaCache({
+          d1RowsReadTotal: totalReads,
+          d1RowsWrittenTotal: totalWrites,
+          workersRequestsTotal: requests,
+          d1RowsReadCron: reads,
+          d1RowsWrittenCron: writes,
+          workersRequestsCron: requests,
+          d1RowsReadOverhead: oh1.reads,
+          d1RowsWrittenOverhead: oh1.writes,
+        });
       } else {
         await this.db.run(sql`
           UPDATE scheduler_state
@@ -3802,6 +3900,13 @@ export class Store {
             d1_rows_written_overhead = d1_rows_written_overhead + ${oh1.writes}
           WHERE id = 1
         `);
+        this.addSchedulerQuotaCache({
+          d1RowsReadTotal: totalReads,
+          d1RowsWrittenTotal: totalWrites,
+          workersRequestsTotal: requests,
+          d1RowsReadOverhead: oh1.reads,
+          d1RowsWrittenOverhead: oh1.writes,
+        });
       }
       tailOverhead = meter?.drainOverhead() ?? { reads: 0, writes: 0 };
     } finally {
@@ -4114,6 +4219,12 @@ export class Store {
       SET maintenance_cron_counter = maintenance_cron_counter + 1
       WHERE id = 1
     `);
+    if (this.schedulerStateCache != null) {
+      this.schedulerStateCache = {
+        ...this.schedulerStateCache,
+        maintenanceCronCounter: this.schedulerStateCache.maintenanceCronCounter + 1,
+      };
+    }
     return (await this.getSchedulerState())?.maintenanceCronCounter ?? 0;
   }
 
@@ -4127,7 +4238,12 @@ export class Store {
       RETURNING ((hacker_poll_index - 1 + ${hackerCount}) % ${hackerCount}) AS idx
     `);
     const idx = rows[0]?.idx;
-    if (idx != null) return Number(idx);
+    if (idx != null) {
+      const used = Number(idx);
+      this.patchSchedulerCache({ hackerPollIndex: (used + 1) % hackerCount });
+      return used;
+    }
+    this.clearSchedulerStateCache();
     return (await this.getHackerPollIndex()) % hackerCount;
   }
 
@@ -4628,7 +4744,9 @@ export class Store {
       WHERE id = 1
         AND (hack_stats_day_utc IS NULL OR hack_stats_day_utc != ${today})
     `);
-    return changesCount(result as { changes?: number; meta?: { changes?: number } }) > 0;
+    const claimed = changesCount(result as { changes?: number; meta?: { changes?: number } }) > 0;
+    if (claimed) this.patchSchedulerCache({ hackStatsDayUtc: today });
+    return claimed;
   }
 
   private async rollbackHackStatsDayClaim(previousDay: string | null): Promise<void> {
@@ -5276,6 +5394,9 @@ LIMIT ${remaining}
   }
 
   async getRecentHackersActivity(): Promise<RecentHackerEntry[]> {
+    if (this.schedulerStateCache !== undefined) {
+      return parseRecentHackersJson(this.schedulerStateCache?.recentHackersJson);
+    }
     const row = await this.db
       .select({ json: schedulerState.recentHackersJson })
       .from(schedulerState)
@@ -5291,22 +5412,30 @@ LIMIT ${remaining}
       return false;
     }
 
-    const row = await this.db
-      .select({ json: schedulerState.recentHackersJson })
-      .from(schedulerState)
-      .where(eq(schedulerState.id, 1))
-      .get();
-    const existing = parseRecentHackersJson(row?.json);
+    const existing =
+      this.schedulerStateCache !== undefined
+        ? parseRecentHackersJson(this.schedulerStateCache?.recentHackersJson)
+        : parseRecentHackersJson(
+            (
+              await this.db
+                .select({ json: schedulerState.recentHackersJson })
+                .from(schedulerState)
+                .where(eq(schedulerState.id, 1))
+                .get()
+            )?.json,
+          );
     const merged = mergeRecentHackerActivity(existing, buffer, limit);
     this.clearRecentHackerActivityBuffer();
 
     if (recentHackersEqual(existing, merged)) return false;
 
+    const recentHackersJson = serializeRecentHackers(merged);
     await this.db
       .update(schedulerState)
-      .set({ recentHackersJson: serializeRecentHackers(merged) })
+      .set({ recentHackersJson })
       .where(eq(schedulerState.id, 1))
       .run();
+    this.patchSchedulerCache({ recentHackersJson });
     return true;
   }
 

@@ -182,6 +182,7 @@ describe("listDownstreamForPoll", () => {
         "UPDATE scheduler_state SET downstream_poll_due_count = 999, downstream_poll_due_at = ? WHERE id = 1",
       )
       .run(new Date().toISOString());
+    store.clearSchedulerStateCache();
 
     const cached = await store.getDownstreamMonitorStatsCached(5, 600);
     expect(cached.downstreamPollDueCount).toBe(999);
@@ -229,6 +230,7 @@ describe("listDownstreamForPoll", () => {
         "UPDATE scheduler_state SET downstream_poll_due_count = 999, downstream_poll_due_at = ? WHERE id = 1",
       )
       .run("2020-01-01T00:00:00.000Z");
+    store.clearSchedulerStateCache();
 
     const refreshed = await store.getDownstreamMonitorStatsCached(5, 600);
     expect(refreshed.downstreamPollDueCount).toBe(1);
