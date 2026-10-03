@@ -111,6 +111,7 @@ describe("pollDueQuery", () => {
       .all() as Array<{ detail: string }>;
     const countDetails = countPlan.map((p) => p.detail).join("\n");
     expect(countDetails).toMatch(/idx_addresses_poll_due/);
+    expect(countDetails).toMatch(/inbound_sats/);
     expect(countDetails).not.toMatch(/CORRELATED SCALAR SUBQUERY/);
   });
 

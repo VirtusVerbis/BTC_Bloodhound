@@ -484,9 +484,10 @@ export function runMigrations(sqlite: Database.Database): void {
       ON edges(to_address, amount_sats DESC, from_address)
       WHERE direction = 'in_to_hacker';
   `);
+  sqlite.exec(`DROP INDEX IF EXISTS idx_addresses_poll_due;`);
   sqlite.exec(`
-    CREATE INDEX IF NOT EXISTS idx_addresses_poll_due
-      ON addresses(hop_from_hacker, inbound_sats)
+    CREATE INDEX idx_addresses_poll_due
+      ON addresses(inbound_sats, hop_from_hacker, address)
       WHERE role = 'downstream' AND expand_status IN ('pending', 'expanded');
   `);
   sqlite.exec(`
