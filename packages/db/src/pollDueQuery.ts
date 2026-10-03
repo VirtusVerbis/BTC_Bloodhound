@@ -37,7 +37,7 @@ export function downstreamPollEligibleWhereSql(
       : `
     AND ${tableAlias}.inbound_sats >= ${floor}`;
   return `${tableAlias}.role = 'downstream'
-    AND ${tableAlias}.expand_status IN ('expanded', 'pending')
+    AND ${tableAlias}.expand_status IN ('pending', 'expanded')
     AND ${tableAlias}.hop_from_hacker < ${depth}${amountClause}`;
 }
 
@@ -74,21 +74,22 @@ WHERE s.last_polled_at <= ${cutoff}
   AND ${downstreamPollEligibleWhereSql("a", depth, minExpandSats)}`;
 }
 
+/**
+ * One-pass poll-due count through `<=`, so the Worker can bind the cutoff
+ * and the indexer can append an escaped literal.
+ */
+export function pollDueCountPrefixSql(maxDepth: number, minExpandSats = 0): string {
+  const depth = Math.floor(maxDepth);
+  return `SELECT COUNT(*) AS count
+FROM addresses a INDEXED BY idx_addresses_poll_due
+LEFT JOIN sync_state s ON s.address = a.address
+WHERE ${downstreamPollEligibleWhereSql("a", depth, minExpandSats)}
+  AND (s.last_polled_at IS NULL OR s.last_polled_at <=`;
+}
+
 /** Eligible downstream addresses that have not been polled after cutoff. */
 export function pollDueCountSql(maxDepth: number, cutoffIso: string, minExpandSats = 0): string {
-  const never = pollDueNeverCountSql(maxDepth, minExpandSats).replace(
-    "SELECT COUNT(*) AS count",
-    "SELECT COUNT(*)",
-  );
-  const stale = pollDueStaleCountSql(maxDepth, cutoffIso, minExpandSats).replace(
-    "SELECT COUNT(*) AS count",
-    "SELECT COUNT(*)",
-  );
-  return `SELECT
-  (${never})
-  +
-  (${stale})
-AS count`;
+  return `${pollDueCountPrefixSql(maxDepth, minExpandSats)} ${sqlStringLiteral(cutoffIso)})`;
 }
 
 /** Never-polled downstream addresses (no sync_state row or last_polled_at IS NULL). */

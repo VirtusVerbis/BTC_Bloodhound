@@ -346,7 +346,7 @@ describe("listDownstreamForPoll", () => {
     expect((await store.getSchedulerState())?.downstreamPollMinExpandSats).toBe(100_000);
   });
 
-  it("addInboundSats crossing minExpandSats marks monitor snapshot dirty", async () => {
+  it("addInboundSats crossing minExpandSats adjusts poll due count when cache is fresh", async () => {
     const { sqlite, db } = openDatabase(":memory:");
     runMigrations(sqlite);
     const store = new Store(db);
@@ -367,10 +367,65 @@ describe("listDownstreamForPoll", () => {
 
     await store.addInboundSats("bc1qdown", 20_000);
 
+    expect((await store.getSchedulerState())?.monitorSnapshotDirty).toBe(0);
+    expect(
+      (await store.getDownstreamMonitorStatsCached(5, 600, { minExpandSats: 100_000 })).downstreamPollDueCount,
+    ).toBe(1);
+  });
+
+  it("addInboundSats crossing minExpandSats marks monitor snapshot dirty when cache is stale", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.ensurePollDueCacheParams(5, 600, 100_000);
+    await store.upsertAddress({
+      address: "bc1qdown",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "expanded",
+    });
+    sqlite.prepare("UPDATE addresses SET inbound_sats = 90000 WHERE address = 'bc1qdown'").run();
+    await store.reconcileDownstreamTreeCount(5);
+    await store.getDownstreamMonitorStatsCached(5, 600, { minExpandSats: 100_000, forceRefresh: true });
+
+    sqlite
+      .prepare("UPDATE scheduler_state SET downstream_poll_due_at = ? WHERE id = 1")
+      .run("2020-01-01T00:00:00.000Z");
+    store.clearSchedulerStateCache();
+
+    await store.addInboundSats("bc1qdown", 20_000);
+
     expect((await store.getSchedulerState())?.monitorSnapshotDirty).toBe(1);
     expect(
       (await store.getDownstreamMonitorStatsCached(5, 600, { minExpandSats: 100_000 })).downstreamPollDueCount,
     ).toBe(1);
+    expect((await store.getSchedulerState())?.monitorSnapshotDirty).toBe(0);
+  });
+
+  it("addInboundSats crossing minExpandSats leaves the due count unchanged when recently polled", async () => {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    const store = new Store(db);
+
+    await store.ensurePollDueCacheParams(5, 600, 100_000);
+    await store.upsertAddress({
+      address: "bc1qdown",
+      role: "downstream",
+      hopFromHacker: 1,
+      expandStatus: "expanded",
+    });
+    sqlite.prepare("UPDATE addresses SET inbound_sats = 90000 WHERE address = 'bc1qdown'").run();
+    await store.upsertSyncState("bc1qdown", { lastSeenTxid: "tx1" });
+    await store.reconcileDownstreamTreeCount(5);
+    await store.getDownstreamMonitorStatsCached(5, 600, { minExpandSats: 100_000, forceRefresh: true });
+
+    await store.addInboundSats("bc1qdown", 20_000);
+
+    expect((await store.getSchedulerState())?.monitorSnapshotDirty).toBe(0);
+    expect(
+      (await store.getDownstreamMonitorStatsCached(5, 600, { minExpandSats: 100_000 })).downstreamPollDueCount,
+    ).toBe(0);
   });
 });
 

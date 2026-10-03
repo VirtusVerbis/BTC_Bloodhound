@@ -57,7 +57,7 @@ import {
   isDownstreamPollEligibleAddress,
   listDownstreamNeverPolledSql,
   listDownstreamStalePolledSql,
-  pollDueCountSql,
+  pollDueCountPrefixSql,
   sqlStringLiteral,
 } from "./pollDueQuery.js";
 
@@ -1213,11 +1213,11 @@ export class Store {
       .where(eq(addresses.address, toAddress))
       .run();
 
+    const minIntervalSec = state?.downstreamPollIntervalSec ?? 0;
+    if (!existing || maxDepth <= 0 || minIntervalSec <= 0) return;
+    if (!crossedMinExpandThreshold(beforeInbound, afterInbound, floor)) return;
     if (
-      existing &&
-      maxDepth > 0 &&
-      crossedMinExpandThreshold(beforeInbound, afterInbound, floor) &&
-      isDownstreamPollEligibleAddress(
+      !isDownstreamPollEligibleAddress(
         existing.role,
         existing.expandStatus,
         existing.hopFromHacker,
@@ -1226,8 +1226,21 @@ export class Store {
         0,
       )
     ) {
-      await this.markMonitorSnapshotDirty();
+      return;
     }
+
+    const sync = await this.getSyncState(toAddress);
+    const cutoff = new Date(Date.now() - minIntervalSec * 1000).toISOString();
+    const countsAsDue = !sync?.lastPolledAt || sync.lastPolledAt <= cutoff;
+    if (!countsAsDue) return;
+
+    const delta = afterInbound >= floor ? 1 : -1;
+    const adjusted = await this.adjustPollDueCountDelta(delta, {
+      maxDepth,
+      minIntervalSec,
+      minExpandSats: floor,
+    });
+    if (!adjusted) await this.markMonitorSnapshotDirty();
   }
 
   async addInboundSats(toAddress: string, deltaSats: number): Promise<void> {
@@ -4961,9 +4974,9 @@ LIMIT ${remaining}
   async countDownstreamPollDue(maxDepth: number, minIntervalSec: number, minExpandSats = 0) {
     const depth = Math.floor(maxDepth);
     const cutoff = new Date(Date.now() - minIntervalSec * 1000).toISOString();
-    const rows = (await this.db.all(
-      sql.raw(pollDueCountSql(depth, cutoff, minExpandSats)),
-    )) as Array<{ count: number }>;
+    const rows = (await this.db.all(sql`
+      ${sql.raw(pollDueCountPrefixSql(depth, minExpandSats))} ${cutoff})
+    `)) as Array<{ count: number }>;
     return clampPollDueCount(rows[0]?.count ?? 0);
   }
 
