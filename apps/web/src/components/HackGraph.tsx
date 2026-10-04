@@ -45,6 +45,9 @@ import {
   DEFAULT_EDGE_COLOR,
   DEFAULT_SOURCE_HANDLE,
   DEFAULT_TARGET_HANDLE,
+  FANOUT_EDGE_COLOR,
+  PEEL_EDGE_COLOR,
+  REFUND_EDGE_COLOR,
   graphEdgeColor,
   graphEdgeHandles,
   graphEdgeLabel,
@@ -710,6 +713,27 @@ export function HackGraph({
                   <option value="date-asc">Date Time (Old to New)</option>
                 </select>
               </label>
+              <ul className="graph-edge-legend" aria-label="Line colors">
+                <li title="A bitcoin payment from one address to another.">
+                  <span className="graph-edge-legend-swatch" style={{ background: DEFAULT_EDGE_COLOR }} />
+                  Payment
+                </li>
+                <li title="Repeated payments between the same two addresses, drawn as one line.">
+                  <span className="graph-edge-legend-swatch" style={{ background: PEEL_EDGE_COLOR }} />
+                  Peel
+                </li>
+                <li title="One transaction that pays many different addresses.">
+                  <span className="graph-edge-legend-swatch" style={{ background: FANOUT_EDGE_COLOR }} />
+                  Fan-out
+                </li>
+                <li title="Bitcoin returned to a victim address.">
+                  <span
+                    className="graph-edge-legend-swatch graph-edge-legend-swatch-dashed"
+                    style={{ borderTopColor: REFUND_EDGE_COLOR }}
+                  />
+                  Refund
+                </li>
+              </ul>
             </div>
           </Panel>
           <FitViewAfterLayout trigger={fitViewTrigger} />

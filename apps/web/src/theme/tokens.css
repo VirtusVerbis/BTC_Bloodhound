@@ -160,6 +160,40 @@ body {
   border-radius: 4.5px;
 }
 
+.graph-edge-legend {
+  display: grid;
+  grid-template-columns: auto auto;
+  column-gap: 0.5rem;
+  row-gap: 0.15rem;
+  align-content: start;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.6375rem;
+  line-height: 1.15;
+  color: var(--color-text-muted);
+}
+
+.graph-edge-legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  white-space: nowrap;
+}
+
+.graph-edge-legend-swatch {
+  display: inline-block;
+  width: 1.15rem;
+  height: 2px;
+  flex: 0 0 auto;
+}
+
+.graph-edge-legend-swatch-dashed {
+  height: 0;
+  background: none;
+  border-top: 2px dashed;
+}
+
 .graph-load-progress {
   font-size: 0.75rem;
   color: var(--color-text-muted);
