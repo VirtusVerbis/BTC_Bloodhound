@@ -3,6 +3,7 @@ export const KNOWN_HACKER_SOURCES: Record<string, string> = {
   coldcardwatch: "coldcardwatch.com",
   coldcard_sweep_watch: "Coldcard Sweep Watch",
   coldcard_hack_tracker: "Coldcard Hack Tracker",
+  bitquery_coldcard: "Bitquery Coldcard Hack",
   public_seed: "Public seed list",
   local_config: "Local config",
   admin: "Manual",

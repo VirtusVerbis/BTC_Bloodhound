@@ -276,6 +276,10 @@ body {
   color: #f44336;
 }
 
+.about-poll-error {
+  color: #f44336;
+}
+
 .about-queue-draining {
   color: #ffb74d;
   margin-top: 0.5rem;

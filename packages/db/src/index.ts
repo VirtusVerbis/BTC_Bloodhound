@@ -145,7 +145,8 @@ export function runMigrations(sqlite: Database.Database): void {
       source TEXT PRIMARY KEY,
       last_sync_at TEXT,
       last_address_count INTEGER,
-      last_content_hash TEXT
+      last_content_hash TEXT,
+      last_error TEXT
     );
 
     CREATE TABLE IF NOT EXISTS scheduler_state (

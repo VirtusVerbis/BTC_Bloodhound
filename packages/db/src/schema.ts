@@ -82,6 +82,7 @@ export const sourceSyncState = sqliteTable("source_sync_state", {
   lastSyncAt: text("last_sync_at"),
   lastAddressCount: integer("last_address_count"),
   lastContentHash: text("last_content_hash"),
+  lastError: text("last_error"),
 });
 
 export const hackStats = sqliteTable("hack_stats", {

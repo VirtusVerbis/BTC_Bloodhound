@@ -81,3 +81,31 @@ export async function ingestSourceHacker(
   );
   return true;
 }
+
+/** Insert a flagged hacker only when the address is not already stored. Does not promote existing rows. */
+export async function ingestSourceHackerIfMissing(
+  store: Store,
+  address: string,
+  source: string,
+  opts?: { hackId?: HackId },
+): Promise<boolean> {
+  const hackId = opts?.hackId ?? DEFAULT_HACK_ID;
+  const inserted = await store.insertAddressIfMissing({
+    address,
+    role: "hacker",
+    isFlaggedHacker: true,
+    source,
+    hackId,
+    hopFromHacker: 0,
+    expandStatus: "pending",
+  });
+  if (!inserted) return false;
+  await store.enqueueJobIfAbsent(
+    "backfill_hacker_address",
+    { address },
+    JOB_PRIORITY.BACKFILL_HACKER,
+    undefined,
+    { address },
+  );
+  return true;
+}

@@ -4,6 +4,7 @@ export interface MonitoringSyncSource {
   source: string;
   lastSyncAt: string | null;
   lastAddressCount: number | null;
+  lastError?: string | null;
 }
 
 export interface ChainApiStatus {

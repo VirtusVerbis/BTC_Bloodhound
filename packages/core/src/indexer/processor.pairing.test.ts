@@ -34,6 +34,8 @@ function baseConfig(): AppConfig {
     vercelTrackersSyncIntervalSec: 3600,
     coldcardSweepWatchBase: "https://coldcard-watch.vercel.app",
     coldcardHackTrackerBase: "https://coldcard-hack-tracker.vercel.app",
+    bitqueryColdcardSyncIntervalSec: 3600,
+    bitqueryColdcardCsvUrl: "https://bitquery.io/coldcard-hack/downloads/coldcard-attacker-addresses.csv",
     monitoringStaleSec: 600,
     apiThresholdCooldownSec: 300,
     apiThresholdBaseSec: 300,

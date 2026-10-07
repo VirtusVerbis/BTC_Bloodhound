@@ -13,6 +13,7 @@ const MAINT_TYPES = new Set<JobType>([
   "poll_downstream_address",
   "sync_coldcardwatch",
   "sync_vercel_trackers",
+  "sync_bitquery_coldcard",
   "process_tx",
 ]);
 

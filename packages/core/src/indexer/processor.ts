@@ -27,6 +27,12 @@ import {
   enqueueColdcardSweepWatchBatchJobs,
   fetchColdcardSweepWatch,
 } from "../sources/coldcardSweepWatch.js";
+import {
+  applyBitqueryColdcardSyncBatch,
+  BITQUERY_COLDCARD_SOURCE,
+  enqueueBitqueryColdcardBatchJobs,
+  fetchBitqueryColdcard,
+} from "../sources/bitqueryColdcard.js";
 import { fetchMempoolBtcUsd } from "../price/mempoolPrices.js";
 import { expandOpsFields, resolveExpandJobPriority } from "./expandPriority.js";
 import { normalizeBitcoinAddress } from "../util/address.js";
@@ -1510,7 +1516,13 @@ async function syncColdcardwatch(
     );
     return;
   }
-  const data = await fetchColdcardWatch(config.coldcardwatchBase, store);
+  let data;
+  try {
+    data = await fetchColdcardWatch(config.coldcardwatchBase, store);
+  } catch (err) {
+    await store.setSourceSyncError("coldcardwatch", formatErrorMessage(err));
+    throw err;
+  }
   const prev = await store.getSourceSync("coldcardwatch");
   const lastAddressCount = data.collectors.length + data.victims.length;
   if (prev?.lastContentHash === data.contentHash) {
@@ -1563,10 +1575,25 @@ async function syncVercelTrackers(
     return;
   }
 
-  const [hackData, sweepData] = await Promise.all([
-    fetchColdcardHackTracker(config.coldcardHackTrackerBase, store),
-    fetchColdcardSweepWatch(config.coldcardSweepWatchBase, store),
-  ]);
+  let hackData: Awaited<ReturnType<typeof fetchColdcardHackTracker>> | undefined;
+  let sweepData: Awaited<ReturnType<typeof fetchColdcardSweepWatch>> | undefined;
+  let hackErr: unknown;
+  let sweepErr: unknown;
+  try {
+    hackData = await fetchColdcardHackTracker(config.coldcardHackTrackerBase, store);
+  } catch (err) {
+    hackErr = err;
+    await store.setSourceSyncError("coldcard_hack_tracker", formatErrorMessage(err));
+  }
+  try {
+    sweepData = await fetchColdcardSweepWatch(config.coldcardSweepWatchBase, store);
+  } catch (err) {
+    sweepErr = err;
+    await store.setSourceSyncError("coldcard_sweep_watch", formatErrorMessage(err));
+  }
+  if (hackErr || sweepErr || !hackData || !sweepData) {
+    throw hackErr ?? sweepErr ?? new Error("Vercel tracker fetch failed");
+  }
 
   const prevHack = await store.getSourceSync("coldcard_hack_tracker");
   const prevSweep = await store.getSourceSync("coldcard_sweep_watch");
@@ -1613,6 +1640,50 @@ async function syncVercelTrackers(
       );
     }
   }
+}
+
+async function syncBitqueryColdcard(
+  store: Store,
+  config: AppConfig,
+  payload: Record<string, unknown>,
+  opts?: { jobSubreq?: JobSubrequestBudget },
+): Promise<void> {
+  if (payload.addresses != null) {
+    await applyBitqueryColdcardSyncBatch(
+      store,
+      payload as unknown as Parameters<typeof applyBitqueryColdcardSyncBatch>[1],
+      { jobSubreq: opts?.jobSubreq },
+    );
+    return;
+  }
+  let data;
+  try {
+    data = await fetchBitqueryColdcard(config.bitqueryColdcardCsvUrl, store);
+  } catch (err) {
+    await store.setSourceSyncError(BITQUERY_COLDCARD_SOURCE, formatErrorMessage(err));
+    throw err;
+  }
+  const prev = await store.getSourceSync(BITQUERY_COLDCARD_SOURCE);
+  const lastAddressCount = data.addresses.length;
+  if (prev?.lastContentHash === data.contentHash) {
+    await store.upsertSourceSync(BITQUERY_COLDCARD_SOURCE, { lastContentHash: data.contentHash });
+    return;
+  }
+  const existing = await store.getAddressesMap(data.addresses);
+  const { missing } = partitionSourceMissing(data.addresses, existing);
+  if (missing.length === 0) {
+    await store.upsertSourceSync(BITQUERY_COLDCARD_SOURCE, {
+      lastAddressCount,
+      lastContentHash: data.contentHash,
+    });
+    return;
+  }
+  await enqueueBitqueryColdcardBatchJobs(
+    store,
+    { addresses: missing, contentHash: data.contentHash },
+    config.syncAddressesPerJob,
+    lastAddressCount,
+  );
 }
 
 function captureOpReturnJobOpts(
@@ -1710,6 +1781,9 @@ export async function processJob(
         break;
       case "sync_vercel_trackers":
         await syncVercelTrackers(store, config, payload);
+        break;
+      case "sync_bitquery_coldcard":
+        await syncBitqueryColdcard(store, config, payload, jobOpts);
         break;
       case "process_tx": {
         const hackers = opts?.hackers ?? (await getHackerAddressSet(store));
@@ -1982,6 +2056,13 @@ export async function processJobs(
         );
       } else if (job.type === "sync_vercel_trackers") {
         await syncVercelTrackers(
+          store,
+          config,
+          JSON.parse(job.payloadJson) as Record<string, unknown>,
+          { jobSubreq },
+        );
+      } else if (job.type === "sync_bitquery_coldcard") {
+        await syncBitqueryColdcard(
           store,
           config,
           JSON.parse(job.payloadJson) as Record<string, unknown>,

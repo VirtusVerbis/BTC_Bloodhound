@@ -98,6 +98,9 @@ describe("formatJobDetailLine", () => {
     expect(formatJobDetailLine(sampleJob({ type: "sync_vercel_trackers", details: {} }))).toBe(
       "Tracker sync",
     );
+    expect(formatJobDetailLine(sampleJob({ type: "sync_bitquery_coldcard", details: {} }))).toBe(
+      "Bitquery sync",
+    );
   });
 
   it("formats sync chunk progress with source label", () => {

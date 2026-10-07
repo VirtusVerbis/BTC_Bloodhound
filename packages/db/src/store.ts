@@ -107,6 +107,7 @@ const MAINT_COSMETIC_JOB_TYPES = [
   "poll_downstream_address",
   "sync_coldcardwatch",
   "sync_vercel_trackers",
+  "sync_bitquery_coldcard",
   "process_tx",
   "refresh_live_balance",
   "refresh_btc_usd_price",
@@ -4269,12 +4270,24 @@ export class Store {
     const lastAddressCount = data.lastAddressCount ?? null;
     const lastContentHash = data.lastContentHash ?? null;
     await this.db.run(sql`
-      INSERT INTO source_sync_state (source, last_sync_at, last_address_count, last_content_hash)
-      VALUES (${source}, ${ts}, ${lastAddressCount}, ${lastContentHash})
+      INSERT INTO source_sync_state (source, last_sync_at, last_address_count, last_content_hash, last_error)
+      VALUES (${source}, ${ts}, ${lastAddressCount}, ${lastContentHash}, NULL)
       ON CONFLICT(source) DO UPDATE SET
         last_sync_at = excluded.last_sync_at,
         last_address_count = COALESCE(excluded.last_address_count, source_sync_state.last_address_count),
-        last_content_hash = COALESCE(excluded.last_content_hash, source_sync_state.last_content_hash)
+        last_content_hash = COALESCE(excluded.last_content_hash, source_sync_state.last_content_hash),
+        last_error = NULL
+    `);
+  }
+
+  /** Record a poll failure without moving last_sync_at. Inserts the row when it is missing. */
+  async setSourceSyncError(source: string, message: string) {
+    const lastError = message.slice(0, 1000);
+    await this.db.run(sql`
+      INSERT INTO source_sync_state (source, last_sync_at, last_address_count, last_content_hash, last_error)
+      VALUES (${source}, NULL, NULL, NULL, ${lastError})
+      ON CONFLICT(source) DO UPDATE SET
+        last_error = excluded.last_error
     `);
   }
 
@@ -5133,6 +5146,7 @@ LIMIT ${remaining}
       source: s.source,
       lastSyncAt: s.lastSyncAt ?? null,
       lastAddressCount: s.lastAddressCount ?? null,
+      lastError: s.lastError ?? null,
     }));
 
     let lastExternalSyncAt: string | null = null;

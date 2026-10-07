@@ -18,6 +18,7 @@ const ALL_JOB_TYPES = new Set<JobType>([
   "backfill_op_return",
   "sync_coldcardwatch",
   "sync_vercel_trackers",
+  "sync_bitquery_coldcard",
 ]);
 
 const PRIORITY_NAME_BY_VALUE = Object.fromEntries(
@@ -33,6 +34,7 @@ const DEFAULT_PRIORITY_BY_JOB_TYPE: Record<JobType, number> = {
   process_tx: JOB_PRIORITY.PROCESS_TX,
   sync_coldcardwatch: JOB_PRIORITY.SYNC_COLDCARDWATCH,
   sync_vercel_trackers: JOB_PRIORITY.SYNC_VERCEL_TRACKERS,
+  sync_bitquery_coldcard: JOB_PRIORITY.SYNC_BITQUERY_COLDCARD,
   refresh_live_balance: JOB_PRIORITY.REFRESH_BALANCE,
   refresh_btc_usd_price: JOB_PRIORITY.REFRESH_BTC_USD,
   backfill_op_return: JOB_PRIORITY.REFRESH_BALANCE,
@@ -100,6 +102,7 @@ export interface NextCronPreview {
   pollDownstream: Array<{ address: string }>;
   syncColdcardwatch: boolean;
   syncVercelTrackers: boolean;
+  syncBitqueryColdcard: boolean;
   hackerMaintenance: { address: string; wouldEnqueue: string[] } | null;
 }
 
@@ -198,6 +201,7 @@ export function summarizeJobPayload(type: string, payload: Record<string, unknow
       return { txid: payload.txid };
     case "sync_coldcardwatch":
     case "sync_vercel_trackers":
+    case "sync_bitquery_coldcard":
       return summarizeSyncBatchPayload(payload);
     case "refresh_btc_usd_price":
       return {};
@@ -326,6 +330,7 @@ export async function previewNextCronEnqueue(store: Store, config: AppConfig): P
       pollDownstream: [],
       syncColdcardwatch: false,
       syncVercelTrackers: false,
+      syncBitqueryColdcard: false,
       hackerMaintenance: null,
     };
   }
@@ -346,6 +351,12 @@ export async function previewNextCronEnqueue(store: Store, config: AppConfig): P
   const syncVercelTrackers =
     ts - vtLast >= config.vercelTrackersSyncIntervalSec * 1000 &&
     !(await store.hasPendingJob("sync_vercel_trackers"));
+
+  const bqSync = await store.getSourceSync("bitquery_coldcard");
+  const bqLast = bqSync?.lastSyncAt ? new Date(bqSync.lastSyncAt).getTime() : 0;
+  const syncBitqueryColdcard =
+    ts - bqLast >= config.bitqueryColdcardSyncIntervalSec * 1000 &&
+    !(await store.hasPendingJob("sync_bitquery_coldcard"));
 
   const scheduler = await store.getSchedulerState();
   const throttled = (scheduler?.pendingJobCount ?? 0) >= config.queueSoftThrottleDepth;
@@ -391,6 +402,7 @@ export async function previewNextCronEnqueue(store: Store, config: AppConfig): P
     pollDownstream,
     syncColdcardwatch,
     syncVercelTrackers,
+    syncBitqueryColdcard,
     hackerMaintenance,
   };
 }

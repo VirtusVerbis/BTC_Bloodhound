@@ -78,6 +78,8 @@ function formatSyncSourceLabel(source: string): string {
       return "hack tracker";
     case "coldcard_sweep_watch":
       return "sweep watch";
+    case "bitquery_coldcard":
+      return "Bitquery";
     default:
       return source.replace(/_/g, " ");
   }
@@ -117,6 +119,7 @@ export function formatJobDetailLine(job: QueueJob): string {
   if (parts.length === 0) {
     if (type === "sync_coldcardwatch") return "External sync";
     if (type === "sync_vercel_trackers") return "Tracker sync";
+    if (type === "sync_bitquery_coldcard") return "Bitquery sync";
     if (type === "refresh_btc_usd_price") return "BTC/USD price";
     return "—";
   }
@@ -124,6 +127,7 @@ export function formatJobDetailLine(job: QueueJob): string {
   const syncParts: string[] = [];
   if (type === "sync_coldcardwatch") syncParts.push("External sync");
   if (type === "sync_vercel_trackers") syncParts.push("Tracker sync");
+  if (type === "sync_bitquery_coldcard") syncParts.push("Bitquery sync");
   if (typeof details.source === "string" && details.source.length > 0) {
     syncParts.push(formatSyncSourceLabel(details.source));
   }

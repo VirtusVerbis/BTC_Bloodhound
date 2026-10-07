@@ -14,6 +14,7 @@ export const JOB_PRIORITY = {
   PROCESS_TX: 4,
   SYNC_COLDCARDWATCH: 3,
   SYNC_VERCEL_TRACKERS: 3,
+  SYNC_BITQUERY_COLDCARD: 3,
   REFRESH_BALANCE: 2,
   REFRESH_BTC_USD: 1,
 } as const;
@@ -29,7 +30,8 @@ export type JobType =
   | "refresh_btc_usd_price"
   | "backfill_op_return"
   | "sync_coldcardwatch"
-  | "sync_vercel_trackers";
+  | "sync_vercel_trackers"
+  | "sync_bitquery_coldcard";
 
 export type EnvMap = Record<string, string | undefined>;
 
@@ -67,6 +69,8 @@ export interface AppConfig {
   vercelTrackersSyncIntervalSec: number;
   coldcardSweepWatchBase: string;
   coldcardHackTrackerBase: string;
+  bitqueryColdcardSyncIntervalSec: number;
+  bitqueryColdcardCsvUrl: string;
   monitoringStaleSec: number;
   apiThresholdCooldownSec: number;
   apiThresholdBaseSec: number;
@@ -297,6 +301,10 @@ export function loadConfig(env: EnvMap = process.env as EnvMap): AppConfig {
     coldcardHackTrackerBase: (
       env.COLDCARD_HACK_TRACKER_BASE ?? "https://coldcard-hack-tracker.vercel.app"
     ).replace(/\/$/, ""),
+    bitqueryColdcardSyncIntervalSec: Number(env.BITQUERY_COLDCARD_SYNC_INTERVAL_SEC ?? 3600),
+    bitqueryColdcardCsvUrl:
+      env.BITQUERY_COLDCARD_CSV_URL?.trim() ||
+      "https://bitquery.io/coldcard-hack/downloads/coldcard-attacker-addresses.csv",
     monitoringStaleSec: Number(env.MONITORING_STALE_SEC ?? 600),
     apiThresholdCooldownSec: Number(env.API_THRESHOLD_COOLDOWN_SEC ?? 300),
     apiThresholdBaseSec: Number(

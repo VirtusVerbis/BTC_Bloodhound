@@ -214,6 +214,14 @@ export async function scheduleDownstreamCrawl(
     }
   }
 
+  const bqSync = await store.getSourceSync("bitquery_coldcard");
+  const bqLast = bqSync?.lastSyncAt ? new Date(bqSync.lastSyncAt).getTime() : 0;
+  if (!skipNonCritical && ts - bqLast >= config.bitqueryColdcardSyncIntervalSec * 1000) {
+    if (!enqueueCache.queueSchedulingPaused && enqueueCache.queueDepth < config.maxQueueDepth) {
+      await store.enqueueJobIfAbsent("sync_bitquery_coldcard", {}, JOB_PRIORITY.SYNC_BITQUERY_COLDCARD);
+    }
+  }
+
   const tick = await store.incrementMaintenanceCronCounter();
   const isMaintTick =
     config.hackerMaintenanceEveryNCrons > 0 &&

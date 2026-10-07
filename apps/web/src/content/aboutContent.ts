@@ -112,6 +112,11 @@ export const dataSourceLinks: ExternalLink[] = [
     description: "Watched holding/collector addresses from snapshot.json synced periodically.",
   },
   {
+    label: "Bitquery Coldcard Hack",
+    url: "https://bitquery.io/coldcard-hack/",
+    description: "Attacker-controlled Coldcard hack addresses synced periodically.",
+  },
+  {
     label: "dsbaars gist — public hacker address seed list",
     url: "https://gist.github.com/dsbaars/0a4f9e2d1f587a78f4a89a9a45e3b700",
     description: "Initial consolidation addresses loaded at indexer seed time.",
@@ -119,12 +124,46 @@ export const dataSourceLinks: ExternalLink[] = [
 ];
 
 export const dataSourceNote =
-  "The background indexer actively sources coldcardwatch.com, coldcard-watch.vercel.app, and coldcard-hack-tracker.vercel.app on a cron schedule. Additional victim and downstream addresses are inferred on-chain using blockchain API data.";
+  "The background indexer actively sources coldcardwatch.com, coldcard-watch.vercel.app, coldcard-hack-tracker.vercel.app, and bitquery.io on a cron schedule. Additional victim and downstream addresses are inferred on-chain using blockchain API data.";
+
+export const MONITORED_SITE_SOURCE_IDS: Record<string, string> = {
+  "coldcard-watch.vercel.app": "coldcard_sweep_watch",
+  "coldcard-hack-tracker.vercel.app": "coldcard_hack_tracker",
+  "coldcardwatch.com": "coldcardwatch",
+  "bitquery.io": "bitquery_coldcard",
+};
+
+export function monitoredSiteHasPollError(
+  host: string,
+  sources: ReadonlyArray<{ source: string; lastError?: string | null }> | undefined,
+): boolean {
+  const sourceId = MONITORED_SITE_SOURCE_IDS[host];
+  if (!sourceId || !sources) return false;
+  const row = sources.find((s) => s.source === sourceId);
+  return Boolean(row?.lastError);
+}
 
 export const monitoredExternalSites = [
-  { host: "coldcard-watch.vercel.app", label: "Coldcard Sweep Watch" },
-  { host: "coldcard-hack-tracker.vercel.app", label: "Coldcard Hack Tracker" },
-  { host: "coldcardwatch.com", label: "coldcardwatch.com" },
+  {
+    host: "coldcard-watch.vercel.app",
+    label: "Coldcard Sweep Watch",
+    url: "https://coldcard-watch.vercel.app",
+  },
+  {
+    host: "coldcard-hack-tracker.vercel.app",
+    label: "Coldcard Hack Tracker",
+    url: "https://coldcard-hack-tracker.vercel.app",
+  },
+  {
+    host: "coldcardwatch.com",
+    label: "coldcardwatch.com",
+    url: "https://coldcardwatch.com",
+  },
+  {
+    host: "bitquery.io",
+    label: "Bitquery Coldcard Hack",
+    url: "https://bitquery.io/coldcard-hack/",
+  },
 ];
 
 export const monitoringIntro =

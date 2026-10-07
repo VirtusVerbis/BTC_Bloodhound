@@ -7,6 +7,7 @@ import {
   hackCoverageLinks,
   keyboardCommands,
   monitoredExternalSites,
+  monitoredSiteHasPollError,
   monitoringIntro,
   openSourceRepoUrl,
   purposeText,
@@ -102,10 +103,13 @@ export function AboutPage({ sync }: AboutPageProps) {
         <ul className="about-link-list">
           {monitoredExternalSites.map((site) => (
             <li key={site.host}>
-              <a href={`https://${site.host}`} target="_blank" rel="noopener noreferrer">
+              <a href={site.url} target="_blank" rel="noopener noreferrer">
                 {site.host}
               </a>
               <span className="about-link-desc"> — {site.label}</span>
+              {monitoredSiteHasPollError(site.host, monitoring?.externalSources) && (
+                <span className="about-poll-error"> [Polling Error Detected]</span>
+              )}
             </li>
           ))}
         </ul>

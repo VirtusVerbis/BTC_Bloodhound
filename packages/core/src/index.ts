@@ -27,6 +27,7 @@ export * from "./sources/sourceDelta.js";
 export * from "./sources/coldcardwatch.js";
 export * from "./sources/coldcardHackTracker.js";
 export * from "./sources/coldcardSweepWatch.js";
+export * from "./sources/bitqueryColdcard.js";
 export * from "./price/mempoolPrices.js";
 export * from "./util/hash.js";
 export * from "./util/address.js";

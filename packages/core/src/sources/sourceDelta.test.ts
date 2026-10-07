@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { openDatabase, runMigrations, Store } from "@cointrace/db";
 import {
   ingestSourceHacker,
+  ingestSourceHackerIfMissing,
   partitionSourceHackers,
   partitionSourceMissing,
   sourceDeltaEmpty,
@@ -74,5 +75,28 @@ describe("ingestSourceHacker", () => {
     expect(ok).toBe(false);
     expect(await store.countActiveJobs("backfill_hacker_address")).toBe(firstJobs);
     expect(await store.hasPendingJob("poll_hacker_address", "bc1qflagged")).toBe(false);
+  });
+});
+
+describe("ingestSourceHackerIfMissing", () => {
+  async function freshStore() {
+    const { sqlite, db } = openDatabase(":memory:");
+    runMigrations(sqlite);
+    return new Store(db);
+  }
+
+  it("skips an existing downstream row without promoting it", async () => {
+    const store = await freshStore();
+    await store.insertAddressIfMissing({
+      address: "bc1qdown",
+      role: "downstream",
+      expandStatus: "expanded",
+    });
+    const ok = await ingestSourceHackerIfMissing(store, "bc1qdown", "bitquery_coldcard");
+    expect(ok).toBe(false);
+    const row = await store.getAddress("bc1qdown");
+    expect(row?.role).toBe("downstream");
+    expect(row?.isFlaggedHacker).toBe(false);
+    expect(await store.hasPendingJob("backfill_hacker_address", "bc1qdown")).toBe(false);
   });
 });

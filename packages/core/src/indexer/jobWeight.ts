@@ -29,7 +29,13 @@ export function jobNeedsChainCallAtStart(
   if (type === "backfill_op_return") return true;
 
   if (!isIngestJobType(type)) {
-    if (type === "sync_coldcardwatch" || type === "sync_vercel_trackers") return false;
+    if (
+      type === "sync_coldcardwatch" ||
+      type === "sync_vercel_trackers" ||
+      type === "sync_bitquery_coldcard"
+    ) {
+      return false;
+    }
     if (type === "process_tx") return false;
     return false;
   }
@@ -84,7 +90,13 @@ export function jobWorkPhase(
 ): JobWorkPhase {
   if (type === "poll_hacker_address" || type === "poll_downstream_address") return "poll";
   if (type === "audit_hacker_backfill") return "audit";
-  if (type === "sync_coldcardwatch" || type === "sync_vercel_trackers") return "sync";
+  if (
+    type === "sync_coldcardwatch" ||
+    type === "sync_vercel_trackers" ||
+    type === "sync_bitquery_coldcard"
+  ) {
+    return "sync";
+  }
   if (isIngestJobType(type)) {
     return jobNeedsChainCallAtStart(type, payload, config) ? "fetch" : "process";
   }
