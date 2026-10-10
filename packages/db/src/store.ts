@@ -38,6 +38,7 @@ import {
   pollDueCacheTtlSec,
   parseFlaggedHackersCache,
   parseHackStatsJson,
+  parsePartialHackStatsJson,
   parseSyncSnapshot,
   serializeFlaggedHackersCache,
   serializeHackStatsRows,
@@ -5264,7 +5265,10 @@ LIMIT ${remaining}
       console.error("getStats btcUsdPrice failed", err);
     }
     try {
-      result.hacks = labeledHackStats(parseHackStatsJson(schedulerRow?.hackStatsJson));
+      const hackStatsJson = schedulerRow?.hackStatsJson;
+      result.hacks = labeledHackStats(
+        parseHackStatsJson(hackStatsJson) ?? parsePartialHackStatsJson(hackStatsJson),
+      );
     } catch (err) {
       console.error("getStats hacks failed", err);
       result.hacks = labeledHackStats(undefined);

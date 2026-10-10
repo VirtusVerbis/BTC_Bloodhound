@@ -2,7 +2,12 @@ import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { hasResumableBackfillState, JOB_PRIORITY, normalizeBitcoinAddress } from "@cointrace/core";
+import {
+  hackDefaultsToXSource,
+  hasResumableBackfillState,
+  JOB_PRIORITY,
+  normalizeBitcoinAddress,
+} from "@cointrace/core";
 import type {
   AddHackerResult,
   PruneInvalidAddressesResult,
@@ -224,7 +229,7 @@ export async function addHackerRemote(
   const ts = sqlString(nowIso());
   const labelSql = opts.label != null && opts.label !== "" ? sqlString(opts.label) : "NULL";
   const hackId = opts.hackId?.trim() || "coldcard";
-  const sourceSql = sqlString(opts.source?.trim() || (hackId === "liquid" ? "x" : "ops"));
+  const sourceSql = sqlString(opts.source?.trim() || (hackDefaultsToXSource(hackId) ? "x" : "ops"));
   const hackIdSql = sqlString(hackId);
   const payload = sqlString(JSON.stringify({ address }));
 

@@ -372,7 +372,7 @@ body {
 
 .stats-hack-grid {
   display: grid;
-  grid-template-columns: 5rem max-content max-content max-content;
+  grid-template-columns: max-content max-content max-content max-content;
   width: fit-content;
   max-width: 100%;
   column-gap: 1.25rem;
@@ -1018,6 +1018,10 @@ button.primary {
     transform: translateX(-50%);
     text-align: center;
     white-space: nowrap;
+  }
+
+  .stats-hack-rows {
+    margin-bottom: 1.35rem;
   }
 
   .sync-stats {

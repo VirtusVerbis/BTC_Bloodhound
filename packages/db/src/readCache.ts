@@ -90,9 +90,13 @@ export type HackStatsRow = {
   totalInSats: number;
 };
 
-export const HACK_STAT_IDS = ["coldcard", "liquid"] as const;
+export const HACK_STAT_IDS = ["coldcard", "liquid", "ledger"] as const;
 
-const HACK_STAT_LABELS: Record<string, string> = { coldcard: "Coldcard", liquid: "Liquid" };
+const HACK_STAT_LABELS: Record<string, string> = {
+  coldcard: "Coldcard",
+  liquid: "Liquid",
+  ledger: "Ledger",
+};
 
 export function labeledHackStats(rows: HackStatsRow[] | undefined): Array<HackStatsRow & { label: string }> {
   const byId = new Map((rows ?? []).map((row) => [row.id, row]));
@@ -190,22 +194,28 @@ export function serializeFlaggedHackersCache(rows: FlaggedHackerCacheEntry[]): s
   return JSON.stringify(rows);
 }
 
+function parseHackStatsRow(row: unknown): HackStatsRow | undefined {
+  if (row == null || typeof row !== "object") return undefined;
+  const rec = row as Record<string, unknown>;
+  if (typeof rec.id !== "string" || rec.id.length === 0) return undefined;
+  if (typeof rec.victimCount !== "number" || !Number.isFinite(rec.victimCount)) return undefined;
+  if (typeof rec.hackerCount !== "number" || !Number.isFinite(rec.hackerCount)) return undefined;
+  if (typeof rec.totalInSats !== "number" || !Number.isFinite(rec.totalInSats)) return undefined;
+  return {
+    id: rec.id,
+    victimCount: rec.victimCount,
+    hackerCount: rec.hackerCount,
+    totalInSats: rec.totalInSats,
+  };
+}
+
 export function parseHackStatsRows(value: unknown): HackStatsRow[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const byId = new Map<string, HackStatsRow>();
   for (const row of value) {
-    if (row == null || typeof row !== "object") return undefined;
-    const rec = row as Record<string, unknown>;
-    if (typeof rec.id !== "string" || rec.id.length === 0) return undefined;
-    if (typeof rec.victimCount !== "number" || !Number.isFinite(rec.victimCount)) return undefined;
-    if (typeof rec.hackerCount !== "number" || !Number.isFinite(rec.hackerCount)) return undefined;
-    if (typeof rec.totalInSats !== "number" || !Number.isFinite(rec.totalInSats)) return undefined;
-    byId.set(rec.id, {
-      id: rec.id,
-      victimCount: rec.victimCount,
-      hackerCount: rec.hackerCount,
-      totalInSats: rec.totalInSats,
-    });
+    const parsed = parseHackStatsRow(row);
+    if (!parsed) return undefined;
+    byId.set(parsed.id, parsed);
   }
   const out: HackStatsRow[] = [];
   for (const id of HACK_STAT_IDS) {
@@ -214,6 +224,24 @@ export function parseHackStatsRows(value: unknown): HackStatsRow[] | undefined {
     out.push(row);
   }
   return out;
+}
+
+/** Valid rows from a blob that predates a newly added hack id. Missing ids stay unset. */
+export function parsePartialHackStatsJson(json: string | null | undefined): HackStatsRow[] | undefined {
+  if (!json) return undefined;
+  try {
+    const value = JSON.parse(json) as unknown;
+    if (!Array.isArray(value)) return undefined;
+    const rows: HackStatsRow[] = [];
+    for (const row of value) {
+      const parsed = parseHackStatsRow(row);
+      if (!parsed) return undefined;
+      rows.push(parsed);
+    }
+    return rows;
+  } catch {
+    return undefined;
+  }
 }
 
 export function parseSyncSnapshot(json: string | null | undefined): SyncSnapshotV1 | null {

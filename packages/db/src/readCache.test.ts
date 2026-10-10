@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   labeledHackStats,
+  parsePartialHackStatsJson,
   monitorStatsFromSchedulerCache,
   parseHackStatsJson,
   parseHackStatsRows,
@@ -77,6 +78,7 @@ describe("monitorStatsFromSchedulerCache", () => {
 const validHackRows = [
   { id: "coldcard", victimCount: 1, hackerCount: 2, totalInSats: 100 },
   { id: "liquid", victimCount: 3, hackerCount: 4, totalInSats: 200 },
+  { id: "ledger", victimCount: 5, hackerCount: 6, totalInSats: 300 },
 ];
 
 describe("parseHackStatsRows", () => {
@@ -125,10 +127,24 @@ describe("parseSyncSnapshot hacks", () => {
 });
 
 describe("labeledHackStats", () => {
+  it("keeps cached counts when a newly added hack id is missing", () => {
+    const partial = JSON.stringify([
+      { id: "coldcard", victimCount: 1, hackerCount: 2, totalInSats: 100 },
+      { id: "liquid", victimCount: 3, hackerCount: 4, totalInSats: 200 },
+    ]);
+    expect(parseHackStatsJson(partial)).toBeUndefined();
+    expect(labeledHackStats(parsePartialHackStatsJson(partial))).toEqual([
+      { id: "coldcard", victimCount: 1, hackerCount: 2, totalInSats: 100, label: "Coldcard" },
+      { id: "liquid", victimCount: 3, hackerCount: 4, totalInSats: 200, label: "Liquid" },
+      { id: "ledger", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Ledger" },
+    ]);
+  });
+
   it("fills known ids with zeros when the blob is missing", () => {
     expect(labeledHackStats(undefined)).toEqual([
       { id: "coldcard", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Coldcard" },
       { id: "liquid", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Liquid" },
+      { id: "ledger", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Ledger" },
     ]);
   });
 });
@@ -138,6 +154,7 @@ describe("parseHackStatsJson", () => {
     expect(
       parseHackStatsJson(
         JSON.stringify([
+          { id: "ledger", victimCount: 5, hackerCount: 6, totalInSats: 300 },
           { id: "liquid", victimCount: 3, hackerCount: 4, totalInSats: 200 },
           { id: "coldcard", victimCount: 1, hackerCount: 2, totalInSats: 100 },
         ]),
@@ -145,6 +162,7 @@ describe("parseHackStatsJson", () => {
     ).toEqual([
       { id: "coldcard", victimCount: 1, hackerCount: 2, totalInSats: 100 },
       { id: "liquid", victimCount: 3, hackerCount: 4, totalInSats: 200 },
+      { id: "ledger", victimCount: 5, hackerCount: 6, totalInSats: 300 },
     ]);
     expect(parseHackStatsJson("not-json")).toBeUndefined();
   });

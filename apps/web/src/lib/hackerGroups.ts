@@ -45,6 +45,7 @@ export interface HackerDropdownSections {
 const HACK_ORDER: Array<{ id: string; label: string }> = [
   { id: "coldcard", label: "Coldcard" },
   { id: "liquid", label: "Liquid" },
+  { id: "ledger", label: "Ledger" },
 ];
 
 const SOURCE_LABELS: Record<string, string> = {

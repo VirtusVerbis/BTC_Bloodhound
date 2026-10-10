@@ -32,6 +32,13 @@ const hackers: Hacker[] = [
     hackId: "liquid",
     totalReceivedSats: 3_000_000,
   },
+  {
+    address: "bc1qled1",
+    label: "Ledger",
+    source: "x",
+    hackId: "ledger",
+    totalReceivedSats: 2_000_000,
+  },
 ];
 
 const recentHackers: RecentHackerEntry[] = [
@@ -82,19 +89,23 @@ describe("hackerGroups recent cache", () => {
     ).toBe(false);
   });
 
-  it("groups hackers under Coldcard and Liquid sections", () => {
+  it("groups hackers under Coldcard, Liquid, and Ledger sections", () => {
     const sections = groupHackersForDropdown(hackers, []);
-    expect(sections.hackSections.map((h) => h.hackId)).toEqual(["coldcard", "liquid"]);
+    expect(sections.hackSections.map((h) => h.hackId)).toEqual(["coldcard", "liquid", "ledger"]);
+    expect(sections.hackSections.map((h) => h.label)).toEqual(["Coldcard", "Liquid", "Ledger"]);
     const coldcard = sections.hackSections.find((h) => h.hackId === "coldcard");
     const liquid = sections.hackSections.find((h) => h.hackId === "liquid");
+    const ledger = sections.hackSections.find((h) => h.hackId === "ledger");
     expect(coldcard?.sourceGroups[0]?.items.map((h) => h.address)).toEqual(["bc1qh1", "bc1qh2"]);
     expect(liquid?.sourceGroups[0]?.label).toBe("X");
     expect(liquid?.sourceGroups[0]?.items[0]?.address).toBe("bc1ql1");
+    expect(ledger?.sourceGroups[0]?.label).toBe("X");
+    expect(ledger?.sourceGroups[0]?.items[0]?.address).toBe("bc1qled1");
   });
 
   it("flattens nav order as recent then hack sections", () => {
     const sections = groupHackersForDropdown(hackers, recentHackers);
     const flat = flattenHackersForNav(sections);
-    expect(flat.map((h) => h.address)).toEqual(["bc1qh1", "bc1qh2", "bc1ql1"]);
+    expect(flat.map((h) => h.address)).toEqual(["bc1qh1", "bc1qh2", "bc1ql1", "bc1qled1"]);
   });
 });

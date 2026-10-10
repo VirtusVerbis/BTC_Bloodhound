@@ -1,6 +1,6 @@
 import type { Store } from "@cointrace/db";
 import { JOB_PRIORITY } from "../config.js";
-import { DEFAULT_HACK_ID, type HackId } from "../hacks.js";
+import { DEFAULT_HACK_ID, hackDefaultsToXSource, type HackId } from "../hacks.js";
 import { normalizeBitcoinAddress } from "../util/address.js";
 
 export interface AddHackerResult {
@@ -46,7 +46,7 @@ export async function addHacker(
   }
 
   const hackId = opts.hackId ?? DEFAULT_HACK_ID;
-  const source = opts.source?.trim() || (hackId === "liquid" ? "x" : "ops");
+  const source = opts.source?.trim() || (hackDefaultsToXSource(hackId) ? "x" : "ops");
 
   await store.upsertAddress({
     address,

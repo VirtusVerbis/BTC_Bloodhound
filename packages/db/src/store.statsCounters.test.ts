@@ -173,12 +173,36 @@ describe("scheduler stats counters", () => {
     });
   });
 
+  it("getStats keeps cached hack counts when a new hack id is absent", async () => {
+    const { store } = await openStore();
+    await store.updateSchedulerState({
+      hackStatsJson: JSON.stringify([
+        { id: "coldcard", victimCount: 5716, hackerCount: 123, totalInSats: 1000 },
+        { id: "liquid", victimCount: 1, hackerCount: 1, totalInSats: 2000 },
+      ]),
+    });
+    const stats = await store.getStats();
+    expect(stats.hacks.find((h) => h.id === "coldcard")).toMatchObject({
+      victimCount: 5716,
+      hackerCount: 123,
+      totalInSats: 1000,
+      label: "Coldcard",
+    });
+    expect(stats.hacks.find((h) => h.id === "ledger")).toMatchObject({
+      victimCount: 0,
+      hackerCount: 0,
+      totalInSats: 0,
+      label: "Ledger",
+    });
+  });
+
   it("getStats returns labeled zeros when daily hack stats are missing", async () => {
     const { store } = await openStore();
     const stats = await store.getStats();
     expect(stats.hacks).toEqual([
       { id: "coldcard", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Coldcard" },
       { id: "liquid", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Liquid" },
+      { id: "ledger", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Ledger" },
     ]);
   });
 
@@ -271,6 +295,7 @@ describe("scheduler stats counters", () => {
     expect(await store.computeStatsCountsByHack()).toEqual([
       { id: "coldcard", victimCount: 1, hackerCount: 1, totalInSats: 1000 },
       { id: "liquid", victimCount: 0, hackerCount: 0, totalInSats: 0 },
+      { id: "ledger", victimCount: 0, hackerCount: 0, totalInSats: 0 },
     ]);
   });
 

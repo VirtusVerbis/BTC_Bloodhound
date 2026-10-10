@@ -672,7 +672,7 @@ export function runMigrations(sqlite: Database.Database): void {
         PRIMARY KEY (hack_id, from_address)
       );
       CREATE INDEX IF NOT EXISTS idx_hack_victims_from ON hack_victims(from_address);
-      INSERT INTO hack_stats (hack_id) VALUES ('coldcard'), ('liquid');
+      INSERT INTO hack_stats (hack_id) VALUES ('coldcard'), ('liquid'), ('ledger');
       INSERT INTO hack_victims (hack_id, from_address)
       SELECT DISTINCT a.hack_id, e.from_address
       FROM edges e

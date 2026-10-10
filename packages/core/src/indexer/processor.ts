@@ -4,7 +4,7 @@ import type { Job, Store } from "@cointrace/db";
 import { D1QuotaExceededError } from "@cointrace/db";
 import type { AppConfig } from "../config.js";
 import { JOB_PRIORITY } from "../config.js";
-import { resolveHackId } from "../hacks.js";
+import { hackDefaultsToXSource, resolveHackId } from "../hacks.js";
 import { ChainRouter, RateLimitNotReadyError } from "../chain/router.js";
 import { isRateLimitError, isTransientFetchError } from "../chain/esplora.js";
 import { getHackerAddressSet, processTxForHackTrace } from "../graph/builder.js";
@@ -262,7 +262,7 @@ export async function runSeedPublicHackers(
       continue;
     }
     const hackId = resolveHackId(h.hack);
-    const source = h.source?.trim() || (hackId === "liquid" ? "x" : "public_seed");
+    const source = h.source?.trim() || (hackDefaultsToXSource(hackId) ? "x" : "public_seed");
     await store.upsertAddress({
       address,
       role: "hacker",
@@ -300,7 +300,7 @@ export async function runLoadLocalWatchlist(
         continue;
       }
       const hackId = resolveHackId(h.hack);
-      const source = h.source?.trim() || (hackId === "liquid" ? "x" : "local_config");
+      const source = h.source?.trim() || (hackDefaultsToXSource(hackId) ? "x" : "local_config");
       const existing = await store.getAddress(address);
       await store.upsertAddress({
         address,

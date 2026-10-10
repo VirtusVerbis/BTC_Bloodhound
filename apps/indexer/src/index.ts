@@ -32,6 +32,7 @@ import {
   runRebuildHackEdgesWait,
   runSeedPublicHackers,
   formatKnownHacksList,
+  hackDefaultsToXSource,
   isKnownHackId,
   resolveHackId,
   TICK_LEASE_SKEW_MS,
@@ -173,12 +174,12 @@ async function main() {
     const source =
       sourceFlag !== undefined
         ? resolveHackerSourceFlag(sourceFlag)
-        : hackId === "liquid"
+        : hackDefaultsToXSource(hackId)
           ? "x"
           : resolveHackerSourceFlag(undefined);
     if (!normalizeBitcoinAddress(address)) {
       console.error(
-        "Usage: add-hacker <address> [--label ...] [--source ...] [--hack coldcard|liquid] [--yes] [--remote]",
+        "Usage: add-hacker <address> [--label ...] [--source ...] [--hack coldcard|liquid|ledger] [--yes] [--remote]",
       );
       process.exit(1);
     }
