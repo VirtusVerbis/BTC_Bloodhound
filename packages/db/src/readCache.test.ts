@@ -79,6 +79,7 @@ const validHackRows = [
   { id: "coldcard", victimCount: 1, hackerCount: 2, totalInSats: 100 },
   { id: "liquid", victimCount: 3, hackerCount: 4, totalInSats: 200 },
   { id: "ledger", victimCount: 5, hackerCount: 6, totalInSats: 300 },
+  { id: "binance", victimCount: 7, hackerCount: 8, totalInSats: 400 },
 ];
 
 describe("parseHackStatsRows", () => {
@@ -137,6 +138,7 @@ describe("labeledHackStats", () => {
       { id: "coldcard", victimCount: 1, hackerCount: 2, totalInSats: 100, label: "Coldcard" },
       { id: "liquid", victimCount: 3, hackerCount: 4, totalInSats: 200, label: "Liquid" },
       { id: "ledger", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Ledger" },
+      { id: "binance", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Binance" },
     ]);
   });
 
@@ -145,6 +147,7 @@ describe("labeledHackStats", () => {
       { id: "coldcard", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Coldcard" },
       { id: "liquid", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Liquid" },
       { id: "ledger", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Ledger" },
+      { id: "binance", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Binance" },
     ]);
   });
 });
@@ -154,6 +157,7 @@ describe("parseHackStatsJson", () => {
     expect(
       parseHackStatsJson(
         JSON.stringify([
+          { id: "binance", victimCount: 7, hackerCount: 8, totalInSats: 400 },
           { id: "ledger", victimCount: 5, hackerCount: 6, totalInSats: 300 },
           { id: "liquid", victimCount: 3, hackerCount: 4, totalInSats: 200 },
           { id: "coldcard", victimCount: 1, hackerCount: 2, totalInSats: 100 },
@@ -163,6 +167,7 @@ describe("parseHackStatsJson", () => {
       { id: "coldcard", victimCount: 1, hackerCount: 2, totalInSats: 100 },
       { id: "liquid", victimCount: 3, hackerCount: 4, totalInSats: 200 },
       { id: "ledger", victimCount: 5, hackerCount: 6, totalInSats: 300 },
+      { id: "binance", victimCount: 7, hackerCount: 8, totalInSats: 400 },
     ]);
     expect(parseHackStatsJson("not-json")).toBeUndefined();
   });

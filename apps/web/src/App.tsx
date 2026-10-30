@@ -740,6 +740,21 @@ export default function App() {
                   ))}
                 </Fragment>
               ))}
+              {hackerDropdownSections.xGroup && (
+                <optgroup
+                  key={hackerDropdownSections.xGroup.source}
+                  label={hackerDropdownSections.xGroup.label}
+                >
+                  {hackerDropdownSections.xGroup.items.map((h) => (
+                    <option key={h.address} value={h.address}>
+                      {formatHackerOptionLabel(
+                        h,
+                        isHackerRecent(h.address, recentHackerAddresses),
+                      )}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           </label>
           {hackersLoading && hackers.length === 0 && (

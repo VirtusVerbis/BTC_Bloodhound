@@ -40,13 +40,18 @@ export interface HackerDropdownHackSection {
 export interface HackerDropdownSections {
   recent: HackerDropdownGroup | null;
   hackSections: HackerDropdownHackSection[];
+  /** Source-X addresses from every hack, one optgroup, no per-hack separator. */
+  xGroup: HackerDropdownGroup | null;
 }
 
 const HACK_ORDER: Array<{ id: string; label: string }> = [
   { id: "coldcard", label: "Coldcard" },
   { id: "liquid", label: "Liquid" },
   { id: "ledger", label: "Ledger" },
+  { id: "binance", label: "Binance" },
 ];
+
+const X_SOURCE = "x";
 
 const SOURCE_LABELS: Record<string, string> = {
   coldcardwatch: "coldcardwatch.com",
@@ -137,6 +142,7 @@ function groupHackersByHackAndSource(
   const byHack = new Map<string, Hacker[]>();
   for (const h of hackers) {
     if (excludeAddresses.has(h.address)) continue;
+    if ((h.source ?? "") === X_SOURCE) continue;
     const hackId = h.hackId ?? "coldcard";
     const bucket = byHack.get(hackId);
     if (bucket) bucket.push(h);
@@ -185,13 +191,23 @@ export function groupHackersForDropdown(
         }
       : null;
 
+  const xItems = hackers.filter(
+    (h) => (h.source ?? "") === X_SOURCE && !recentAddresses.has(h.address),
+  );
+  const xGrouped = groupHackersBySource(xItems);
+  const xGroup: HackerDropdownGroup | null =
+    xGrouped.length > 0
+      ? { source: xGrouped[0]!.source, label: xGrouped[0]!.label, items: xGrouped[0]!.items }
+      : null;
+
   return {
     recent,
     hackSections: groupHackersByHackAndSource(hackers, recentAddresses),
+    xGroup,
   };
 }
 
-/** Flat list for keyboard navigation: recent, then each hack section in display order. */
+/** Flat list for keyboard navigation: recent, hack sections, then the X group. */
 export function flattenHackersForNav(sections: HackerDropdownSections): Hacker[] {
   const out: Hacker[] = [];
   if (sections.recent) out.push(...sections.recent.items);
@@ -200,6 +216,7 @@ export function flattenHackersForNav(sections: HackerDropdownSections): Hacker[]
       out.push(...group.items);
     }
   }
+  if (sections.xGroup) out.push(...sections.xGroup.items);
   return out;
 }
 

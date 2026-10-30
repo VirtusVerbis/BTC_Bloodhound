@@ -90,12 +90,13 @@ export type HackStatsRow = {
   totalInSats: number;
 };
 
-export const HACK_STAT_IDS = ["coldcard", "liquid", "ledger"] as const;
+export const HACK_STAT_IDS = ["coldcard", "liquid", "ledger", "binance"] as const;
 
 const HACK_STAT_LABELS: Record<string, string> = {
   coldcard: "Coldcard",
   liquid: "Liquid",
   ledger: "Ledger",
+  binance: "Binance",
 };
 
 export function labeledHackStats(rows: HackStatsRow[] | undefined): Array<HackStatsRow & { label: string }> {

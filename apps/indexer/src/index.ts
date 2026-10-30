@@ -32,6 +32,7 @@ import {
   runRebuildHackEdgesWait,
   runSeedPublicHackers,
   formatKnownHacksList,
+  HACKS,
   hackDefaultsToXSource,
   isKnownHackId,
   resolveHackId,
@@ -179,7 +180,7 @@ async function main() {
           : resolveHackerSourceFlag(undefined);
     if (!normalizeBitcoinAddress(address)) {
       console.error(
-        "Usage: add-hacker <address> [--label ...] [--source ...] [--hack coldcard|liquid|ledger] [--yes] [--remote]",
+        `Usage: add-hacker <address> [--label ...] [--source ...] [--hack ${HACKS.map((h) => h.id).join("|")}] [--yes] [--remote]`,
       );
       process.exit(1);
     }

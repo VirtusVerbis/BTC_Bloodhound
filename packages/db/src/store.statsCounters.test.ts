@@ -194,6 +194,12 @@ describe("scheduler stats counters", () => {
       totalInSats: 0,
       label: "Ledger",
     });
+    expect(stats.hacks.find((h) => h.id === "binance")).toMatchObject({
+      victimCount: 0,
+      hackerCount: 0,
+      totalInSats: 0,
+      label: "Binance",
+    });
   });
 
   it("getStats returns labeled zeros when daily hack stats are missing", async () => {
@@ -203,6 +209,7 @@ describe("scheduler stats counters", () => {
       { id: "coldcard", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Coldcard" },
       { id: "liquid", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Liquid" },
       { id: "ledger", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Ledger" },
+      { id: "binance", victimCount: 0, hackerCount: 0, totalInSats: 0, label: "Binance" },
     ]);
   });
 
@@ -296,6 +303,7 @@ describe("scheduler stats counters", () => {
       { id: "coldcard", victimCount: 1, hackerCount: 1, totalInSats: 1000 },
       { id: "liquid", victimCount: 0, hackerCount: 0, totalInSats: 0 },
       { id: "ledger", victimCount: 0, hackerCount: 0, totalInSats: 0 },
+      { id: "binance", victimCount: 0, hackerCount: 0, totalInSats: 0 },
     ]);
   });
 

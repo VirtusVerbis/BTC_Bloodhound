@@ -2,6 +2,7 @@ export const HACKS = [
   { id: "coldcard", label: "Coldcard", order: 0 },
   { id: "liquid", label: "Liquid", order: 1 },
   { id: "ledger", label: "Ledger", order: 2 },
+  { id: "binance", label: "Binance", order: 3 },
 ] as const;
 
 export type HackId = (typeof HACKS)[number]["id"];
@@ -29,7 +30,7 @@ export function hackLabel(id: HackId): string {
   return HACKS.find((h) => h.id === id)?.label ?? id;
 }
 
-/** Liquid and Ledger default to the X dropdown source when `--source` is omitted. */
+/** Liquid, Ledger, and Binance default to the X dropdown source when `--source` is omitted. */
 export function hackDefaultsToXSource(id: string): boolean {
-  return id === "liquid" || id === "ledger";
+  return id === "liquid" || id === "ledger" || id === "binance";
 }
