@@ -117,6 +117,12 @@ export const dataSourceLinks: ExternalLink[] = [
     description: "Attacker-controlled Coldcard hack addresses synced periodically.",
   },
   {
+    label: "Bitquery Binance Hack",
+    url: "https://bitquery.io/investigations/binance-hack",
+    description:
+      "On-chain investigation of the October 2026 Binance hack, used to identify this tracker's Bitcoin hacker address.",
+  },
+  {
     label: "dsbaars gist — public hacker address seed list",
     url: "https://gist.github.com/dsbaars/0a4f9e2d1f587a78f4a89a9a45e3b700",
     description: "Initial consolidation addresses loaded at indexer seed time.",
